@@ -67,7 +67,7 @@ Run these in the emulator, and the hardware rows on the SE/30. Tick each one.
 | ☐ | A 2,000-line Write opens complete in the permission dialog; scrolling reaches the last line; no line is lost; the session continues afterwards | Emulator | Stress bridge, prompt `perm` |
 | ☐ | With the dialog open, Return or typing "a" sends nothing; only Cmd-Y, Cmd-N, Cmd-A or a click answers | Emulator | `run.sh --demo`, any prompt (the demo asks once per turn) |
 | ☐ | A long session passes 32 KB: old text leaves the window, the same text is in the log file under Claude30 Logs, and the newest output stays visible | Emulator | Stress bridge `burst` four times, then open the log |
-| ☐ | Stop the bridge or tcpser mid-turn: the alert appears, the transcript is intact, and Redial starts a conversation marked "New conversation" | Emulator | `run.sh --demo`, kill tcpser while text streams |
+| ☐ | Stop the bridge or tcpser mid-turn: the app redials by itself, the transcript is intact, and each tab continues its conversation (the streaming tab says its reply was cut off) | Emulator | `run.sh --demo`, kill tcpser while text streams, then start it again |
 | ☐ | `/new` typed and sent reaches the bridge unchanged, and the bridge answers "New conversation." | Emulator | `run.sh --demo` |
 | ☐ | Two lines separated by Option-Return arrive as one prompt with the line break kept, and Send stays dimmed until the turn ends | Emulator | `run.sh --demo` (the demo echoes the prompt) |
 | ☐ | Cmd-period with the dialog open denies, stops, closes the dialog and ends the turn | Emulator | `run.sh --demo` |
@@ -84,6 +84,20 @@ Run these in the emulator, and the hardware rows on the SE/30. Tick each one.
 | ☐ | The stress bridge's `silent` case shows "No output for 1:30…" in the status line, then finishes normally | Emulator |
 | ☐ | Connect while another program holds the modem port shows an alert naming the port, and the app keeps running | Emulator |
 | ☐ | The link test runs for 5 minutes against `run.sh --demo` and closes; Link Test can run again without relaunching | Emulator |
+
+**Recovering from a dropped link**
+
+| | Check | Where | How |
+|---|---|---|---|
+| ☐ | Two tabs with a few demo turns each; stop tcpser while one tab streams, then start it again: the app redials by itself, both tabs reopen, the streaming tab says "cut off", and the turn count in the demo's echo continues ("turn 4") | Emulator | `run.sh --demo`, `pkill tcpser` then restart it |
+| ☐ | Leave tcpser down: the status line counts down through three tries, then the Redial alert appears. Cmd-D during a countdown cancels it and leaves "Not connected" | Emulator | `run.sh --demo` |
+| ☐ | Quit the app with two tabs open, relaunch and Connect: both tabs resume ("Reconnected. The conversation continues.") | Emulator | `run.sh --demo` |
+| ☐ | Close a tab and reconnect: the closed tab does not come back, the other resumes | Emulator | `run.sh --demo` |
+| ☐ | Pause tcpser without closing the connection (`kill -STOP`): within about 90 seconds the app declares the link lost and redials; after it reconnects `pgrep -fl bridge.py` shows one bridge | Emulator | `run.sh --demo`, `kill -STOP`, then `kill -CONT` or restart tcpser |
+| ☐ | A long `silent` turn still shows "No output for 1:30" while heartbeats flow | Emulator | Stress bridge `silent` |
+| ☐ | The build from before this change against the new bridge: tabs, files and permissions work as before | Emulator | `run.sh --demo` with the old `Claude30.dsk` |
+| ☐ | Mid-reply, switch off the access point for 30 seconds: the app reconnects on its own, both tabs continue, and `pgrep -fl bridge.py` on the host shows one bridge | **SE/30** | Real Claude, a long turn in each tab |
+| ☐ | Drop Wi-Fi, then switch the SE/30 off: within 4 minutes no bridge for that call is running | **SE/30** | `pgrep -fl bridge.py` |
 
 **Tabs and the project picker**
 

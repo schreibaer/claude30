@@ -26,7 +26,13 @@ The bridge uses the same login as your `claude` command. Run `claude` once in a 
 ./run.sh --projects ~/code            # Claude30 tabs: any folder in ~/code is a project
 ```
 
-`run.sh` listens on port 2324 and only accepts connections from the WiFi232 (192.168.0.9). Every call starts a fresh bridge with fresh conversations. Log messages appear in the Terminal window where you started it.
+`run.sh` listens on port 2324 and only accepts connections from the WiFi232 (192.168.0.9). Every call starts its own bridge. Log messages appear in the Terminal window where you started it.
+
+### When Wi-Fi drops
+
+The WiFi232 makes one call at a time, so a new call means the last one is over. The new bridge ends the old one (you see `ending the previous call` in the log), so nothing is left running on the Mac and you never need to kill a bridge by hand. Claude30 also sends a heartbeat; a bridge that hears nothing from it for `--idle-timeout` seconds (default 180) ends the call by itself. `run.sh` turns on TCP keepalive too, which helps ZTerm calls.
+
+Claude30 redials by itself and its tabs pick up their conversations where they were (tabs only; ZTerm and the v1 app start fresh each call). The bridge keeps what it needs in `~/.se30bridge` (`--state-dir`): `call.lock`, and `sessions.json`, which maps each tab's resume token to its Claude conversation. A token only resumes conversations the bridge started, in the project it started them in, and is forgotten after 30 days unused or when the tab is closed. Two SE/30 setups on one Mac need different `--state-dir`s, or each call would end the other's.
 
 ### Projects for Claude30's tabs
 
@@ -38,7 +44,7 @@ The Claude30 app can keep up to six conversations open at once, one per tab, eac
 
 The SE/30 never sends a path, only a name from the list, so it can't reach anything else on your Mac. Anyone on your LAN who can dial the WiFi232 gets the same list, so offer only folders you are happy to share that way.
 
-Tabs need the Claude30 app from the same version of this repository. **Update `bridge.py` and the app together**: a new app can't talk to an old bridge (it reports that the bridge did not answer), while an older app and ZTerm keep working with the new bridge.
+Tabs need the Claude30 app from the same version of this repository. **Update `bridge.py` and the app together**: a new app can't talk to an old bridge (it reports that the bridge did not answer), while an older app and ZTerm keep working with the new bridge. The new app works against a bridge from before resume too, but then a drop starts fresh conversations, as it used to.
 
 ### Project files on the SE/30
 
@@ -77,6 +83,8 @@ Press ctrl-C to stop Claude, use `/help` for commands, and type `+++`, wait a se
 | `--charset ascii\|macroman` | ascii | try `macroman` for real curly quotes in ZTerm |
 | `--accept-edits` | off | don't ask before file edits |
 | `--model NAME` | your default | |
+| `--state-dir DIR` | `~/.se30bridge` | the call lock and resume records; one call at a time per folder |
+| `--idle-timeout N` | 180 | end a call when an app that sends heartbeats is silent for N seconds (0 = never) |
 
 Read, Glob, Grep and TodoWrite run without asking. Everything else asks for permission first.
 
