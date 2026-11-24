@@ -175,6 +175,41 @@ class ListingTest(FilesBase):
         self.assertEqual(self.get(c, "docs"), "not found")
         c.close()
 
+    def test_hidden_names_ignore_letter_case(self):
+        sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+        import bridge
+        for name in (".ENV", ".Env.local", ".GIT", "Server.PEM", "ID_RSA.pub", ".SSH"):
+            self.assertTrue(bridge.hidden_name(name), name)
+        self.assertFalse(bridge.hidden_name("environment.txt"))
+
+    def test_symlink_cannot_alias_a_hidden_file(self):
+        self.write(".env", "SECRET=1\n")
+        os.symlink(os.path.join(self.proj, ".env"), os.path.join(self.proj, "config.txt"))
+        c = self.connect()
+        names = [e.split(" ", 2)[2] for e in self.listing(c)]
+        self.assertNotIn("config.txt", names)
+        self.assertEqual(self.get(c, "config.txt"), "hidden")
+        self.assertEqual(self.save(c, "config.txt", "0", b"x").split(" ", 2)[2], "hidden")
+        c.close()
+
+    @unittest.skipUnless(HAVE_GIT, "needs git")
+    def test_ignored_file_stays_hidden_beside_a_folder_link(self):
+        # git refuses paths "beyond a symbolic link"; that must not show
+        # the ignored file next to the link.
+        self.write(".gitignore", "*.log\n")
+        self.write("secret.log", "token\n")
+        self.write("d/a.txt", "a\n")
+        os.symlink(os.path.join(self.proj, "d"), os.path.join(self.proj, "lnk"))
+        subprocess.run(["git", "init", "-q", self.proj], check=True)
+        c = self.connect()
+        names = [e.split(" ", 2)[2] for e in self.listing(c)]
+        self.assertNotIn("secret.log", names)
+        self.assertIn("lnk", names)
+        self.assertEqual(self.get(c, "secret.log"), "hidden")
+        h, lines, z = self.get(c, "lnk/a.txt")
+        self.assertEqual(lines, [b"a"])
+        c.close()
+
     def test_control_character_names(self):
         self.write("ok.txt", "x\n")
         self.write("bad\r\nname.txt", "x\n")
@@ -327,6 +362,15 @@ class SaveTest(FilesBase):
         self.assertEqual(self.save(c, "emoji.txt", tok, b"x").split(" ", 2)[2], "read-only")
         self.assertEqual(self.save(c, ".env", "0", b"x").split(" ", 2)[2], "hidden")
         self.assertEqual(self.save(c, "nothere.txt", "0", b"x").split(" ", 2)[2], "not found")
+        c.close()
+
+    def test_control_characters_are_not_saved(self):
+        self.write("a.txt", "one\n")
+        c = self.connect()
+        h, lines, z = self.get(c, "a.txt")
+        self.assertEqual(self.save(c, "a.txt", h[3], b"one\x03two").split(" ", 2)[2], "control")
+        self.assertEqual(self.read("a.txt"), b"one\n")
+        self.assertIn("saved", self.save(c, "a.txt", h[3], b"one\ttwo"))
         c.close()
 
     def test_stale_temp_file_is_removed(self):

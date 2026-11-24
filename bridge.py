@@ -786,6 +786,8 @@ PIECE_MAX_BYTES = 4096
 LIST_MAX = 500
 RO_LINE_MAX = 2000
 SAVE_IDLE_SECS = 120
+CONFLICT_IDLE_SECS = 3600     # a save waiting on the Replace/Cancel alert
+READ_CAP_BYTES = 8 << 20      # bigger files show only their start, read-only
 _CONTROL = re.compile(r"[\x00-\x08\x0b-\x1f\x7f]")
 _CONTROL_BYTES = re.compile(rb"[\x00-\x08\x0a-\x1f\x7f]")
 
@@ -797,6 +799,8 @@ class Refused(Exception):
 
 
 def hidden_name(name):
+    # Case-blind: on a macOS host ".ENV" opens the same file as ".env".
+    name = name.casefold()
     return any(fnmatch.fnmatchcase(name, p) for p in HIDE_PATTERNS)
 
 
@@ -819,7 +823,8 @@ def file_token(data):
 class FileText:
     """One file as the client sees it: lines, mode, line ending."""
 
-    def __init__(self, data, files_mode):
+    def __init__(self, data, files_mode, cut=False):
+        """cut: data is only the start of a bigger file."""
         self.token = file_token(data)
         if b"\0" in data[:8192]:
             raise Refused("binary")
@@ -839,6 +844,10 @@ class FileText:
         lines = re.split(r"\r\n|\r|\n", text) if text else []
         if self.final:
             lines.pop()
+        if cut:
+            if lines:
+                lines.pop()       # the last line may end mid-way
+            reason = reason or "long"
         if len(lines) > READ_MAX_LINES:
             lines = lines[:READ_MAX_LINES]
             reason = "long"
@@ -883,11 +892,13 @@ class Save:
         self.token = token
         self.blocks = {}
         self.touched = time.monotonic()
+        self.conflict = False
 
 
 async def git_ignored(root, paths):
     """The subset of paths (relative to root, folders ending in /) that git's
-    ignore rules exclude. Empty outside a repository or without git."""
+    ignore rules exclude, or None when git could not answer (outside a
+    repository, git missing, or an error)."""
     if not paths:
         return set()
     try:
@@ -898,9 +909,9 @@ async def git_ignored(root, paths):
         out, _ = await proc.communicate(
             b"".join(p.encode("utf-8", "surrogateescape") + b"\0" for p in paths))
     except OSError:
-        return set()
+        return None
     if proc.returncode not in (0, 1):
-        return set()
+        return None
     return {p.decode("utf-8", "surrogateescape") for p in out.split(b"\0") if p}
 
 
@@ -915,7 +926,8 @@ class FileService:
         self.mode = mode
         self.queue = asyncio.Queue()
         self.task = None
-        self.ignored = {}        # relative path -> bool, refreshed by listings
+        self.ignored = {}        # real relative path -> bool, refreshed by listings
+        self.in_repo = None      # is the project inside a git work tree
         self.cache = {}          # relative path -> ((mtime, size), FileText)
         self.saves = {}          # transfer number -> Save
         self.done = {}           # transfer number -> final answer of a commit
@@ -943,7 +955,34 @@ class FileService:
 
     # ---- the guard -------------------------------------------------------
 
+    def real_parts(self, real):
+        """The components of a resolved path below the project folder."""
+        if real == self.real_root:
+            return []
+        return os.path.relpath(real, self.real_root).split(os.sep)
+
+    async def ignored_set(self, paths):
+        """git_ignored for paths relative to the real project folder. When
+        git fails inside a repository, every path counts as ignored (and is
+        not cached): a broken check must not show secrets."""
+        hits = await git_ignored(self.real_root, paths)
+        if hits is not None:
+            return hits, True
+        if self.in_repo is None:
+            try:
+                proc = await asyncio.create_subprocess_exec(
+                    "git", "rev-parse", "--is-inside-work-tree", cwd=self.real_root,
+                    stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL)
+                out, _ = await proc.communicate()
+                self.in_repo = proc.returncode == 0 and out.strip() == b"true"
+            except OSError:
+                self.in_repo = False
+        if self.in_repo:
+            return set(paths), False
+        return set(), True
+
     async def _is_ignored(self, parts):
+        """parts are the real path's components below the project folder."""
         prefixes = []
         for i in range(1, len(parts) + 1):
             p = "/".join(parts[:i]) + ("/" if i < len(parts) else "")
@@ -952,7 +991,9 @@ class FileService:
         if unknown:
             # The last part may be a folder: ask both ways.
             asked = unknown + ([unknown[-1] + "/"] if unknown[-1] == prefixes[-1] else [])
-            hits = await git_ignored(self.root, asked)
+            hits, ok = await self.ignored_set(asked)
+            if not ok:
+                return True
             for p in unknown:
                 self.ignored[p] = p in hits or (p == prefixes[-1] and p + "/" in hits)
         return any(self.ignored[p] for p in prefixes)
@@ -973,7 +1014,12 @@ class FileService:
         real = os.path.realpath(os.path.join(self.root, *parts))
         if not inside(real, self.real_root):
             raise Refused("outside project")
-        if parts and await self._is_ignored(parts):
+        # Judge what the path really names, so a symlink cannot reach a
+        # hidden or ignored file under another name.
+        rparts = self.real_parts(real)
+        if any(hidden_name(p) for p in rparts):
+            raise Refused("hidden")
+        if rparts and await self._is_ignored(rparts):
             raise Refused("hidden")
         if want == "dir" and not os.path.isdir(real):
             raise Refused("not found")
@@ -988,7 +1034,9 @@ class FileService:
         if hit and hit[0] == key:
             return hit[1]
         with open(real, "rb") as f:
-            ft = FileText(f.read(), self.mode)
+            data = f.read(READ_CAP_BYTES + 1)
+        cut = len(data) > READ_CAP_BYTES
+        ft = FileText(data[:READ_CAP_BYTES] if cut else data, self.mode, cut)
         self.cache.pop(rel, None)
         while len(self.cache) >= 8:
             self.cache.pop(next(iter(self.cache)))
@@ -999,7 +1047,8 @@ class FileService:
 
     async def handle(self, tag, payload):
         now = time.monotonic()
-        for x in [x for x, s in self.saves.items() if now - s.touched > SAVE_IDLE_SECS]:
+        for x in [x for x, s in self.saves.items()
+                  if now - s.touched > (CONFLICT_IDLE_SECS if s.conflict else SAVE_IDLE_SECS)]:
             del self.saves[x]
         if tag == "L":
             await self._list(payload)
@@ -1039,19 +1088,22 @@ class FileService:
             except UnicodeEncodeError:
                 continue
             target = os.path.realpath(os.path.join(real, name))
-            if not inside(target, self.real_root):
+            if not inside(target, self.real_root) or target == self.real_root:
+                continue
+            tparts = self.real_parts(target)
+            if any(hidden_name(p) for p in tparts):
                 continue
             if os.path.isdir(target):
-                found.append(("d", 0, name))
+                found.append(("d", 0, name, "/".join(tparts)))
             elif os.path.isfile(target):
-                found.append(("f", os.path.getsize(target), name))
-        prefix = rel + "/" if rel else ""
-        paths = [prefix + n + ("/" if k == "d" else "") for k, _, n in found]
-        hits = await git_ignored(self.root, paths)
+                found.append(("f", os.path.getsize(target), name, "/".join(tparts)))
+        paths = [t + ("/" if k == "d" else "") for k, _, _, t in found]
+        hits, ok = await self.ignored_set(paths)
         shown = []
-        for (kind, size, name), p in zip(found, paths):
+        for (kind, size, name, t), p in zip(found, paths):
             ign = p in hits
-            self.ignored[prefix + name] = ign
+            if ok and t.count("/") == len(self.real_parts(real)):
+                self.ignored[t] = ign      # a direct child: cache it
             if not ign:
                 shown.append((kind, size, name))
         shown.sort(key=lambda e: (e[0] != "d", e[2].casefold()))
@@ -1150,11 +1202,15 @@ class FileService:
                 or str(len(data)) != nbytes or crc_hex(data) != crc.lower():
             del self.saves[x]
             return await self._refuse(x, "damaged")
+        if any(_CONTROL.search(l) for l in lines):
+            del self.saves[x]
+            return await self._refuse(x, "control")
         try:
             real = await self.resolve(save.rel, "file")
             with open(real, "rb") as f:
                 current = f.read()
             if file_token(current) != save.token and not force:
+                save.conflict = True    # kept while the person decides
                 return await self._refuse(x, "changed")
             now = FileText(current, "rw")
             out = (now.eol.join(lines) + (now.eol if now.final else "")).encode("utf-8")
@@ -1231,6 +1287,10 @@ class Channel:
         self.edited = []
         self._in_fence = False
         self.files = FileService(self, path, args.files)
+        # A line and its "+" continuations go out together: the client
+        # routes "+" by the session's last line, and prose and file pieces
+        # come from different tasks.
+        self.group = asyncio.Lock()
 
     # ---- output ------------------------------------------------------------
 
@@ -1240,14 +1300,16 @@ class Channel:
 
     async def send_split(self, t, data: bytes):
         """Raw Mac Roman bytes as one line plus "+" continuations of 200 bytes."""
-        for i in range(0, max(len(data), 1), 200):
-            chunk = data[i:i + 200]
-            head = f"{self.sid}{t if i == 0 else '+'}".encode()
-            await self.term.send_line(head + (b" " + chunk if chunk else b""))
+        async with self.group:
+            for i in range(0, max(len(data), 1), 200):
+                chunk = data[i:i + 200]
+                head = f"{self.sid}{t if i == 0 else '+'}".encode()
+                await self.term.send_line(head + (b" " + chunk if chunk else b""))
 
     async def text(self, md):
-        for t, payload in app_text_lines(md, self):
-            await self.tag(t, payload)
+        async with self.group:
+            for t, payload in app_text_lines(md, self):
+                await self.tag(t, payload)
 
     async def tool(self, name, summary):
         await self.tag("U", f"{name} {summary}")
@@ -1286,9 +1348,18 @@ class Channel:
             self.edited.append(rel)
 
     async def _restart(self):
+        """A fresh conversation. Returns False (and says why) when it could
+        not start; the session is then closed, which frees its slot."""
         await self.session.stop()
         self.session = make_session(self.v2.args, self, self.cfg)
-        await self.session.start()
+        try:
+            await self.session.start()
+        except Exception as e:  # noqa: BLE001
+            first = (str(e).strip().splitlines() or ["error"])[0]
+            await self.tool_error(f"Could not start a new conversation: {first}")
+            asyncio.ensure_future(self.v2.close(self.sid))
+            return False
+        return True
 
     async def _read_prompt(self):
         await self.tag(">")
@@ -1328,12 +1399,14 @@ class Channel:
                         await self.notice(line)
                     continue
                 if cmd[0] == "/new":
-                    await self._restart()
+                    if not await self._restart():
+                        return
                     await self.notice("New conversation.")
                     continue
                 if cmd[0] == "/edits" and len(cmd) == 2:
                     self.cfg.accept_edits = cmd[1] == "on"
-                    await self._restart()
+                    if not await self._restart():
+                        return
                     await self.notice(f"Auto-accept edits {'on' if self.cfg.accept_edits else 'off'}"
                                       " (new conversation).")
                     continue

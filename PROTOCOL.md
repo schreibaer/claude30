@@ -195,8 +195,9 @@ What the bridge allows depends on `--files`: `rw` (the default) allows listing, 
 
 A listing never shows, and a request is refused as `hidden` for:
 
-- `.git`, `.ssh`, and names matching `.env*`, `*.pem`, `*.key`, `id_rsa*` or `id_ed25519*`, even when git tracks them;
-- anything the project's git ignore rules exclude (when the project is a git repository and git is installed);
+- `.git`, `.ssh`, and names matching `.env*`, `*.pem`, `*.key`, `id_rsa*` or `id_ed25519*` in any letter case, even when git tracks them;
+- anything the project's git ignore rules exclude (when the project is a git repository and git is installed). If git fails inside a repository, the paths it was asked about count as ignored;
+- these rules apply both to the path as sent and to the real path after symbolic links are resolved, so a link cannot show a hidden file under another name;
 - a symbolic link whose target is outside the project folder (refused as `outside project`);
 - names holding a control character (refused as `bad name`), or that Mac Roman cannot spell.
 
@@ -222,7 +223,7 @@ Requests are refused as `outside project` for absolute paths, `.` or `..` compon
 | Reason | Meaning |
 |---|---|
 | `big` | Over the edit limit: 28,672 bytes of Mac Roman text or 2,000 lines |
-| `long` | Over 32,000 lines; only the first 32,000 are sent, and `<total>` is 32,000 |
+| `long` | Over 32,000 lines, or over 8 MB; only the first 32,000 lines (of the first 8 MB) are sent, and `<total>` counts the lines sent |
 | `encoding` | Not UTF-8; shown as Latin-1 |
 | `chars` | Holds characters Mac Roman lacks |
 | `control` | Holds control characters other than tab |
@@ -241,7 +242,7 @@ Editable lines are the file's exact text in Mac Roman, tabs included. Read-only 
 
 After a save, the bridge tells Claude at the start of that session's next turn which files the person saved.
 
-Refusal reasons: `not found`, `hidden`, `outside project`, `bad name`, `binary`, `read-only`, `too big`, `changed`, `damaged` (the whole-file CRC did not match), `files off`, `busy`, `failed <detail>`.
+Refusal reasons: `not found`, `hidden`, `outside project`, `bad name`, `binary`, `read-only`, `too big`, `changed`, `damaged` (the whole-file CRC did not match), `control` (the saved text holds a control character other than tab), `files off`, `busy`, `failed <detail>`.
 
 ### One save with a damaged block
 
