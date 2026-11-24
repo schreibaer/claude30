@@ -108,6 +108,7 @@ The SE/30 is meant to be the whole terminal, so project choice belongs on the SE
 
 - `bridge.py`: `Terminal` mixes link state (window counting, input routing) with per-conversation state (`busy`, `_in_fence`, `on_interrupt`). `main_async` runs one session loop.
 - `client/src/core/protocol.h`: `Proto` holds both link state (dial, handshake, hangup, `pending_acks`, `noise`) and turn state (`perm_*`, `stopped`, `swallow`).
+- `bridge.py` `ClaudeSession._can_use_tool`: the Agent SDK runs each permission request as its own task, so two tool calls could ask at once and each prompt discarded the other's answer, leaving the turn stuck with Send disabled. Fixed ahead of this plan by asking one at a time; `tests/test_bridge_permissions.py` covers it.
 - `client/src/mac/window.c`, `modem.c`, `log.c`: one transcript, one batch and one log file as module statics.
 - `docs/plans/2026-11-24-0950-feat-native-se30-client-plan.md`: the v1 client plan. Its KTD6 (disconnect while busy), KTD9 (one `!ACK` per `W`) and KTD12 (one answer per request) carry over per session.
 - Memory notes: the SE/30 runs System 7.5.5 with 32 MB, its serial chip drops bytes at 57,600 under interrupt load, and v1 has no retransmit.
@@ -243,7 +244,7 @@ stateDiagram-v2
   2. Pass `cwd` and `accept_edits` to `ClaudeSession`, `DemoSession` and `describe_tool` explicitly as per-channel state. `/edits` changes only its channel's value and never writes the shared `args` (R15).
   3. At connect, start the default tty/v1 session as a background task while input is read, so tty and v1 behave as today. On `#HELLO SE30 2`, stop that session before replying, so v2's `#OK` never waits on a CLI start and no seventh CLI process stays running. A start failure in that task reports only through tty/v1 notices.
   4. On `#HELLO SE30 2`, start a v2 dispatcher: route `<n>…` lines to channel queues, handle `<n>O`/`<n>X` by starting and stopping channel tasks, `!STOP` per channel, `!QUIT` to end the call.
-  5. Each channel task runs today's prompt loop (`/new`, `/edits`, turns) for its own session (R15).
+  5. Each channel task runs today's prompt loop (`/new`, `/edits`, turns) for its own session (R15). Each channel keeps the one-at-a-time permission lock that `ClaudeSession` already has, so two tool calls in one tab never have two requests open at once.
   6. On EOF, stop every channel's session so no CLI process is left running.
 - **Patterns to follow:** today's `main_async` loop and `Terminal.tag` window logic.
 - **Test scenarios:** in `tests/test_bridge_v2.py` (U4).
@@ -269,7 +270,7 @@ stateDiagram-v2
 - **Goal:** Prove the bridge's v2 behavior on the host, and give the client a scripted v2 bridge for emulator and end-to-end tests.
 - **Requirements:** R6, R7, R9, R10, R13.
 - **Dependencies:** U2, U3.
-- **Files:** `tests/test_bridge_v2.py` (new, standard-library `unittest`), `tools/emu/stress_bridge.py`, `tools/emu/README.md`.
+- **Files:** `tests/test_bridge_v2.py` (new, standard-library `unittest`), `tests/test_bridge_permissions.py`, `tools/emu/stress_bridge.py`, `tools/emu/README.md`.
 - **Approach:** Run `bridge.py --demo` as a subprocess over pipes with temporary `--projects` folders, acting as a client that acknowledges every `W`. Port `stress_bridge.py` to v2 so each case runs in the session it was asked in. This seam catches routing, flow control and project validation; it misses real Agent SDK behavior, which the emulator session against `run.sh --cwd` covers.
 - **Test scenarios:**
   - `#HELLO SE30 2` gets `#OK se30bridge 2` and a `P[ … P]` list matching the temporary folders.
@@ -284,6 +285,7 @@ stateDiagram-v2
   - With 10 projects and `--window 8`, a `W` arrives inside the list and the list completes after `!ACK`.
   - `<n>X` during a turn, and during an open permission request, stops that session and answers `<n>X closed`, and other sessions keep running.
   - Closing stdin ends the process with no child processes left.
+  - Two concurrent permission requests in one session put only one `Q` on the wire until it is answered (extend `tests/test_bridge_permissions.py` to v2 channels).
   - `#HELLO SE30 1` still produces the v1 exchange from PROTOCOL.md (characterization test, R13).
   - tty input without a HELLO still gets echo and the `--More--` pager (R14).
 - **Verification:** The suite passes, and the C end-to-end test (U5) runs against the v2 stress bridge.
@@ -406,13 +408,3 @@ stateDiagram-v2
 - Exact tab marker glyphs and tab widths, set by eye on the 512 × 342 screen.
 - Whether the picker needs a "Refresh" button or `!LIST` on open is enough.
 
-## Deferred / Open Questions
-
-These are review items left for the author. They do not block implementation.
-
-### From 2026-11-24 review
-
-- **Remembering tabs across app launches goes beyond the confirmed scope** — remembered tabs (R8 remembered tabs, R11 unavailable project, KTD10 version 2 prefs) (P2, scope-guardian, confidence 75)
-
-  The confirmed scope covered reopening the same tabs after a redial within one app session. Restoring tabs after quitting and relaunching Claude30 was added during planning. It costs a prefs format change, an "unavailable project" tab state, one acceptance example and a relaunch test. Without it, the person opens the picker once per project after each launch.
-  Change: keep it as planned (recommended, the cost is small), or drop across-launch restore and keep only in-memory reopening on Redial.
