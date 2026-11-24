@@ -381,7 +381,7 @@ static void send_commit(Proto *p, int slot)
 static void send_block(Proto *p, int slot)
 {
     FileXfer *x = &p->xfer[slot];
-    char buf[64], pre[4];
+    char buf[64], pre[4], line[300];
     char *o = buf;
     long i, s;
 
@@ -399,9 +399,17 @@ static void send_block(Proto *p, int slot)
     s = x->pos;
     for (i = x->pos; ; i++) {
         if (i == x->end || x->text[i] == '\r') {
-            sendn(p, pre, 3);
-            sendn(p, x->text + s, i - s);
-            sendn(p, "\r", 1);
+            if (i - s + 4 <= (long)sizeof(line)) {
+                /* one serial write per line */
+                memcpy(line, pre, 3);
+                memcpy(line + 3, x->text + s, i - s);
+                line[3 + i - s] = '\r';
+                sendn(p, line, i - s + 4);
+            } else {
+                sendn(p, pre, 3);
+                sendn(p, x->text + s, i - s);
+                sendn(p, "\r", 1);
+            }
             s = i + 1;
             if (i == x->end)
                 break;
@@ -429,7 +437,7 @@ int proto_save(Proto *p, int sid, long owner, const char *path,
 {
     int slot;
     FileXfer *x;
-    long pos, n = 0;
+    long pos, e, n = 0;
     if (p->files != FILES_RW || strlen(token) >= sizeof(p->xfer[0].token) || len < 0)
         return -1;
     slot = new_slot(p, sid, owner, path);
@@ -443,9 +451,10 @@ int proto_save(Proto *p, int sid, long owner, const char *path,
     x->tlen = len;
     x->kind = XF_SAVE;
     strcpy(x->token, token);
-    for (pos = 0; ; pos = block_end(x->text, len, pos) + 1) {
+    for (pos = 0; ; pos = e + 1) {
+        e = block_end(x->text, len, pos);
         n++;
-        if (block_end(x->text, len, pos) >= len)
+        if (e >= len)
             break;
     }
     x->nblocks = (int)n;

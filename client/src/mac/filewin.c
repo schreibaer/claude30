@@ -523,8 +523,11 @@ static void edit_piece(FileWin *f, const FileXfer *x, const char *t, long n)
     need = f->load_len + n + 1;
     if (!f->load)
         f->load = NewHandle(need > 4096 ? need : 4096);
-    else if (GetHandleSize(f->load) < need)
-        SetHandleSize(f->load, need + 4096);
+    else if (GetHandleSize(f->load) < need) {
+        SetHandleSize(f->load, need * 2);   /* grow geometrically */
+        if (GetHandleSize(f->load) < need)
+            SetHandleSize(f->load, need);   /* tight heap: just enough */
+    }
     if (!f->load || GetHandleSize(f->load) < need) {
         set_status(f, "Out of memory: the file could not be loaded.");
         f->phase = FW_READY;
