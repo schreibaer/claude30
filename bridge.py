@@ -24,10 +24,13 @@ import argparse
 import asyncio
 import contextlib
 import difflib
+import errno
+import fcntl
 import fnmatch
 import hashlib
 import os
 import re
+import signal
 import stat
 import sys
 import tempfile
@@ -225,10 +228,19 @@ class Terminal:
                 for b in data:
                     await self._route(b)
         except EOFError:
-            self.eof = True
-            self.acks.release()           # a writer waiting for !ACK gives up
-            await self.keys.put(None)
-            await self.lines.put(None)
+            self.lose_link()
+
+    def lose_link(self):
+        """The call is over: end of input, a signal, or the app went silent.
+        Nothing more is sent, a writer waiting for !ACK gives up, and every
+        reader sees the end, so the normal shutdown runs."""
+        if self.eof:
+            return
+        self.eof = True
+        self.link.closed = True
+        self.acks.release()
+        self.keys.put_nowait(None)
+        self.lines.put_nowait(None)
 
     async def _route(self, b):
         if self.mode == "tty":
@@ -655,10 +667,12 @@ class DemoSession:
         self._child = None
 
     async def start(self):
-        # Test hook: a slow start with a child process, like the real CLI's.
+        # Test hook: a slow start with a child process that, like the real
+        # CLI, reads its stdin until the bridge goes away.
         delay = float(os.environ.get("SE30_DEMO_START_DELAY", "0") or 0)
         if delay:
-            self._child = await asyncio.create_subprocess_exec("sleep", str(delay + 30))
+            self._child = await asyncio.create_subprocess_exec(
+                "cat", stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.DEVNULL)
             await asyncio.sleep(delay)
         self.term.on_interrupt = self.interrupt
 
@@ -725,6 +739,56 @@ While Claude works: ctrl-C stops it. At --More--: space, return or q."""
 
 def log(msg):
     print(f"se30bridge: {msg}", file=sys.stderr, flush=True)
+
+
+# --------------------------------------------------------------------------
+# One call at a time
+# --------------------------------------------------------------------------
+
+def _wait_for_lock(fd, seconds):
+    end = time.monotonic() + seconds
+    while True:
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            return True
+        except OSError as e:
+            if e.errno not in (errno.EAGAIN, errno.EACCES):
+                raise
+        if time.monotonic() >= end:
+            return False
+        time.sleep(0.05)
+
+
+def take_call_lock(state_dir):
+    """The WiFi232 holds one call at a time, so a new call means the previous
+    one is dead, even if its bridge never noticed (a Wi-Fi drop leaves the TCP
+    connection half open). Takes the lock in the state folder, ending the
+    bridge that holds it: SIGTERM first, so it stops its sessions, then
+    SIGKILL. Only the holder of the lock is ever signalled, so a stale pid in
+    the file is never touched. Returns the open lock file, kept for the life
+    of the process."""
+    os.makedirs(state_dir, mode=0o700, exist_ok=True)
+    fd = os.open(os.path.join(state_dir, "call.lock"), os.O_RDWR | os.O_CREAT, 0o600)
+    # The old bridge may wait 5 s for its turn to stop and 5 s more while the
+    # CLI writes out the conversation.
+    wait = float(os.environ.get("SE30_EVICT_WAIT", "12") or 12)
+    if not _wait_for_lock(fd, 0):
+        pid = 0
+        with contextlib.suppress(ValueError, OSError):
+            pid = int(os.pread(fd, 32, 0).decode().strip() or 0)
+        log(f"ending the previous call (bridge pid {pid or 'unknown'})")
+        for sig, seconds in ((signal.SIGTERM, wait), (signal.SIGKILL, 5)):
+            if pid > 0 and pid != os.getpid():
+                with contextlib.suppress(ProcessLookupError, PermissionError):
+                    os.kill(pid, sig)
+            if _wait_for_lock(fd, seconds):
+                break
+        else:
+            log("the previous bridge would not stop; giving up on this call")
+            raise SystemExit(1)
+    os.ftruncate(fd, 0)
+    os.pwrite(fd, str(os.getpid()).encode(), 0)
+    return fd
 
 
 def project_name_ok(name):
@@ -1554,6 +1618,9 @@ async def main_async(args):
     link = Link(args.baud)
     await link.open()
     term = Terminal(link, args)
+    loop = asyncio.get_running_loop()
+    for sig in (signal.SIGTERM, signal.SIGHUP):
+        loop.add_signal_handler(sig, term.lose_link)
     asyncio.ensure_future(term.dispatch())
 
     cfg = SessionConfig(args.cwd or os.getcwd(), args.accept_edits, args.model)
@@ -1655,10 +1722,15 @@ def main():
     p.add_argument("--accept-edits", action="store_true",
                    help="auto-approve file edits")
     p.add_argument("--model", default=None)
+    p.add_argument("--state-dir", default="~/.se30bridge",
+                   help="where the bridge keeps its call lock and resume records "
+                        "(one call at a time per folder)")
     args = p.parse_args()
+    args.state_dir = os.path.abspath(os.path.expanduser(args.state_dir))
     if args.cwd:
         args.cwd = os.path.abspath(os.path.expanduser(args.cwd))
     args.projects = [os.path.abspath(os.path.expanduser(d)) for d in args.projects or []]
+    args.call_lock = take_call_lock(args.state_dir)
     try:
         asyncio.run(main_async(args))
     except (KeyboardInterrupt, SystemExit):

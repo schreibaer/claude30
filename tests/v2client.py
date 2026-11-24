@@ -5,8 +5,10 @@ v2 HELLO, acknowledges every W unless told not to, and collects the lines it
 receives so a test can wait for them. Standard library only.
 """
 import os
+import shutil
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 
@@ -15,9 +17,17 @@ BRIDGE = os.path.join(HERE, "..", "bridge.py")
 
 
 class Client:
-    def __init__(self, *bridge_args, script=BRIDGE, env=None, auto_ack=True):
+    def __init__(self, *bridge_args, script=BRIDGE, env=None, auto_ack=True, state_dir=None):
         e = dict(os.environ)
         e.update(env or {})
+        # Each bridge gets its own state folder unless a test shares one, so
+        # bridges in different tests never end each other's calls.
+        if script == BRIDGE:
+            if state_dir is None:
+                state_dir = tempfile.mkdtemp(prefix="se30state")
+                self._own_state = state_dir
+            bridge_args = ("--state-dir", state_dir, *bridge_args)
+        self.state_dir = state_dir
         self.p = subprocess.Popen([sys.executable, "-u", script, "--baud", "0", *bridge_args],
                                   stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                                   stderr=subprocess.PIPE, env=e, bufsize=0)
@@ -27,12 +37,22 @@ class Client:
         self.eof = False
         self.auto_ack = auto_ack
         self.ws = 0
+        self.stderr = b""
         threading.Thread(target=self._reader, daemon=True).start()
         threading.Thread(target=self._stderr, daemon=True).start()
-        self.stderr = b""
 
     def _stderr(self):
-        self.stderr = self.p.stderr.read()
+        while True:
+            chunk = self.p.stderr.read1(4096) if hasattr(self.p.stderr, "read1") \
+                else self.p.stderr.read(1)
+            if not chunk:
+                return
+            self.stderr += chunk
+
+    def stderr_now(self, settle=0.2):
+        """What the bridge has logged so far."""
+        time.sleep(settle)
+        return self.stderr
 
     def _reader(self):
         buf = bytearray()
@@ -128,6 +148,17 @@ class Client:
             self.send(f"{sid}A {line.split()[1]} {answer}")
             i += 1
 
+    def reap(self):
+        """Kills the bridge if it still runs and closes the pipes."""
+        if self.p.poll() is None:
+            self.p.kill()
+        self.p.wait()
+        for f in (self.p.stdin, self.p.stdout, self.p.stderr):
+            try:
+                f.close()
+            except (OSError, ValueError):
+                pass
+
     def close(self, timeout=10):
         try:
             self.p.stdin.close()
@@ -145,3 +176,6 @@ class Client:
                     f.close()
                 except OSError:
                     pass
+            own = getattr(self, "_own_state", None)
+            if own:
+                shutil.rmtree(own, ignore_errors=True)

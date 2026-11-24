@@ -286,8 +286,11 @@ static void finish_with_disconnect(void)
 }
 
 static char projects_root[] = "/tmp/se30testXXXXXX";
+/* A hidden folder inside the projects root: not offered as a project, and
+   no other test's bridge shares it. */
+static char state_dir[sizeof(projects_root) + 8];
 static char *demo_argv[] = { "python3", "-u", BRIDGE_PY, "--demo", "--baud", "0",
-                             "--projects", projects_root, NULL };
+                             "--projects", projects_root, "--state-dir", state_dir, NULL };
 static char *stress_argv[] = { "python3", "-u", STRESS_PY, "--baud", "0", NULL };
 
 static void make_projects(void)
@@ -295,6 +298,7 @@ static void make_projects(void)
     char path[64];
     if (!mkdtemp(projects_root))
         exit(2);
+    snprintf(state_dir, sizeof(state_dir), "%s/.state", projects_root);
     snprintf(path, sizeof(path), "%s/alpha", projects_root);
     mkdir(path, 0700);
     snprintf(path, sizeof(path), "%s/beta", projects_root);
@@ -308,6 +312,11 @@ static void remove_projects(void)
     rmdir(path);
     snprintf(path, sizeof(path), "%s/beta", projects_root);
     rmdir(path);
+    snprintf(path, sizeof(path), "%s/call.lock", state_dir);
+    unlink(path);
+    snprintf(path, sizeof(path), "%s/sessions.json", state_dir);
+    unlink(path);
+    rmdir(state_dir);
     rmdir(projects_root);
 }
 
