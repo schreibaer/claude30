@@ -1099,6 +1099,9 @@ void window_jump_prompt(short dir)
         SysBeep(1);
 }
 
+/* The Control key modifier (Multiversal spells it ControlKey, Apple controlKey). */
+#define kControlMask 0x1000
+
 /* Virtual key codes of the extended keyboard's navigation keys. */
 #define kHomeKey     0x73
 #define kPageUpKey   0x74
@@ -1116,7 +1119,7 @@ Boolean window_scroll_key(EventRecord *ev)
 
     if (code == kPageUpKey || code == kPageDownKey || code == kHomeKey || code == kEndKey) {
         arrow = false;
-    } else if (!arrow || !(mods & (cmdKey | optionKey | controlKey))) {
+    } else if (!arrow || !(mods & (cmdKey | optionKey | kControlMask))) {
         return false;
     }
     if (!gTrans) {
