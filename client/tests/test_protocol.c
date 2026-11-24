@@ -549,6 +549,170 @@ static long find_bytes(const char *buf, long len, long from, const char *s)
     return -1;
 }
 
+/* Connects to a bridge that advertises resume and heartbeat. */
+static void connect_caps(void)
+{
+    proto_connect(&P, "ATDTbridge", now);
+    feed("AT\r\nOK\r\n");
+    feed("CONNECT 57600\r\n");
+    feed("> \r\n> #HELLO SE30 2\r\n#OK se30bridge 2 files=rw resume ping\r\n"
+         "P[\r\nP alpha\r\nP beta\r\nP]\r\n");
+    CHECK_EQ_LONG(P.state, ST_ONLINE);
+    clear_rec();
+}
+
+static void test_capabilities_and_resume_open(void)
+{
+    /* Capability words are read; without them, resume opens are plain opens
+       and no heartbeat is ever sent. */
+    reset();
+    connect_caps();
+    CHECK(P.resume_cap && P.ping_cap);
+    CHECK(proto_open_resume(&P, 1, "alpha", "0123456789abcdef"));
+    CHECK_MEM(R.sent, R.nsent, "1Y 0123456789abcdef alpha\r");
+    clear_rec();
+    feed("1O alpha\r\n1Y 0123456789abcdef resumed\r\n1>\r\n");
+    CHECK_EQ_LONG(count(EV_OPENED), 1);
+    CHECK_EQ_LONG(count(EV_RESUMED), 1);
+    CHECK(strcmp(R.text[find(EV_RESUMED)], "resumed 0123456789abcdef") == 0);
+    CHECK_EQ_LONG(proto_sess_state(&P, 1), SS_READY);
+
+    /* An empty token, or no token, is a plain open. */
+    clear_rec();
+    CHECK(proto_open_resume(&P, 2, "beta", ""));
+    CHECK_MEM(R.sent, R.nsent, "2O beta\r");
+    clear_rec();
+    feed("2O beta\r\n2Y aaaaaaaaaaaaaaaa new\r\n2>\r\n");
+    CHECK(strcmp(R.text[find(EV_RESUMED)], "new aaaaaaaaaaaaaaaa") == 0);
+
+    /* A bridge without the word gets "O" even when the app has a token. */
+    reset();
+    connect_online();
+    CHECK(!P.resume_cap && !P.ping_cap);
+    CHECK(proto_open_resume(&P, 1, "alpha", "0123456789abcdef"));
+    CHECK_MEM(R.sent, R.nsent, "1O alpha\r");
+    tick(T_DEAD * 2);
+    CHECK_EQ_LONG(count_sent("!PING"), 0);
+    CHECK_EQ_LONG(P.state, ST_ONLINE);
+
+    /* A new token after /new or /edits, and a malformed Y, are handled. */
+    reset();
+    connect_caps();
+    open_ready(1, "alpha");
+    feed("1Y bbbbbbbbbbbbbbbb new\r\n1Y\r\n1Y x\r\n1Y toolongtokenxxxxxxx new\r\n");
+    CHECK_EQ_LONG(count(EV_RESUMED), 1);
+    CHECK(strcmp(R.text[find(EV_RESUMED)], "new bbbbbbbbbbbbbbbb") == 0);
+    CHECK_EQ_LONG(proto_sess_state(&P, 1), SS_READY);
+    /* A Y for a session that is not open is dropped like any other line. */
+    clear_rec();
+    feed("3Y cccccccccccccccc new\r\n");
+    CHECK_EQ_LONG(count(EV_RESUMED), 0);
+}
+
+static void test_heartbeat_and_dead_link(void)
+{
+    /* A !PING after 30 quiet seconds; not while other lines go out. */
+    reset();
+    connect_caps();
+    tick(T_PING - 1);
+    CHECK_EQ_LONG(count_sent("!PING"), 0);
+    tick(1);
+    CHECK_EQ_LONG(count_sent("!PING"), 1);
+    feed("#PONG\r\n");
+    CHECK_EQ_LONG(P.ping_out, 0);
+    CHECK_EQ_LONG(P.dropped, 0);
+    open_ready(1, "alpha");
+    clear_rec();
+    tick(T_PING - 5);
+    proto_send_prompt(&P, 1, "go", 2);           /* traffic resets the heartbeat */
+    clear_rec();
+    feed("1T hi\r\n");
+    tick(T_PING - 1);
+    CHECK_EQ_LONG(count_sent("!PING"), 0);
+    tick(1);
+    CHECK_EQ_LONG(count_sent("!PING"), 1);
+
+    /* A #PONG does not reset the silence timer of a running turn. */
+    reset();
+    connect_caps();
+    open_ready(1, "alpha");
+    proto_send_prompt(&P, 1, "go", 2);
+    clear_rec();
+    for (int i = 0; i < 4; i++) {
+        tick(T_PING);
+        feed("#PONG\r\n");
+    }
+    CHECK_EQ_LONG(count(EV_SILENCE), 1);        /* 90 s of pongs only */
+    CHECK_EQ_LONG(count(EV_LOST), 0);
+
+    /* Pongs keep the link alive for as long as they come. */
+    clear_rec();
+    for (int i = 0; i < 10; i++) {
+        tick(T_PING);
+        feed("#PONG\r\n");
+    }
+    CHECK_EQ_LONG(P.state, ST_ONLINE);
+    CHECK_EQ_LONG(count(EV_LOST), 0);
+
+    /* Silence with an unanswered ping: hang up, then report the loss. */
+    reset();
+    connect_caps();
+    open_ready(1, "alpha");
+    proto_send_prompt(&P, 1, "go", 2);
+    feed("1Q 1 Edit x\r\n1? 1\r\n");
+    clear_rec();
+    tick(T_DEAD - 1);
+    CHECK_EQ_LONG(P.state, ST_ONLINE);
+    CHECK_EQ_LONG(count(EV_LOST), 0);
+    tick(1);                                    /* 90 s silent, pings unanswered */
+    CHECK_EQ_LONG(P.state, ST_HANGUP);
+    CHECK_EQ_LONG(count(EV_LOST), 0);           /* not before the modem is on hook */
+    CHECK_EQ_LONG(count(EV_PERM_CLOSE), 1);
+    CHECK_EQ_LONG(count(EV_PERM_ABANDONED), 1);
+    tick(T_GUARD);
+    CHECK_MEM(R.sent + R.nsent - 3, 3, "+++");
+    tick(T_GUARD);
+    CHECK_MEM(R.sent + R.nsent - 4, 4, "ATH\r");
+    feed("OK\r\n");
+    CHECK_EQ_LONG(P.state, ST_IDLE);
+    CHECK_EQ_LONG(count(EV_LOST), 1);
+    CHECK_EQ_LONG(count(EV_CLOSED), 0);
+    CHECK_EQ_LONG(proto_sess_state(&P, 1), SS_NONE);
+
+    /* A stopped pump (a modal alert): the first tick after it sends a ping
+       instead of declaring the link lost. */
+    reset();
+    connect_caps();
+    open_ready(1, "alpha");
+    now += T_DEAD * 2;
+    clear_rec();
+    proto_tick(&P, now);
+    CHECK_EQ_LONG(P.state, ST_ONLINE);
+    CHECK_EQ_LONG(count_sent("!PING"), 1);
+    feed("#PONG\r\n");
+    tick(T_PING);
+    CHECK_EQ_LONG(P.state, ST_ONLINE);
+    CHECK_EQ_LONG(count(EV_LOST), 0);
+
+    /* ... and if that ping is never answered, it gets T_PING_WAIT first. */
+    reset();
+    connect_caps();
+    now += T_DEAD * 2;
+    proto_tick(&P, now);
+    CHECK_EQ_LONG(P.ping_out, 1);
+    tick(T_PING_WAIT - 1);
+    CHECK_EQ_LONG(P.state, ST_ONLINE);
+    tick(1);
+    CHECK_EQ_LONG(P.state, ST_HANGUP);
+
+    /* NO CARRIER is still immediate. */
+    reset();
+    connect_caps();
+    feed("NO CARRIER\r\n");
+    CHECK_EQ_LONG(P.state, ST_IDLE);
+    CHECK_EQ_LONG(count(EV_LOST), 1);
+}
+
 static void test_demo_session(void)
 {
     long len = 0, at, opened, done, i, ws = 0;
@@ -622,6 +786,8 @@ int main(void)
     test_link_lost();
     test_disconnect();
     test_silence();
+    test_capabilities_and_resume_open();
+    test_heartbeat_and_dead_link();
     test_demo_session();
     proto_free(&P);
     CHECK_DONE();

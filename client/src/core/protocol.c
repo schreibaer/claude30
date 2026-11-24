@@ -4,7 +4,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-enum { AH_CLOSED, AH_FAILED, AH_DIAL };
+enum { AH_CLOSED, AH_FAILED, AH_DIAL, AH_LOST };
 
 static void emit(Proto *p, int sid, EventKind k, const char *t, long n)
 {
@@ -18,6 +18,7 @@ static void emits(Proto *p, int sid, EventKind k, const char *t)
 
 static void sends(Proto *p, const char *s)
 {
+    p->last_tx = p->now;
     p->send(p->ctx, s, (long)strlen(s));
 }
 
@@ -31,6 +32,7 @@ static void send_sess(Proto *p, int sid, const char *rest)
     buf[0] = (char)('0' + sid);
     memcpy(buf + 1, rest, k);
     buf[1 + k] = '\r';
+    p->last_tx = p->now;
     p->send(p->ctx, buf, k + 2);
 }
 
@@ -86,6 +88,9 @@ static void reset_link(Proto *p)
     p->noise = 0;
     p->spare_ack_sent = 0;
     p->silence_warned = 0;
+    p->ping_out = 0;
+    p->resume_cap = 0;
+    p->ping_cap = 0;
     p->quit_sent = 0;
     p->got_ok = 0;
     p->timer = 0;
@@ -233,6 +238,8 @@ static void finish_hangup(Proto *p)
     set_state(p, ST_IDLE);
     if (after == AH_FAILED)
         emits(p, 0, EV_DIAL_FAILED, p->fail_msg);
+    else if (after == AH_LOST)
+        emit(p, 0, EV_LOST, "", 0);
     else
         emit(p, 0, EV_CLOSED, "", 0);
 }
@@ -293,6 +300,8 @@ static void read_ok(Proto *p, const char *line, long n)
     long i = 16;
     p->got_ok = 1;
     p->files = FILES_OFF;
+    p->resume_cap = 0;
+    p->ping_cap = 0;
     while (i < n) {
         long w;
         while (i < n && line[i] == ' ')
@@ -304,6 +313,10 @@ static void read_ok(Proto *p, const char *line, long n)
             p->files = FILES_RW;
         else if (equals(line + w, i - w, "files=ro"))
             p->files = FILES_RO;
+        else if (equals(line + w, i - w, "resume"))
+            p->resume_cap = 1;
+        else if (equals(line + w, i - w, "ping"))
+            p->ping_cap = 1;
     }
 }
 
@@ -336,6 +349,11 @@ static int link_line(Proto *p, const char *line, long n)
     }
     if (starts(line, n, "I ")) {
         emit(p, 0, EV_INFO, line + 2, n - 2);
+        return 1;
+    }
+    if (equals(line, n, "#PONG")) {
+        p->ping_out = 0;
+        p->feed_pong = 1;
         return 1;
     }
     return 0;
@@ -408,6 +426,17 @@ static void link_lost(Proto *p)
     reset_link(p);
     set_state(p, ST_IDLE);
     emit(p, 0, EV_LOST, "", 0);
+}
+
+/* Nothing heard for T_DEAD and a !PING went unanswered: the modem may still
+   be in data mode, so put it on hook first, then report the loss. */
+static void link_dead(Proto *p)
+{
+    int i;
+    for (i = 1; i <= MAX_SESS; i++)
+        if (p->sess[i].state != SS_NONE)
+            abandon_turn(p, i);
+    start_hangup(p, AH_LOST, NULL);
 }
 
 /* Disconnecting: once no turn is left to finish, ask the bridge to quit. */
@@ -542,6 +571,21 @@ static void session_line(Proto *p, int sid, const char *line, long n)
         s->perm_asked = 1;
         set_sess(p, sid, SS_PERMISSION);
         emit(p, sid, EV_PERM_ASK, "", 0);
+    } else if (TAG("Y")) {
+        /* "<token> <new|resumed|cut>": which conversation this session runs. */
+        long k = 0;
+        while (k < plen && pay[k] != ' ')
+            k++;
+        if (k > 0 && k <= 16 && k + 1 < plen) {
+            char text[48];
+            long hn = plen - k - 1;
+            if (hn > 8)
+                hn = 8;
+            memcpy(text, pay + k + 1, hn);
+            text[hn] = ' ';
+            memcpy(text + hn + 1, pay, k);
+            emit(p, sid, EV_RESUMED, text, hn + 1 + k);
+        }
     } else if (TAG("O")) {
         /* Stay in SS_OPENING until the first >, so that > cannot end a
            turn the shell starts in between. */
@@ -587,6 +631,8 @@ static void online_line(Proto *p, const char *line, long n)
 static void on_line(void *ctx, const char *line, long n)
 {
     Proto *p = (Proto *)ctx;
+    if (!equals(line, n, "#PONG"))
+        p->feed_real = 1;
     switch (p->state) {
     case ST_IDLE:
         break;
@@ -659,12 +705,22 @@ void proto_disconnect(Proto *p, unsigned long now)
 
 void proto_feed(Proto *p, const char *data, long n, unsigned long now)
 {
+    int was_warned = p->silence_warned;
     p->now = now;
+    p->prev_input = p->last_input;
+    p->feed_real = p->feed_pong = 0;
     if (n > 0) {
+        p->last_heard = now;
         p->last_input = now;
         p->silence_warned = 0;
     }
     linebuf_feed(&p->lb, data, n, on_line, p);
+    /* A heartbeat answer alone shows the link is up; it says nothing about
+       Claude, so it must not reset the "no output" timer. */
+    if (p->feed_pong && !p->feed_real && p->lb.len == 0) {
+        p->last_input = p->prev_input;
+        p->silence_warned = was_warned;
+    }
 }
 
 void proto_tick(Proto *p, unsigned long now)
@@ -680,6 +736,19 @@ void proto_tick(Proto *p, unsigned long now)
             p->spare_ack_sent = 1;
         }
         emit(p, 0, EV_SILENCE, "", 0);
+    }
+    if (p->state == ST_ONLINE && p->ping_cap) {
+        if (now - p->last_heard >= (unsigned long)T_DEAD && p->ping_out
+                && now - p->last_ping >= (unsigned long)T_PING_WAIT) {
+            link_dead(p);
+            return;
+        }
+        if (now - p->last_tx >= (unsigned long)T_PING
+                || (now - p->last_heard >= (unsigned long)T_DEAD && !p->ping_out)) {
+            sends(p, "!PING\r");
+            p->last_ping = now;
+            p->ping_out = 1;
+        }
     }
     if (p->state == ST_ONLINE || p->state == ST_CLOSING) {
         for (i = 1; i <= MAX_SESS; i++) {
@@ -737,22 +806,35 @@ void proto_tick(Proto *p, unsigned long now)
     }
 }
 
-int proto_open(Proto *p, int sid, const char *project)
+int proto_open_resume(Proto *p, int sid, const char *project, const char *token)
 {
     char buf[140];
-    long k = (long)strlen(project);
+    long k = (long)strlen(project), t = token ? (long)strlen(token) : 0;
+    long at = 2;
     if (p->state != ST_ONLINE || sid < 1 || sid > MAX_SESS || p->sess[sid].state != SS_NONE)
         return 0;
-    if (k > (long)sizeof(buf) - 3)
+    if (!p->resume_cap || t == 0 || t > 16)
+        t = 0;
+    if (k + t + 4 > (long)sizeof(buf) - 3)
         return 0;
-    buf[0] = 'O';
+    buf[0] = t ? 'Y' : 'O';
     buf[1] = ' ';
-    memcpy(buf + 2, project, k + 1);
+    if (t) {
+        memcpy(buf + at, token, t);
+        at += t;
+        buf[at++] = ' ';
+    }
+    memcpy(buf + at, project, k + 1);
     send_sess(p, sid, buf);
     reset_turn(&p->sess[sid]);
     p->sess[sid].closing_turn = 0;
     set_sess(p, sid, SS_OPENING);
     return 1;
+}
+
+int proto_open(Proto *p, int sid, const char *project)
+{
+    return proto_open_resume(p, sid, project, NULL);
 }
 
 int proto_close(Proto *p, int sid)
@@ -809,8 +891,10 @@ int proto_send_prompt(Proto *p, int sid, const char *text, long len)
     if (!buf)
         return 0;
     n = prompt_encode(text, len, prefix, buf, cap, NULL);
-    if (n > 0)
+    if (n > 0) {
+        p->last_tx = p->now;
         p->send(p->ctx, buf, n);
+    }
     free(buf);
     if (n <= 0)
         return 0;
