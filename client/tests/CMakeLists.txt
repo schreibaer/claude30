@@ -13,11 +13,13 @@ add_library(core STATIC
     ${CORE}/linebuf.c
     ${CORE}/prompt.c
     ${CORE}/protocol.c
-    ${CORE}/batch.c)
+    ${CORE}/batch.c
+    ${CORE}/files.c
+    ${CORE}/crc32.c)
 target_include_directories(core PUBLIC ${CORE})
 
 enable_testing()
-foreach(t test_linebuf_prompt test_protocol test_batch)
+foreach(t test_linebuf_prompt test_protocol test_batch test_files)
     add_executable(${t} ${t}.c)
     target_link_libraries(${t} core)
     target_compile_definitions(${t} PRIVATE FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures")

@@ -1,6 +1,7 @@
 #!/bin/bash
 # Listen for the SE/30's WiFi232 and hand each call to the bridge.
 # Usage: ./run.sh [bridge options]   e.g.  ./run.sh --cwd ~/code/myproject
+#                                         ./run.sh --projects ~/code --files ro
 # Keep this folder at a path without spaces (socat splits on them).
 DIR="$(cd "$(dirname "$0")" && pwd)"
 WIFI232_IP="${WIFI232_IP:-192.168.0.9}"

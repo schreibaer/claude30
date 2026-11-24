@@ -145,10 +145,6 @@ void batch_event(Batch *b, EventKind kind, const char *t, long n)
         puts_(b, RS_ERROR, "Error: ");
         put(b, RS_ERROR, t, n);
         break;
-    case EV_UNKNOWN:
-        block(b, RS_PROSE);
-        put(b, RS_PROSE, t, n);
-        break;
     case EV_RESULT:
         block(b, RS_RESULT);
         puts_(b, RS_RESULT, MR_EMDASH " ");

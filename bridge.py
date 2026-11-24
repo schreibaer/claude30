@@ -8,24 +8,33 @@ TCP connection from the WiFi232). Two modes:
   tty mode  (default) - for ZTerm or any VT100/dumb terminal. Human readable,
                         80-col wrapped, pager, single-key permission prompts.
   app mode            - tagged line protocol for a native SE/30 client.
-                        Entered when the client sends "#HELLO SE30 1".
+                        "#HELLO SE30 1" enters version 1 (one conversation);
+                        "#HELLO SE30 2" enters version 2: up to six
+                        conversations ("tabs") in different projects, plus
+                        browsing, reading and saving project files.
 
 See PROTOCOL.md for details.
 
     python bridge.py --cwd ~/code/myproject           # real Claude
+    python bridge.py --projects ~/code                # tabs: any folder in ~/code
     python bridge.py --demo                           # no Claude, test the link
 """
 
 import argparse
 import asyncio
+import contextlib
 import difflib
+import fnmatch
+import hashlib
 import os
+import re
+import stat
 import sys
+import tempfile
 import textwrap
 import time
 import unicodedata
-
-PROTOCOL_VERSION = 1
+import zlib
 
 # --------------------------------------------------------------------------
 # Character set handling
@@ -101,7 +110,10 @@ class Link:
         # ~10 bits per byte on the wire; leave 10% headroom.
         self.rate = (baud / 10.0) * 0.9 if baud else 0
         self.reader = None
+        self.closed = False
         self._next_ok = 0.0
+        # One write at a time, so paced chunks of two lines never interleave.
+        self._lock = asyncio.Lock()
 
     async def open(self):
         loop = asyncio.get_running_loop()
@@ -111,17 +123,21 @@ class Link:
         os.set_blocking(1, True)
 
     async def send(self, data: bytes):
-        for i in range(0, len(data), 64):
-            chunk = data[i:i + 64]
-            if self.rate:
-                now = time.monotonic()
-                if self._next_ok > now:
-                    await asyncio.sleep(self._next_ok - now)
-                self._next_ok = max(now, self._next_ok) + len(chunk) / self.rate
-            try:
-                os.write(1, chunk)
-            except (BrokenPipeError, ConnectionResetError):
-                raise SystemExit(0)
+        async with self._lock:
+            for i in range(0, len(data), 64):
+                if self.closed:
+                    raise EOFError
+                chunk = data[i:i + 64]
+                if self.rate:
+                    now = time.monotonic()
+                    if self._next_ok > now:
+                        await asyncio.sleep(self._next_ok - now)
+                    self._next_ok = max(now, self._next_ok) + len(chunk) / self.rate
+                try:
+                    os.write(1, chunk)
+                except (BrokenPipeError, ConnectionResetError, OSError):
+                    self.closed = True
+                    raise EOFError
 
     async def read(self, n=256):
         data = await self.reader.read(n)
@@ -137,28 +153,67 @@ class Link:
 CTRL_C = 0x03
 
 
+class EnterV2(Exception):
+    """The client sent the protocol version 2 HELLO."""
+
+
+def split_payload(tag, line):
+    """App mode: (tag, payload) pairs for one line, split at 200 bytes.
+    After the first piece the tag is "+". Prose splits at a space."""
+    out = []
+    first = True
+    while True:
+        if len(line) <= 200:
+            out.append((tag if first else "+", line))
+            return out
+        cut = line.rfind(" ", 0, 200)
+        cut = 200 if cut <= 0 else cut
+        out.append((tag if first else "+", line[:cut]))
+        line = line[cut:].lstrip() if tag == "T" else line[cut:]
+        first = False
+
+
+def app_text_lines(md, fence):
+    """Claude's prose as app-mode (tag, payload) pairs. fence is an object
+    whose _in_fence attribute tracks code fences across calls."""
+    out = []
+    for line in md.replace("**", "").replace("__", "").split("\n"):
+        if line.strip().startswith("```"):
+            fence._in_fence = not fence._in_fence
+            out.append(("C[" if fence._in_fence else "C]", ""))
+            continue
+        out += split_payload("C" if fence._in_fence else "T", line)
+    return out
+
+
 class Terminal:
+    """tty mode and v1 app mode, plus the input routing and the one writer
+    that v2 sessions share."""
+
     def __init__(self, link, args):
         self.link = link
         self.cols = args.cols
         self.rows = args.rows
         self.tty_charset = args.charset
-        self.mode = "tty"
+        self.mode = "tty"                 # "tty", "app" (v1) or "app2" (v2)
         self.keys = asyncio.Queue()       # tty mode: single bytes
-        self.lines = asyncio.Queue()      # app mode: complete lines
+        self.lines = asyncio.Queue()      # app modes: complete lines
         self.acks = asyncio.Semaphore(0)  # app mode flow control
         self.window = args.window
         self.sent_in_window = 0
-        self.busy = False                 # a Claude turn is running
+        self.eof = False
+        self.busy = False                 # a Claude turn is running (tty, v1)
         self.on_interrupt = None          # set by the session
         self.lines_since_input = 0
         self.skip_output = False
         self._app_buf = b""
         self._in_fence = False
+        self._wlock = asyncio.Lock()
+        self.typed = asyncio.Event()      # tty mode: the first key arrived
 
     @property
     def charset(self):
-        return "macroman" if self.mode == "app" else self.tty_charset
+        return "macroman" if self.mode != "tty" else self.tty_charset
 
     # ---- input ---------------------------------------------------------
 
@@ -170,11 +225,14 @@ class Terminal:
                 for b in data:
                     await self._route(b)
         except EOFError:
+            self.eof = True
+            self.acks.release()           # a writer waiting for !ACK gives up
             await self.keys.put(None)
             await self.lines.put(None)
 
     async def _route(self, b):
         if self.mode == "tty":
+            self.typed.set()
             if b == CTRL_C and self.busy:
                 self.skip_output = False
                 if self.on_interrupt:
@@ -183,7 +241,7 @@ class Terminal:
                 return
             await self.keys.put(b)
             return
-        # app mode: assemble lines
+        # app modes: assemble lines
         if b == 0x0A:
             return
         if b != 0x0D:
@@ -193,7 +251,7 @@ class Terminal:
         self._app_buf = b""
         if line == "!ACK":
             self.acks.release()
-        elif line == "!STOP":
+        elif line == "!STOP" and self.mode == "app":
             if self.busy and self.on_interrupt:
                 asyncio.ensure_future(self.on_interrupt())
         else:
@@ -236,10 +294,22 @@ class Terminal:
                 await self.link.send(bytes([k]))
         self.lines_since_input = 0
         line = decode_input(bytes(buf), self.tty_charset)
-        if line.strip() == f"#HELLO SE30 {PROTOCOL_VERSION}":
+        if line.strip() == "#HELLO SE30 1":
             self.mode = "app"
-            await self.tag("#OK", f"se30bridge {PROTOCOL_VERSION}")
+            await self.tag("#OK", "se30bridge 1")
             return await self.read_line()
+        if line.strip() == "#HELLO SE30 2":
+            self.mode = "app2"
+            # Bytes typed after HELLO were queued as tty keys: make them lines.
+            pending = []
+            while not self.keys.empty():
+                pending.append(self.keys.get_nowait())
+            for k in pending:
+                if k is None:
+                    await self.lines.put(None)
+                else:
+                    await self._route(k)
+            raise EnterV2
         return line
 
     async def read_prompt(self):
@@ -257,17 +327,28 @@ class Terminal:
     async def raw(self, s):
         await self.link.send(transliterate(s, self.charset))
 
+    async def send_line(self, data: bytes, counted=True):
+        """App modes: one whole line, with window-based flow control. Shielded,
+        so a cancelled caller can't leave a W on the wire without its wait."""
+        await asyncio.shield(self._send_line(data, counted))
+
+    async def _send_line(self, data, counted):
+        async with self._wlock:
+            await self.link.send(data + b"\r\n")
+            if not counted:
+                return
+            self.sent_in_window += 1
+            if self.window and self.sent_in_window >= self.window:
+                await self.link.send(b"W\r\n")
+                self.sent_in_window = 0
+                if not self.eof:
+                    await self.acks.acquire()
+
     async def tag(self, t, payload=""):
-        """App mode: one tagged line, with window-based flow control."""
+        """v1 app mode: one tagged line."""
         line = t if not payload else f"{t} {payload}"
-        await self.raw(line + "\r\n")
-        if t in (">", "#OK", "W"):
-            return
-        self.sent_in_window += 1
-        if self.window and self.sent_in_window >= self.window:
-            await self.raw("W\r\n")
-            self.sent_in_window = 0
-            await self.acks.acquire()
+        await self.send_line(transliterate(line, "macroman"),
+                             counted=t not in (">", "#OK", "W"))
 
     async def out_line(self, s=""):
         """tty mode: one physical line, through the pager."""
@@ -295,24 +376,23 @@ class Terminal:
 
     async def text(self, md):
         """Claude's prose (markdown-ish)."""
+        if self.mode == "app":
+            for t, payload in app_text_lines(md, self):
+                await self.tag(t, payload)
+            return
         md = md.replace("**", "").replace("__", "")
         for line in md.split("\n"):
             if line.strip().startswith("```"):
                 self._in_fence = not self._in_fence
-                if self.mode == "app":
-                    await self.tag("C[" if self._in_fence else "C]")
-                else:
-                    await self.out_line("-" * min(40, self.cols - 1))
+                await self.out_line("-" * min(40, self.cols - 1))
                 continue
-            if self.mode == "app":
-                await self._app_text(line)
-            elif self._in_fence:
+            if self._in_fence:
                 w = self.cols - 1
                 for i in range(0, max(len(line), 1), w):
                     await self.out_line(line[i:i + w])
             else:
                 await self._tty_wrap(line)
-        if self.mode == "tty" and not self._in_fence:
+        if not self._in_fence:
             await self.out_line()
 
     async def _tty_wrap(self, line):
@@ -330,20 +410,6 @@ class Terminal:
         for w in textwrap.wrap(line, self.cols - 1, subsequent_indent=hang,
                                break_long_words=True, break_on_hyphens=False) or [""]:
             await self.out_line(w)
-
-    async def _app_text(self, line):
-        tag = "C" if self._in_fence else "T"
-        # Split long paragraphs at spaces; "+" marks a continuation.
-        first = True
-        while True:
-            if len(line) <= 200:
-                await self.tag(tag if first else "+", line)
-                return
-            cut = line.rfind(" ", 0, 200)
-            cut = 200 if cut <= 0 else cut
-            await self.tag(tag if first else "+", line[:cut])
-            line = line[cut:].lstrip() if tag == "T" else line[cut:]
-            first = False
 
     async def tool(self, name, summary):
         if self.mode == "app":
@@ -482,10 +548,20 @@ SYSTEM_APPEND = (
 )
 
 
+class SessionConfig:
+    """What one conversation runs with. Each v2 session has its own, so a
+    /edits in one tab never changes another."""
+
+    def __init__(self, cwd, accept_edits=False, model=None):
+        self.cwd = cwd
+        self.accept_edits = accept_edits
+        self.model = model
+
+
 class ClaudeSession:
-    def __init__(self, term, args):
-        self.term = term
-        self.args = args
+    def __init__(self, term, cfg):
+        self.term = term      # a Terminal (tty, v1) or a Channel (v2)
+        self.cfg = cfg
         self.client = None
         self.always = set()   # "Tool" or "Bash:<exact command>"
         self.next_pid = 1
@@ -498,24 +574,24 @@ class ClaudeSession:
     async def start(self):
         from claude_agent_sdk import ClaudeAgentOptions, ClaudeSDKClient
         opts = ClaudeAgentOptions(
-            cwd=self.args.cwd,
-            permission_mode="acceptEdits" if self.args.accept_edits else "default",
+            cwd=self.cfg.cwd,
+            permission_mode="acceptEdits" if self.cfg.accept_edits else "default",
             allowed_tools=["Read", "Glob", "Grep", "TodoWrite"],
             can_use_tool=self._can_use_tool,
             system_prompt={"type": "preset", "preset": "claude_code",
                            "append": SYSTEM_APPEND.format(cols=self.term.cols)},
             setting_sources=["user", "project", "local"],
         )
-        if self.args.model:
-            opts.model = self.args.model
+        if self.cfg.model:
+            opts.model = self.cfg.model
         self.client = ClaudeSDKClient(options=opts)
         await self.client.connect()
         self.term.on_interrupt = self.interrupt
 
     async def stop(self):
         if self.client:
-            await self.client.disconnect()
-            self.client = None
+            client, self.client = self.client, None
+            await client.disconnect()
 
     async def interrupt(self):
         if self.client:
@@ -529,7 +605,7 @@ class ClaudeSession:
             # of this one may already cover it.
             if key in self.always:
                 return PermissionResultAllow(updated_input=input_data)
-            summary, detail = describe_tool(tool_name, input_data, self.args.cwd)
+            summary, detail = describe_tool(tool_name, input_data, self.cfg.cwd)
             pid = self.next_pid
             self.next_pid += 1
             ans = await self.term.ask_permission(pid, tool_name, summary, detail)
@@ -553,7 +629,7 @@ class ClaudeSession:
                     if isinstance(block, TextBlock) and block.text.strip():
                         await self.term.text(block.text)
                     elif isinstance(block, ToolUseBlock):
-                        s, _ = describe_tool(block.name, block.input or {}, self.args.cwd)
+                        s, _ = describe_tool(block.name, block.input or {}, self.cfg.cwd)
                         await self.term.tool(block.name, s)
             elif isinstance(msg, UserMessage) and ToolResultBlock:
                 content = msg.content if isinstance(msg.content, list) else []
@@ -572,16 +648,25 @@ class ClaudeSession:
 class DemoSession:
     """Fake Claude, for testing the serial link and the client."""
 
-    def __init__(self, term, args):
+    def __init__(self, term, cfg):
         self.term = term
-        self.args = args
+        self.cfg = cfg
         self._stop = False
+        self._child = None
 
     async def start(self):
+        # Test hook: a slow start with a child process, like the real CLI's.
+        delay = float(os.environ.get("SE30_DEMO_START_DELAY", "0") or 0)
+        if delay:
+            self._child = await asyncio.create_subprocess_exec("sleep", str(delay + 30))
+            await asyncio.sleep(delay)
         self.term.on_interrupt = self.interrupt
 
     async def stop(self):
-        pass
+        if self._child and self._child.returncode is None:
+            self._child.kill()
+            await self._child.wait()
+        self._child = None
 
     async def interrupt(self):
         self._stop = True
@@ -589,7 +674,10 @@ class DemoSession:
     async def turn(self, prompt):
         self._stop = False
         t = self.term
-        await t.text(f"You said: “{prompt}” — this is demo mode, no tokens spent.")
+        where = os.path.basename(self.cfg.cwd.rstrip("/")) or self.cfg.cwd
+        edits = "auto" if self.cfg.accept_edits else "ask"
+        await t.text(f"You said: “{prompt}” — demo mode in {where}, edits {edits}, "
+                     "no tokens spent.")
         await t.tool("Read", "src/parser.py")
         await asyncio.sleep(0.5)
         await t.text(
@@ -609,18 +697,18 @@ class DemoSession:
                 return
             await t.text(f"Pager test line {i} of 30.")
         summary, detail = describe_tool("Edit", {
-            "file_path": os.path.join(self.args.cwd, "src/parser.py"),
+            "file_path": os.path.join(self.cfg.cwd, "src/parser.py"),
             "old_string": "def parse(s):\n    return s.split()\n",
             "new_string": "def parse(s):\n    return [t for t in s.split() if t]\n",
-        }, self.args.cwd)
+        }, self.cfg.cwd)
         ans = await t.ask_permission(1, "Edit", summary, detail)
         await t.tool("Edit", summary + (" (allowed)" if ans in "ya" else " (denied)"))
         await t.result("success", 0.0)
 
 
-# --------------------------------------------------------------------------
-# Main loop
-# --------------------------------------------------------------------------
+def make_session(args, out, cfg):
+    return (DemoSession if args.demo else ClaudeSession)(out, cfg)
+
 
 HELP = """Commands:
   /new         start a fresh conversation
@@ -631,30 +719,873 @@ Type a prompt and press return. End a line with \\ to continue it.
 While Claude works: ctrl-C stops it. At --More--: space, return or q."""
 
 
+# --------------------------------------------------------------------------
+# Projects
+# --------------------------------------------------------------------------
+
+def log(msg):
+    print(f"se30bridge: {msg}", file=sys.stderr, flush=True)
+
+
+def project_name_ok(name):
+    if not name or len(name.encode("utf-8")) > 120:
+        return False
+    if any(ord(c) < 32 or ord(c) == 127 for c in name):
+        return False
+    try:
+        name.encode("mac_roman")
+    except UnicodeEncodeError:
+        return False
+    return True
+
+
+def list_projects(args):
+    """[(name, path)] the client may open: the --cwd folder when it was given,
+    then the non-hidden subfolders of each --projects root, or the current
+    folder alone when neither option was given. A name seen before wins."""
+    found = []
+    if args.cwd:
+        found.append(args.cwd)
+    for root in args.projects or []:
+        try:
+            names = sorted(os.listdir(root), key=str.casefold)
+        except OSError as e:
+            log(f"can't list --projects {root}: {e}")
+            continue
+        for name in names:
+            path = os.path.join(root, name)
+            if not name.startswith(".") and os.path.isdir(path):
+                found.append(path)
+    if not args.cwd and not args.projects:
+        found.append(os.getcwd())
+    out, seen = [], set()
+    for path in found:
+        name = os.path.basename(path.rstrip("/")) or path
+        if not project_name_ok(name):
+            log(f"skipping project {path!r}: its name can't be sent in Mac Roman")
+            continue
+        if name in seen:
+            log(f"skipping project {path}: another project is already called {name!r}")
+            continue
+        seen.add(name)
+        out.append((name, path))
+    return sorted(out, key=lambda p: p[0].casefold())
+
+
+# --------------------------------------------------------------------------
+# Files: browse, read and save inside a session's project folder
+# --------------------------------------------------------------------------
+
+HIDE_PATTERNS = (".git", ".ssh", ".env*", "*.pem", "*.key", "id_rsa*", "id_ed25519*")
+EDIT_MAX_BYTES = 28672        # Mac Roman bytes, CR line breaks
+EDIT_MAX_LINES = 2000
+READ_MAX_LINES = 32000
+SAVE_MAX_BYTES = 32000        # the client's TextEdit holds at most this
+PIECE_MAX_LINES = 200
+PIECE_MAX_BYTES = 4096
+LIST_MAX = 500
+RO_LINE_MAX = 2000
+SAVE_IDLE_SECS = 120
+CONFLICT_IDLE_SECS = 3600     # a save waiting on the Replace/Cancel alert
+READ_CAP_BYTES = 8 << 20      # bigger files show only their start, read-only
+_CONTROL = re.compile(r"[\x00-\x08\x0b-\x1f\x7f]")
+_CONTROL_BYTES = re.compile(rb"[\x00-\x08\x0a-\x1f\x7f]")
+
+
+class Refused(Exception):
+    def __init__(self, reason):
+        super().__init__(reason)
+        self.reason = reason
+
+
+def hidden_name(name):
+    # Case-blind: on a macOS host ".ENV" opens the same file as ".env".
+    name = name.casefold()
+    return any(fnmatch.fnmatchcase(name, p) for p in HIDE_PATTERNS)
+
+
+def bad_name(name):
+    return any(ord(c) < 32 or ord(c) == 127 for c in name)
+
+
+def inside(path, root):
+    return path == root or path.startswith(root.rstrip(os.sep) + os.sep)
+
+
+def crc_hex(data):
+    return f"{zlib.crc32(data) & 0xFFFFFFFF:08x}"
+
+
+def file_token(data):
+    return hashlib.sha1(data).hexdigest()[:12]
+
+
+class FileText:
+    """One file as the client sees it: lines, mode, line ending."""
+
+    def __init__(self, data, files_mode, cut=False):
+        """cut: data is only the start of a bigger file."""
+        self.token = file_token(data)
+        if b"\0" in data[:8192]:
+            raise Refused("binary")
+        reason = None
+        try:
+            text = data.decode("utf-8")
+        except UnicodeDecodeError:
+            text = data.decode("latin-1")
+            reason = "encoding"
+        crlf = text.count("\r\n")
+        kinds = [k for k, n in (("\r\n", crlf), ("\n", text.count("\n") - crlf),
+                                ("\r", text.count("\r") - crlf)) if n]
+        self.eol = kinds[0] if len(kinds) == 1 else "\n"
+        if len(kinds) > 1:
+            reason = reason or "endings"
+        self.final = bool(text) and text[-1] in "\r\n"
+        lines = re.split(r"\r\n|\r|\n", text) if text else []
+        if self.final:
+            lines.pop()
+        if cut:
+            if lines:
+                lines.pop()       # the last line may end mid-way
+            reason = reason or "long"
+        if len(lines) > READ_MAX_LINES:
+            lines = lines[:READ_MAX_LINES]
+            reason = "long"
+        exact = None
+        if reason is None:
+            try:
+                exact = [l.encode("mac_roman") for l in lines]
+            except UnicodeEncodeError:
+                reason = "chars"
+        if reason is None and any(_CONTROL.search(l) for l in lines):
+            reason = "control"
+        if reason is None:
+            size = sum(len(b) for b in exact) + max(len(lines) - 1, 0)
+            if size > EDIT_MAX_BYTES or len(lines) > EDIT_MAX_LINES:
+                reason = "big"
+        if reason is None and files_mode != "rw":
+            reason = "ro"
+        self.mode = "e" if reason is None else f"r:{reason}"
+        self._exact = exact if reason in (None, "ro") else None
+        self._text = lines
+        self._shown = {}
+
+    def __len__(self):
+        return len(self._text)
+
+    def line(self, i):
+        """Line i as the Mac Roman bytes the client is sent."""
+        if self._exact is not None:
+            return self._exact[i]
+        b = self._shown.get(i)
+        if b is None:
+            b = _CONTROL_BYTES.sub(b"?", transliterate(self._text[i], "macroman"))
+            if len(b) > RO_LINE_MAX:
+                b = b[:RO_LINE_MAX] + b"\xc9"
+            self._shown[i] = b
+        return b
+
+
+class Save:
+    def __init__(self, rel, token):
+        self.rel = rel
+        self.token = token
+        self.blocks = {}
+        self.touched = time.monotonic()
+        self.conflict = False
+
+
+async def git_ignored(root, paths):
+    """The subset of paths (relative to root, folders ending in /) that git's
+    ignore rules exclude, or None when git could not answer (outside a
+    repository, git missing, or an error)."""
+    if not paths:
+        return set()
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            "git", "check-ignore", "--stdin", "-z", cwd=root,
+            stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.DEVNULL)
+        out, _ = await proc.communicate(
+            b"".join(p.encode("utf-8", "surrogateescape") + b"\0" for p in paths))
+    except OSError:
+        return None
+    if proc.returncode not in (0, 1):
+        return None
+    return {p.decode("utf-8", "surrogateescape") for p in out.split(b"\0") if p}
+
+
+class FileService:
+    """File requests for one v2 session, confined to its project folder.
+    Every path goes through resolve() before anything reads or writes it."""
+
+    def __init__(self, ch, root, mode):
+        self.ch = ch
+        self.root = root
+        self.real_root = os.path.realpath(root)
+        self.mode = mode
+        self.queue = asyncio.Queue()
+        self.task = None
+        self.ignored = {}        # real relative path -> bool, refreshed by listings
+        self.in_repo = None      # is the project inside a git work tree
+        self.cache = {}          # relative path -> ((mtime, size), FileText)
+        self.saves = {}          # transfer number -> Save
+        self.done = {}           # transfer number -> final answer of a commit
+        self.block = None        # [x, seq, lines] being received
+
+    def start(self):
+        self.task = asyncio.ensure_future(self._run())
+
+    async def stop(self):
+        if self.task:
+            self.task.cancel()
+            with contextlib.suppress(asyncio.CancelledError, Exception):
+                await self.task
+            self.task = None
+
+    async def _run(self):
+        while True:
+            tag, payload = await self.queue.get()
+            try:
+                await self.handle(tag, payload)
+            except EOFError:
+                return
+            except Exception as e:  # noqa: BLE001
+                log(f"file request {tag} failed: {e!r}")
+
+    # ---- the guard -------------------------------------------------------
+
+    def real_parts(self, real):
+        """The components of a resolved path below the project folder."""
+        if real == self.real_root:
+            return []
+        return os.path.relpath(real, self.real_root).split(os.sep)
+
+    async def ignored_set(self, paths):
+        """git_ignored for paths relative to the real project folder. When
+        git fails inside a repository, every path counts as ignored (and is
+        not cached): a broken check must not show secrets."""
+        hits = await git_ignored(self.real_root, paths)
+        if hits is not None:
+            return hits, True
+        if self.in_repo is None:
+            try:
+                proc = await asyncio.create_subprocess_exec(
+                    "git", "rev-parse", "--is-inside-work-tree", cwd=self.real_root,
+                    stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL)
+                out, _ = await proc.communicate()
+                self.in_repo = proc.returncode == 0 and out.strip() == b"true"
+            except OSError:
+                self.in_repo = False
+        if self.in_repo:
+            return set(paths), False
+        return set(), True
+
+    async def _is_ignored(self, parts):
+        """parts are the real path's components below the project folder."""
+        prefixes = []
+        for i in range(1, len(parts) + 1):
+            p = "/".join(parts[:i]) + ("/" if i < len(parts) else "")
+            prefixes.append(p)
+        unknown = [p for p in prefixes if p not in self.ignored]
+        if unknown:
+            # The last part may be a folder: ask both ways.
+            asked = unknown + ([unknown[-1] + "/"] if unknown[-1] == prefixes[-1] else [])
+            hits, ok = await self.ignored_set(asked)
+            if not ok:
+                return True
+            for p in unknown:
+                self.ignored[p] = p in hits or (p == prefixes[-1] and p + "/" in hits)
+        return any(self.ignored[p] for p in prefixes)
+
+    async def resolve(self, rel, want):
+        """(real path) of rel inside the project, or raises Refused."""
+        if self.mode == "off":
+            raise Refused("files off")
+        if "\0" in rel or rel.startswith("/"):
+            raise Refused("outside project")
+        parts = rel.split("/") if rel else []
+        if any(p in ("", ".", "..") for p in parts):
+            raise Refused("outside project")
+        if any(bad_name(p) for p in parts):
+            raise Refused("bad name")
+        if any(hidden_name(p) for p in parts):
+            raise Refused("hidden")
+        real = os.path.realpath(os.path.join(self.root, *parts))
+        if not inside(real, self.real_root):
+            raise Refused("outside project")
+        # Judge what the path really names, so a symlink cannot reach a
+        # hidden or ignored file under another name.
+        rparts = self.real_parts(real)
+        if any(hidden_name(p) for p in rparts):
+            raise Refused("hidden")
+        if rparts and await self._is_ignored(rparts):
+            raise Refused("hidden")
+        if want == "dir" and not os.path.isdir(real):
+            raise Refused("not found")
+        if want == "file" and not os.path.isfile(real):
+            raise Refused("not found")
+        return real
+
+    def _load(self, rel, real):
+        st = os.stat(real)
+        key = (st.st_mtime_ns, st.st_size)
+        hit = self.cache.get(rel)
+        if hit and hit[0] == key:
+            return hit[1]
+        with open(real, "rb") as f:
+            data = f.read(READ_CAP_BYTES + 1)
+        cut = len(data) > READ_CAP_BYTES
+        ft = FileText(data[:READ_CAP_BYTES] if cut else data, self.mode, cut)
+        self.cache.pop(rel, None)
+        while len(self.cache) >= 8:
+            self.cache.pop(next(iter(self.cache)))
+        self.cache[rel] = (key, ft)
+        return ft
+
+    # ---- requests ----------------------------------------------------------
+
+    async def handle(self, tag, payload):
+        now = time.monotonic()
+        for x in [x for x, s in self.saves.items()
+                  if now - s.touched > (CONFLICT_IDLE_SECS if s.conflict else SAVE_IDLE_SECS)]:
+            del self.saves[x]
+        if tag == "L":
+            await self._list(payload)
+        elif tag == "G":
+            await self._get(payload)
+        elif tag == "F":
+            await self._save_begin(payload)
+        elif tag == "S[":
+            parts = payload.split()
+            if len(parts) == 2 and parts[0] in self.saves:
+                self.block = [parts[0], parts[1], []]
+        elif tag == "S":
+            if self.block is not None:
+                self.block[2].append(payload)
+        elif tag == "S]":
+            await self._block_end(payload)
+        elif tag == "S.":
+            await self._commit(payload)
+
+    async def _refuse(self, x, reason):
+        await self.ch.tag("N", f"{x} {reason}")
+
+    async def _list(self, rel):
+        try:
+            real = await self.resolve(rel, "dir")
+            names = os.listdir(real)
+        except Refused as r:
+            return await self._refuse("-", r.reason)
+        except OSError as e:
+            return await self._refuse("-", f"failed {e.strerror or e}")
+        found = []
+        for name in names:
+            if bad_name(name) or hidden_name(name):
+                continue
+            try:
+                name.encode("mac_roman")
+            except UnicodeEncodeError:
+                continue
+            target = os.path.realpath(os.path.join(real, name))
+            if not inside(target, self.real_root) or target == self.real_root:
+                continue
+            tparts = self.real_parts(target)
+            if any(hidden_name(p) for p in tparts):
+                continue
+            if os.path.isdir(target):
+                found.append(("d", 0, name, "/".join(tparts)))
+            elif os.path.isfile(target):
+                found.append(("f", os.path.getsize(target), name, "/".join(tparts)))
+        paths = [t + ("/" if k == "d" else "") for k, _, _, t in found]
+        hits, ok = await self.ignored_set(paths)
+        shown = []
+        for (kind, size, name, t), p in zip(found, paths):
+            ign = p in hits
+            if ok and t.count("/") == len(self.real_parts(real)):
+                self.ignored[t] = ign      # a direct child: cache it
+            if not ign:
+                shown.append((kind, size, name))
+        shown.sort(key=lambda e: (e[0] != "d", e[2].casefold()))
+        await self.ch.tag("L[", rel)
+        for kind, size, name in shown[:LIST_MAX]:
+            await self.ch.tag("L", f"{kind} {size} {name}")
+        await self.ch.tag("L]", "cut" if len(shown) > LIST_MAX else "")
+
+    async def _get(self, payload):
+        parts = payload.split(" ", 4)
+        if len(parts) < 5 or not all(p.isdigit() for p in parts[1:4]):
+            return
+        x, first, count, budget, rel = parts[0], int(parts[1]), int(parts[2]), int(parts[3]), parts[4]
+        try:
+            real = await self.resolve(rel, "file")
+            ft = self._load(rel, real)
+        except Refused as r:
+            return await self._refuse(x, r.reason)
+        except OSError as e:
+            return await self._refuse(x, f"failed {e.strerror or e}")
+        count = min(count, PIECE_MAX_LINES)
+        budget = max(1, min(budget, PIECE_MAX_BYTES))
+        out, size, i = [], 0, first
+        while i < len(ft) and len(out) < count:
+            b = ft.line(i)
+            add = len(b) + (1 if out else 0)
+            if out and size + add > budget:
+                break
+            out.append(b)
+            size += add
+            i += 1
+        await self.ch.tag("H", f"{x} {first} {len(out)} {len(ft)} {ft.token} {ft.mode}")
+        for b in out:
+            await self.ch.send_split("B", b)
+        data = b"\r".join(out)
+        await self.ch.tag("Z", f"{x} {len(data)} {crc_hex(data)}")
+
+    async def _save_begin(self, payload):
+        parts = payload.split(" ", 2)
+        if len(parts) < 3:
+            return
+        x, token, rel = parts
+        if self.mode == "off":
+            return await self._refuse(x, "files off")
+        if self.mode != "rw":
+            return await self._refuse(x, "read-only")
+        try:
+            real = await self.resolve(rel, "file")
+            ft = self._load(rel, real)
+        except Refused as r:
+            return await self._refuse(x, r.reason)
+        except OSError as e:
+            return await self._refuse(x, f"failed {e.strerror or e}")
+        if ft.mode != "e":
+            return await self._refuse(x, "read-only")
+        if x not in self.saves and len(self.saves) >= 4:
+            return await self._refuse(x, "busy")
+        self.saves[x] = Save(rel, token)
+        await self.ch.tag("K", f"{x} 0")
+
+    async def _block_end(self, payload):
+        parts = payload.split()
+        blk, self.block = self.block, None
+        if len(parts) != 4:
+            return
+        x, seq, nbytes, crc = parts
+        save = self.saves.get(x)
+        if save is None:
+            return await self._refuse(x, "not found")
+        save.touched = time.monotonic()
+        ok = blk is not None and blk[0] == x and blk[1] == seq and seq.isdigit()
+        if ok:
+            data = b"\r".join(l.encode("mac_roman") for l in blk[2])
+            ok = str(len(data)) == nbytes and crc_hex(data) == crc.lower()
+        if not ok:
+            return await self.ch.tag("N", f"{x} {seq} resend")
+        save.blocks[int(seq)] = blk[2]
+        await self.ch.tag("K", f"{x} {seq}")
+
+    async def _commit(self, payload):
+        parts = payload.split()
+        if len(parts) not in (3, 4):
+            return
+        x, nbytes, crc = parts[:3]
+        force = len(parts) == 4 and parts[3] == "force"
+        if x in self.done:
+            return await self.ch.tag(*self.done[x])
+        save = self.saves.get(x)
+        if save is None:
+            return await self._refuse(x, "not found")
+        save.touched = time.monotonic()
+        seqs = sorted(save.blocks)
+        lines = [l for s in seqs for l in save.blocks[s]]
+        data = b"\r".join(l.encode("mac_roman") for l in lines)
+        if not seqs or seqs != list(range(1, len(seqs) + 1)) \
+                or str(len(data)) != nbytes or crc_hex(data) != crc.lower():
+            del self.saves[x]
+            return await self._refuse(x, "damaged")
+        if any(_CONTROL.search(l) for l in lines):
+            del self.saves[x]
+            return await self._refuse(x, "control")
+        try:
+            real = await self.resolve(save.rel, "file")
+            with open(real, "rb") as f:
+                current = f.read()
+            if file_token(current) != save.token and not force:
+                save.conflict = True    # kept while the person decides
+                return await self._refuse(x, "changed")
+            now = FileText(current, "rw")
+            out = (now.eol.join(lines) + (now.eol if now.final else "")).encode("utf-8")
+            if len(data) > SAVE_MAX_BYTES:
+                raise Refused("too big")
+            write_atomic(real, out)
+        except Refused as r:
+            del self.saves[x]
+            return await self._refuse(x, r.reason)
+        except OSError as e:
+            del self.saves[x]
+            return await self._refuse(x, f"failed {e.strerror or e}")
+        del self.saves[x]
+        self.cache.pop(save.rel, None)
+        self.done[x] = ("K", f"{x} saved {file_token(out)}")
+        while len(self.done) > 16:
+            self.done.pop(next(iter(self.done)))
+        self.ch.note_edit(save.rel)
+        await self.ch.tag(*self.done[x])
+
+
+def write_atomic(real, data):
+    """Replaces real with data: a temporary file beside it, the same
+    permissions, flushed to disk, then renamed over it."""
+    folder, base = os.path.split(real)
+    stale = f".{base}.se30-"
+    for name in os.listdir(folder):
+        if name.startswith(stale) and name.endswith(".tmp"):
+            with contextlib.suppress(OSError):
+                os.unlink(os.path.join(folder, name))
+    mode = stat.S_IMODE(os.stat(real).st_mode)
+    fd, tmp = tempfile.mkstemp(prefix=stale, suffix=".tmp", dir=folder)
+    try:
+        with os.fdopen(fd, "wb") as f:
+            f.write(data)
+            f.flush()
+            os.fchmod(f.fileno(), mode)
+            os.fsync(f.fileno())
+        os.replace(tmp, real)
+    except BaseException:
+        with contextlib.suppress(OSError):
+            os.unlink(tmp)
+        raise
+
+
+# --------------------------------------------------------------------------
+# Protocol version 2: several sessions over one call
+# --------------------------------------------------------------------------
+
+V2_FILE_TAGS = ("L", "G", "F", "S[", "S", "S]", "S.")
+
+
+class Channel:
+    """One v2 session: a conversation in one project. It has the same output
+    methods as Terminal, with every line prefixed by the session digit."""
+
+    def __init__(self, v2, sid, name, path):
+        args = v2.args
+        self.v2 = v2
+        self.term = v2.term
+        self.sid = sid
+        self.name = name
+        self.cols = self.term.cols
+        self.cfg = SessionConfig(path, args.accept_edits, args.model)
+        self.prompts = asyncio.Queue()
+        self.answers = asyncio.Queue()
+        self.on_interrupt = None
+        self.busy = False
+        self.closing = False
+        self.idle = asyncio.Event()
+        self.idle.set()
+        self.session = None
+        self.task = None
+        self.edited = []
+        self._in_fence = False
+        self.files = FileService(self, path, args.files)
+        # A line and its "+" continuations go out together: the client
+        # routes "+" by the session's last line, and prose and file pieces
+        # come from different tasks.
+        self.group = asyncio.Lock()
+
+    # ---- output ------------------------------------------------------------
+
+    async def tag(self, t, payload=""):
+        line = f"{self.sid}{t}" + (f" {payload}" if payload else "")
+        await self.term.send_line(transliterate(line, "macroman"), counted=t != ">")
+
+    async def send_split(self, t, data: bytes):
+        """Raw Mac Roman bytes as one line plus "+" continuations of 200 bytes."""
+        async with self.group:
+            for i in range(0, max(len(data), 1), 200):
+                chunk = data[i:i + 200]
+                head = f"{self.sid}{t if i == 0 else '+'}".encode()
+                await self.term.send_line(head + (b" " + chunk if chunk else b""))
+
+    async def text(self, md):
+        async with self.group:
+            for t, payload in app_text_lines(md, self):
+                await self.tag(t, payload)
+
+    async def tool(self, name, summary):
+        await self.tag("U", f"{name} {summary}")
+
+    async def tool_error(self, msg):
+        await self.tag("E", clip(msg, 200))
+
+    async def notice(self, msg):
+        await self.tag("I", msg)
+
+    async def result(self, status, cost):
+        await self.tag("R", f"{status} {f'${cost:.4f}' if cost is not None else '-'}")
+
+    async def ask_permission(self, pid, name, summary, detail_lines):
+        await self.tag("Q", f"{pid} {name} {summary}")
+        if detail_lines:
+            await self.tag("D[")
+            for d in detail_lines:
+                await self.tag("D", d)
+            await self.tag("D]")
+        await self.tag("?", str(pid))
+        while True:
+            if self.closing:
+                return "n"
+            ans = await self.answers.get()
+            if ans is None:
+                raise EOFError
+            parts = ans.split()
+            if len(parts) == 2 and parts[0] == str(pid) and parts[1] in ("y", "n", "a"):
+                return parts[1]
+
+    # ---- the conversation --------------------------------------------------
+
+    def note_edit(self, rel):
+        if rel not in self.edited:
+            self.edited.append(rel)
+
+    async def _restart(self):
+        """A fresh conversation. Returns False (and says why) when it could
+        not start; the session is then closed, which frees its slot."""
+        await self.session.stop()
+        self.session = make_session(self.v2.args, self, self.cfg)
+        try:
+            await self.session.start()
+        except Exception as e:  # noqa: BLE001
+            first = (str(e).strip().splitlines() or ["error"])[0]
+            await self.tool_error(f"Could not start a new conversation: {first}")
+            asyncio.ensure_future(self.v2.close(self.sid))
+            return False
+        return True
+
+    async def _read_prompt(self):
+        await self.tag(">")
+        parts = []
+        while True:
+            line = await self.prompts.get()
+            if line is None:
+                raise EOFError
+            if line.endswith("\\"):
+                parts.append(line[:-1])
+                continue
+            parts.append(line)
+            return "\n".join(parts).strip()
+
+    async def run(self):
+        self.session = make_session(self.v2.args, self, self.cfg)
+        try:
+            await self.session.start()
+        except Exception as e:  # noqa: BLE001
+            first = (str(e).strip().splitlines() or ["error"])[0]
+            await self.files.stop()
+            self.v2.forget(self)
+            await self.tag("X", clip(f"could not start: {first}", 200))
+            return
+        await self.tag("O", self.name)
+        try:
+            while True:
+                prompt = await self._read_prompt()
+                if not prompt:
+                    continue
+                cmd = prompt.lower().split()
+                if cmd[0] == "/quit":
+                    asyncio.ensure_future(self.v2.close(self.sid))
+                    return
+                if cmd[0] == "/help":
+                    for line in HELP.split("\n"):
+                        await self.notice(line)
+                    continue
+                if cmd[0] == "/new":
+                    if not await self._restart():
+                        return
+                    await self.notice("New conversation.")
+                    continue
+                if cmd[0] == "/edits" and len(cmd) == 2:
+                    self.cfg.accept_edits = cmd[1] == "on"
+                    if not await self._restart():
+                        return
+                    await self.notice(f"Auto-accept edits {'on' if self.cfg.accept_edits else 'off'}"
+                                      " (new conversation).")
+                    continue
+                if self.edited:
+                    prompt = ("[The person edited these files from the SE/30 since your "
+                              f"last turn: {', '.join(self.edited)}. Re-read them before "
+                              "you edit them.]\n" + prompt)
+                    self.edited = []
+                self.busy = True
+                self.idle.clear()
+                self._in_fence = False
+                try:
+                    await self.session.turn(prompt)
+                except EOFError:
+                    raise
+                except Exception as e:  # noqa: BLE001
+                    await self.notice(f"Error: {e}")
+                finally:
+                    self.busy = False
+                    self.idle.set()
+        except EOFError:
+            pass
+
+    async def shutdown(self):
+        """Deny any open request, stop a running turn, stop the session."""
+        self.closing = True
+        self.answers.put_nowait("")
+        if self.busy and self.on_interrupt:
+            with contextlib.suppress(Exception):
+                await self.on_interrupt()
+        if self.task and not self.task.done():
+            with contextlib.suppress(asyncio.TimeoutError):
+                await asyncio.wait_for(self.idle.wait(), 5)
+            self.task.cancel()
+            with contextlib.suppress(asyncio.CancelledError, Exception):
+                await self.task
+        await self.files.stop()
+        if self.session:
+            with contextlib.suppress(Exception):
+                await self.session.stop()
+
+
+class V2:
+    """Routes a v2 call's lines to its sessions."""
+
+    def __init__(self, term, args):
+        self.term = term
+        self.args = args
+        self.channels = {}
+
+    def forget(self, ch):
+        if self.channels.get(ch.sid) is ch:
+            del self.channels[ch.sid]
+
+    async def send_list(self):
+        await self.term.send_line(b"P[")
+        for name, _ in list_projects(self.args):
+            await self.term.send_line(transliterate(f"P {name}", "macroman"))
+        await self.term.send_line(b"P]")
+
+    async def close(self, sid):
+        ch = self.channels.get(sid)
+        if ch is None or ch.closing:
+            return
+        await ch.shutdown()
+        self.forget(ch)
+        await ch.tag("X", "closed")
+
+    async def open(self, sid, name):
+        if sid in self.channels:
+            return await self.term.send_line(f"{sid}X already open".encode())
+        if len(self.channels) >= self.args.max_sessions:
+            return await self.term.send_line(f"{sid}X too many tabs".encode())
+        path = dict(list_projects(self.args)).get(name)
+        if path is None:
+            return await self.term.send_line(f"{sid}X not available".encode())
+        ch = Channel(self, sid, name, path)
+        self.channels[sid] = ch
+        ch.files.start()
+        ch.task = asyncio.ensure_future(ch.run())
+
+    async def session_line(self, sid, rest):
+        sp = rest.find(" ")
+        tag, payload = (rest, "") if sp < 0 else (rest[:sp], rest[sp + 1:])
+        if tag == "O":
+            return await self.open(sid, payload)
+        if tag == "X":
+            if sid in self.channels:
+                asyncio.ensure_future(self.close(sid))
+            else:
+                await self.term.send_line(f"{sid}X closed".encode())
+            return
+        ch = self.channels.get(sid)
+        if ch is None or ch.closing:
+            return
+        if tag == "P":
+            ch.prompts.put_nowait(payload)
+        elif tag == "A":
+            ch.answers.put_nowait(payload)
+        elif tag == "!STOP":
+            if ch.busy and ch.on_interrupt:
+                asyncio.ensure_future(ch.on_interrupt())
+        elif tag in V2_FILE_TAGS:
+            ch.files.queue.put_nowait((tag, payload))
+
+    async def run(self):
+        try:
+            await self.term.send_line(f"#OK se30bridge 2 files={self.args.files}".encode(),
+                                      counted=False)
+            await self.send_list()
+            while True:
+                line = await self.term.lines.get()
+                if line is None or line == "!QUIT":
+                    break
+                if line == "!LIST":
+                    await self.send_list()
+                elif line[:1] in ("1", "2", "3", "4", "5", "6") and line:
+                    await self.session_line(int(line[0]), line[1:])
+        except EOFError:
+            pass
+        finally:
+            chans = list(self.channels.values())
+            self.channels.clear()
+            await asyncio.gather(*(c.shutdown() for c in chans), return_exceptions=True)
+
+
+# --------------------------------------------------------------------------
+# Main loop
+# --------------------------------------------------------------------------
+
+async def start_default(term, session):
+    """Starts the tty/v1 session in the background; True if it started."""
+    try:
+        await session.start()
+    except Exception as e:  # noqa: BLE001
+        with contextlib.suppress(EOFError):
+            await term.notice(f"Could not start Claude: {e}")
+        return False
+    with contextlib.suppress(EOFError):
+        await term.notice("Type /help for commands.")
+    return True
+
+
 async def main_async(args):
     link = Link(args.baud)
     await link.open()
     term = Terminal(link, args)
     asyncio.ensure_future(term.dispatch())
 
-    def make_session():
-        return (DemoSession if args.demo else ClaudeSession)(term, args)
-
-    session = make_session()
-    await term.notice(f"se30bridge {'(demo) ' if args.demo else ''}- {args.cwd}")
-    await term.notice("Starting Claude..." if not args.demo else "Ready.")
+    cfg = SessionConfig(args.cwd or os.getcwd(), args.accept_edits, args.model)
+    session = make_session(args, term, cfg)
+    starting = None
     try:
-        await session.start()
-    except Exception as e:  # noqa: BLE001
-        await term.notice(f"Could not start Claude: {e}")
-        return
-    await term.notice("Type /help for commands.")
-
-    try:
+        await term.notice(f"se30bridge {'(demo) ' if args.demo else ''}- {cfg.cwd}")
+        await term.notice("Starting Claude..." if not args.demo else "Ready.")
+        # tty and v1 start their session while the first line is typed; a v2
+        # HELLO stops it, so v2 never waits for (or keeps) a CLI it won't use.
+        starting = asyncio.ensure_future(start_default(term, session))
+        # Show the first prompt after the start notice, as before, unless the
+        # client is already typing (an app-mode HELLO).
+        typed = asyncio.ensure_future(term.typed.wait())
+        await asyncio.wait({starting, typed}, return_when=asyncio.FIRST_COMPLETED)
+        typed.cancel()
         while True:
-            prompt = await term.read_prompt()
+            try:
+                prompt = await term.read_prompt()
+            except EnterV2:
+                starting.cancel()
+                with contextlib.suppress(asyncio.CancelledError, Exception):
+                    await starting
+                await session.stop()
+                session = None
+                await V2(term, args).run()
+                return
             if not prompt:
                 continue
+            if not await starting:
+                await term.notice("Bye.")
+                return
             cmd = prompt.lower().split()
             if cmd[0] == "/quit":
                 await term.notice("Bye.")
@@ -665,16 +1596,16 @@ async def main_async(args):
                 continue
             if cmd[0] == "/new":
                 await session.stop()
-                session = make_session()
+                session = make_session(args, term, cfg)
                 await session.start()
                 await term.notice("New conversation.")
                 continue
             if cmd[0] == "/edits" and len(cmd) == 2:
-                args.accept_edits = cmd[1] == "on"
+                cfg.accept_edits = cmd[1] == "on"
                 await session.stop()
-                session = make_session()
+                session = make_session(args, term, cfg)
                 await session.start()
-                await term.notice(f"Auto-accept edits {'on' if args.accept_edits else 'off'}"
+                await term.notice(f"Auto-accept edits {'on' if cfg.accept_edits else 'off'}"
                                   " (new conversation).")
                 continue
             term.busy = True
@@ -693,12 +1624,25 @@ async def main_async(args):
     except EOFError:
         pass
     finally:
-        await session.stop()
+        if starting and not starting.done():
+            starting.cancel()
+            with contextlib.suppress(asyncio.CancelledError, Exception):
+                await starting
+        if session:
+            with contextlib.suppress(Exception):
+                await session.stop()
 
 
 def main():
     p = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
-    p.add_argument("--cwd", default=os.getcwd(), help="project directory for Claude")
+    p.add_argument("--cwd", default=None,
+                   help="project for tty and v1 mode, and one more project for tabs "
+                        "(default: the current folder)")
+    p.add_argument("--projects", action="append", metavar="DIR",
+                   help="offer every subfolder of DIR as a project for tabs (repeatable)")
+    p.add_argument("--max-sessions", type=int, default=6, help="tabs open at once")
+    p.add_argument("--files", choices=["rw", "ro", "off"], default="rw",
+                   help="what the SE/30 may do with project files (tabs only)")
     p.add_argument("--demo", action="store_true", help="fake Claude, to test the link")
     p.add_argument("--baud", type=int, default=57600,
                    help="pace output to this serial speed (0 = no pacing)")
@@ -712,7 +1656,9 @@ def main():
                    help="auto-approve file edits")
     p.add_argument("--model", default=None)
     args = p.parse_args()
-    args.cwd = os.path.abspath(os.path.expanduser(args.cwd))
+    if args.cwd:
+        args.cwd = os.path.abspath(os.path.expanduser(args.cwd))
+    args.projects = [os.path.abspath(os.path.expanduser(d)) for d in args.projects or []]
     try:
         asyncio.run(main_async(args))
     except (KeyboardInterrupt, SystemExit):

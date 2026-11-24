@@ -5,9 +5,6 @@
 #include <Processes.h>
 #include <string.h>
 
-static short gLogRef = 0;
-static Str63 gLogName;
-static Boolean gHaveName = false;
 
 static void append_num(unsigned char *s, short v, short digits)
 {
@@ -28,28 +25,35 @@ static void append_str(unsigned char *s, const char *t)
     s[0] += n;
 }
 
-void log_new_session(void)
+void log_new_session(LogFile *lf, const char *project, short digit)
 {
     unsigned long secs;
     DateTimeRec dt;
-    log_close();
+    short i, n = (short)strlen(project);
+    log_close(lf);
     GetDateTime(&secs);
     SecondsToDate(secs, &dt);
-    /* HFS names cannot contain colons: "Session 2026-11-24 10.31.05". */
-    gLogName[0] = 0;
-    append_str(gLogName, "Session ");
-    append_num(gLogName, dt.year, 4);
-    append_str(gLogName, "-");
-    append_num(gLogName, dt.month, 2);
-    append_str(gLogName, "-");
-    append_num(gLogName, dt.day, 2);
-    append_str(gLogName, " ");
-    append_num(gLogName, dt.hour, 2);
-    append_str(gLogName, ".");
-    append_num(gLogName, dt.minute, 2);
-    append_str(gLogName, ".");
-    append_num(gLogName, dt.second, 2);
-    gHaveName = true;
+    /* HFS names cannot contain colons: "project12345 11-24 10.31.05 #2". */
+    if (n > 12)
+        n = 12;
+    memcpy(lf->name + 1, project, n);
+    for (i = 1; i <= n; i++)
+        if (lf->name[i] == ':')
+            lf->name[i] = '-';
+    lf->name[0] = (unsigned char)n;
+    append_str(lf->name, " ");
+    append_num(lf->name, dt.month, 2);
+    append_str(lf->name, "-");
+    append_num(lf->name, dt.day, 2);
+    append_str(lf->name, " ");
+    append_num(lf->name, dt.hour, 2);
+    append_str(lf->name, ".");
+    append_num(lf->name, dt.minute, 2);
+    append_str(lf->name, ".");
+    append_num(lf->name, dt.second, 2);
+    append_str(lf->name, " #");
+    append_num(lf->name, digit, 1);
+    lf->have_name = true;
 }
 
 /* The folder that holds the application. */
@@ -73,7 +77,7 @@ static OSErr app_folder(short *vRef, long *dirID)
     return noErr;
 }
 
-static OSErr open_log(void)
+static OSErr open_log(LogFile *lf)
 {
     short vRef;
     long dirID, logDir;
@@ -82,8 +86,8 @@ static OSErr open_log(void)
     OSErr err;
     Str63 folder;
 
-    if (!gHaveName)
-        log_new_session();
+    if (!lf->have_name)
+        return fnfErr;
     err = app_folder(&vRef, &dirID);
     if (err)
         return err;
@@ -105,41 +109,40 @@ static OSErr open_log(void)
     if (err)
         return err;
 
-    err = FSMakeFSSpec(vRef, logDir, gLogName, &spec);
+    err = FSMakeFSSpec(vRef, logDir, lf->name, &spec);
     if (err == fnfErr)
         err = FSpCreate(&spec, 'ttxt', 'TEXT', smSystemScript);
     if (err)
         return err;
-    err = FSpOpenDF(&spec, fsRdWrPerm, &gLogRef);
+    err = FSpOpenDF(&spec, fsRdWrPerm, &lf->ref);
     if (err) {
-        gLogRef = 0;
+        lf->ref = 0;
         return err;
     }
-    return SetFPos(gLogRef, fsFromLEOF, 0);
+    return SetFPos(lf->ref, fsFromLEOF, 0);
 }
 
-OSErr log_append(const char *text, long len)
+OSErr log_append(LogFile *lf, const char *text, long len)
 {
     OSErr err;
     long n = len;
     if (len <= 0)
         return noErr;
-    if (!gLogRef) {
-        err = open_log();
+    if (!lf->ref) {
+        err = open_log(lf);
         if (err)
             return err;
     }
-    err = FSWrite(gLogRef, &n, text);
+    err = FSWrite(lf->ref, &n, text);
     if (err == noErr && n != len)
         err = ioErr;
     return err;
 }
 
-void log_close(void)
+void log_close(LogFile *lf)
 {
-    if (gLogRef) {
-        FSClose(gLogRef);
-        gLogRef = 0;
+    if (lf->ref) {
+        FSClose(lf->ref);
+        lf->ref = 0;
     }
-    gHaveName = false;
 }

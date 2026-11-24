@@ -28,7 +28,7 @@ Steps:
 
 ## The stress bridge
 
-`stress_bridge.py` speaks app mode like `bridge.py`, but runs a scripted case chosen by the prompt you send. Send `help` for the list:
+`stress_bridge.py` is `bridge.py` itself (protocol version 2, sessions, project list and file service) with Claude replaced by scripted cases. It offers two projects, `stress` and `other`, temporary folders with sample files: `big.txt` (40,000 lines), `README.md`, `run.sh` with CRLF endings, a Latin-1 file, a file with an emoji, a PNG, a `.env` that must stay hidden and a subfolder. Each prompt runs a case in the tab that sent it. Send `help` for the list:
 
 | Prompt | What it sends |
 |---|---|
@@ -39,8 +39,11 @@ Steps:
 | `burst` | 600 short lines, windows back to back |
 | `silent` | A tool line, 3 minutes of silence, then the answer |
 | `stream` | 400 lines with short pauses, for trying Stop and Disconnect mid-turn |
+| `files-bigread` | Points at `big.txt`, to open read-only and scroll |
+| `files-noise` | From now on this tab's file transfers are damaged: one byte in every third read piece, and the second block of the next save (once) |
+| `files-conflict` | The next save in this tab finds the file changed on the host |
 
-`bridge.py` is not changed or needed for these. The host test `client/tests/test_bridge_session.c` runs the protocol core against both bridges over pipes.
+`--files ro` and `--files off` start it with less file access. The host test `client/tests/test_bridge_session.c` runs the protocol core against both bridges over pipes, including two sessions at once and a list, read and save with damaged transfers.
 
 ## Snow, for timing
 
@@ -82,6 +85,44 @@ Run these in the emulator, and the hardware rows on the SE/30. Tick each one.
 | ☐ | Connect while another program holds the modem port shows an alert naming the port, and the app keeps running | Emulator |
 | ☐ | The link test runs for 5 minutes against `run.sh --demo` and closes; Link Test can run again without relaunching | Emulator |
 
+**Tabs and the project picker**
+
+| | Check | Where | How |
+|---|---|---|---|
+| ☐ | A background tab's permission request marks its label and names it in the status line; no dialog opens until you click that tab, and then it shows the full request | Emulator | Stress bridge: `perm` in tab 2, then click tab 1 before it arrives |
+| ☐ | A background tab running `burst` trims to its own log while hidden; switching to it shows the tail and the log holds the rest | Emulator | Stress bridge, `burst` twice in a background tab |
+| ☐ | Switching tabs mid-turn keeps each tab's input text and scroll position | Emulator | Two tabs, `stream` in one |
+| ☐ | Cmd-period with a background tab busy and the front tab idle does nothing | Emulator | `stream` in tab 2, Cmd-period in tab 1 |
+| ☐ | With the front tab's dialog open, a background `perm` arrives: the open dialog's text does not change, and the background tab later shows its own request | Emulator | Two tabs, `perm` in both |
+| ☐ | Two tabs reopened in the same second write two separate log files | Emulator | Three tabs, drop the link, Redial |
+| ☐ | Three tabs, drop the link (stop tcpser), Redial: all three reopen with "New conversation" | Emulator | `run.sh --demo --projects ...` |
+| ☐ | Remove a remembered project folder on the host and connect: that tab says it is not available with Send dimmed; the others open | Emulator | `run.sh --demo --projects ...` |
+| ☐ | First launch with version 1 prefs connects and shows the picker; Cancel leaves "No project open. Press Cmd-T." and Cmd-T opens the picker again | Emulator | Old `Claude30 Prefs` |
+| ☐ | New Tab is dimmed with six tabs open; projects already open show "(open)" and cannot be opened twice | Emulator | Six folders under `--projects` |
+| ☐ | An empty `--projects` folder shows "No projects available…" with Open dimmed | Emulator | `run.sh --demo --projects /empty` |
+| ☐ | `/quit` in a tab closes that tab only; quitting with tabs open and relaunching restores the same tab order | Emulator | Any bridge |
+| ☐ | Close Tab on a busy tab asks first, and Cancel keeps it running | Emulator | `stream` |
+
+**Project files**
+
+| | Check | Where | How |
+|---|---|---|---|
+| ☐ | The Open dialog lists folders first, then files with sizes; `.env`, `.git` and ignored files are absent | Emulator | Demo bridge on a copy of this repo |
+| ☐ | Opening a folder and pressing Up returns to the root listing; an empty folder says "Empty folder" | Emulator | Same |
+| ☐ | Output from a background tab keeps arriving while the Open dialog is up, and a front-tab permission request shows "Claude is waiting for permission in…" in the dialog, then opens right after Cancel | Emulator | Stress bridge, `stream` and `perm` |
+| ☐ | With `--files off` the Open command is absent; with `--files ro` files open read-only and Save is dimmed | Emulator | Stress bridge with each option |
+| ☐ | `big.txt` opens read-only; dragging the scroll bar to the middle shows that region within a few seconds, and scrolling back up refetches the start | Emulator | Stress bridge, `files-bigread` |
+| ☐ | Edit `README.md` and press Cmd-S: the host file has the change with LF endings intact, the title's bullet clears, and Claude's next turn mentions the edit | Emulator | Real bridge, or the stress bridge for the save alone |
+| ☐ | After `files-conflict`, Save shows the alert; Cancel keeps the edits, and Replace saves | Emulator | Stress bridge |
+| ☐ | After `files-noise`, a read of `big.txt` and a save of `README.md` both complete, and the host file matches the window byte for byte | Emulator | Stress bridge |
+| ☐ | Typing past 31,000 bytes in a file window beeps and inserts nothing | Emulator | Any editable file near 28 KB |
+| ☐ | Closing a tab with a dirty file window asks Save, Don't Save or Cancel, and Cancel keeps both the tab and the window | Emulator | Any bridge |
+| ☐ | Dropping the link keeps the window and its edits; after Redial, Save succeeds; quitting while offline offers only Don't Save and Cancel | Emulator | Stop tcpser |
+| ☐ | A clean window of a file Claude edits in the same tab reloads when the turn ends and shows "Changed on the host" | Emulator | Real bridge |
+| ☐ | With tab 2's file window in front, Cmd-period stops tab 1's turn, Paste goes into the file window, and Cmd-O browses tab 2's project | Emulator | Two tabs |
+| ☐ | Switching to tab 1 hides tab 2's file windows; switching back shows them | Emulator | Two tabs |
+| ☐ | A file containing tabs displays usably in Monaco 9 (TextEdit's tab drawing on the real ROM) | Emulator and SE/30 | Any file with tabs |
+
 **Window, settings and dialog**
 
 | | Check | Where |
@@ -101,3 +142,5 @@ Run these in the emulator, and the hardware rows on the SE/30. Tick each one.
 | ☐ | A one-hour session with at least one diff of several hundred lines completes with no "Line noise" marker |
 | ☐ | Menus and window dragging stay responsive while Claude streams a long answer |
 | ☐ | Curly quotes and dashes from Claude display correctly |
+| ☐ | A one-hour session with three tabs shows no misrouted output: every line lands in the tab whose project produced it |
+| ☐ | An hour of saves at 57,600 never leaves a host file different from what the window showed |

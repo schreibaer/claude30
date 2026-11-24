@@ -18,19 +18,14 @@
 #define ARM_TICKS    45          /* clicks on the buttons are ignored for 0.75 s */
 
 typedef struct {
-    long off;                    /* offset into gBody */
+    long off;                    /* offset into the request body */
     short len;
     Boolean cont;                /* continuation of the line above */
 } Row;
 
-static Handle gBody;             /* all body lines, back to back */
-static Handle gLineEnds;         /* long offsets: end of each body line */
-static long gBodyLen, gNLines;
+static PermReq *gReq;            /* the request the open dialog shows */
 static Handle gRows;
 static long gNRows;
-static Str255 gTitle;
-static Boolean gCloseRequested;
-static Boolean gIncomplete;      /* some of the request could not be kept */
 static unsigned long gArmedAt;   /* buttons take clicks from this tick on */
 
 static DialogPtr gDlg;
@@ -52,39 +47,48 @@ static Boolean grow(Handle *h, long size)
     return MemError() == noErr;
 }
 
-void permdlg_begin(const char *title, long len)
+void permdlg_begin(PermReq *q, const char *title, long len)
 {
-    gBodyLen = 0;
-    gNLines = 0;
-    gNRows = 0;
-    gCloseRequested = false;
-    gIncomplete = false;
+    q->body_len = 0;
+    q->nlines = 0;
+    q->close_requested = false;
+    q->incomplete = false;
     if (len > 255)
         len = 255;
-    gTitle[0] = (unsigned char)len;
-    memcpy(gTitle + 1, title, len);
+    q->title[0] = (unsigned char)len;
+    memcpy(q->title + 1, title, len);
 }
 
-void permdlg_line(const char *text, long len)
+void permdlg_line(PermReq *q, const char *text, long len)
 {
-    if (!grow(&gBody, gBodyLen + len) || !grow(&gLineEnds, (gNLines + 1) * sizeof(long)))
-    {
-        gIncomplete = true;   /* out of memory: the line is dropped */
+    if (!grow(&q->body, q->body_len + len)
+            || !grow(&q->line_ends, (q->nlines + 1) * sizeof(long))) {
+        q->incomplete = true;    /* out of memory: the line is dropped */
         return;
     }
-    memcpy(*gBody + gBodyLen, text, len);
-    gBodyLen += len;
-    ((long *)*gLineEnds)[gNLines++] = gBodyLen;
+    memcpy(*q->body + q->body_len, text, len);
+    q->body_len += len;
+    ((long *)*q->line_ends)[q->nlines++] = q->body_len;
 }
 
-void permdlg_mark_incomplete(void)
+void permdlg_mark_incomplete(PermReq *q)
 {
-    gIncomplete = true;
+    q->incomplete = true;
 }
 
-void permdlg_request_close(void)
+void permdlg_request_close(PermReq *q)
 {
-    gCloseRequested = true;
+    q->close_requested = true;
+}
+
+void permdlg_free(PermReq *q)
+{
+    if (q->body)
+        DisposeHandle(q->body);
+    if (q->line_ends)
+        DisposeHandle(q->line_ends);
+    q->body = q->line_ends = NULL;
+    q->body_len = q->nlines = 0;
 }
 
 /* Splits body lines into rows that fit the list width. */
@@ -95,15 +99,15 @@ static void build_rows(short cols)
     gNRows = 0;
     if (cols < 8)
         cols = 8;
-    for (i = 0; i < gNLines; i++) {
-        end = ((long *)*gLineEnds)[i];
+    for (i = 0; i < gReq->nlines; i++) {
+        end = ((long *)*gReq->line_ends)[i];
         pos = start;
         do {
             long n = end - pos;
             if (n > cols)
                 n = cols;
             if (!grow(&gRows, (gNRows + 1) * sizeof(Row))) {
-                gIncomplete = true;
+                gReq->incomplete = true;
                 return;
             }
             r = &((Row *)*gRows)[gNRows++];
@@ -139,17 +143,17 @@ static pascal void draw_list(DialogPtr d, short item)
         MoveTo(inner.left + 4, y);
         DrawString("\p(no details)");
     }
-    if (gBody) {
-        saveState = HGetState(gBody);
-        HLock(gBody);
+    if (gReq->body && gNRows > 0) {
+        saveState = HGetState(gReq->body);
+        HLock(gReq->body);
         for (i = first; i < gNRows && i < first + gVisible; i++) {
             Row *r = &((Row *)*gRows)[i];
             MoveTo(inner.left + 3, y);
             DrawText(r->cont ? "\xC2 " : "  ", 0, MARK_WIDTH);
-            DrawText(*gBody + r->off, 0, r->len);
+            DrawText(*gReq->body + r->off, 0, r->len);
             y += gRowH;
         }
-        HSetState(gBody, saveState);
+        HSetState(gReq->body, saveState);
     }
     TextFont(0);
     TextSize(0);
@@ -199,9 +203,9 @@ static void show_incomplete(void)
     Handle h;
     Rect r;
     Str255 t;
-    short room = 255 - gTitle[0];
+    short room = 255 - gReq->title[0];
     short n = note[0] < room ? note[0] : room;
-    memcpy(t, gTitle, gTitle[0] + 1);
+    memcpy(t, gReq->title, gReq->title[0] + 1);
     memcpy(t + 1 + t[0], note + 1, n);
     t[0] = (unsigned char)(t[0] + n);
     GetDialogItem(gDlg, kPermSummary, &type, &h, &r);
@@ -220,7 +224,7 @@ static pascal Boolean filter(DialogPtr d, EventRecord *ev, short *item)
     short part;
 
     session_pump();
-    if (gCloseRequested) {
+    if (gReq->close_requested) {
         *item = -1;
         return true;
     }
@@ -228,9 +232,9 @@ static pascal Boolean filter(DialogPtr d, EventRecord *ev, short *item)
     case keyDown:
         ch = (char)(ev->message & charCodeMask);
         if (ev->modifiers & cmdKey) {
-            if ((ch == 'y' || ch == 'Y') && !gIncomplete) { *item = kPermAllow; flash(kPermAllow); return true; }
+            if ((ch == 'y' || ch == 'Y') && !gReq->incomplete) { *item = kPermAllow; flash(kPermAllow); return true; }
             if (ch == 'n' || ch == 'N') { *item = kPermDeny; flash(kPermDeny); return true; }
-            if ((ch == 'a' || ch == 'A') && !gIncomplete) { *item = kPermAlways; flash(kPermAlways); return true; }
+            if ((ch == 'a' || ch == 'A') && !gReq->incomplete) { *item = kPermAlways; flash(kPermAlways); return true; }
             if (ch == '.') { *item = -2; return true; }
         }
         ev->what = nullEvent;     /* Return, Enter and plain keys do nothing */
@@ -256,8 +260,7 @@ static pascal Boolean filter(DialogPtr d, EventRecord *ev, short *item)
         }
         return false;
     case updateEvt:
-        if ((WindowPtr)ev->message == window_ptr()) {
-            window_update();
+        if ((DialogPtr)ev->message != d && app_update((WindowPtr)ev->message)) {
             SetPort(d);
             ev->what = nullEvent;
         }
@@ -266,7 +269,7 @@ static pascal Boolean filter(DialogPtr d, EventRecord *ev, short *item)
     return false;
 }
 
-short permdlg_run(void)
+short permdlg_run(PermReq *q)
 {
     short hit = 0, type, cols, result;
     Handle h;
@@ -276,8 +279,9 @@ short permdlg_run(void)
     UserItemUPP drawUPP;
     GrafPtr save;
 
-    if (gCloseRequested)
+    if (q->close_requested)
         return kPermResultClosed;
+    gReq = q;
     GetPort(&save);
     FlushEvents(keyDownMask | autoKeyMask | mDownMask | mUpMask, 0);
     gDlg = GetNewDialog(kPermDialog, NULL, (WindowPtr)-1);
@@ -292,7 +296,7 @@ short permdlg_run(void)
     gRowAscent = fi.ascent;
 
     GetDialogItem(gDlg, kPermSummary, &type, &h, &r);
-    SetDialogItemText(h, gTitle);
+    SetDialogItemText(h, q->title);
 
     GetDialogItem(gDlg, kPermList, &type, &h, &gList);
     drawUPP = NewUserItemUPP(draw_list);
@@ -311,7 +315,7 @@ short permdlg_run(void)
                       gNRows > gVisible ? (short)(gNRows - gVisible) : 0,
                       scrollBarProc, 0);
 
-    if (gIncomplete)
+    if (q->incomplete)
         show_incomplete();
     ShowWindow(gDlg);
     gArmedAt = TickCount();
@@ -333,6 +337,7 @@ short permdlg_run(void)
     DisposeUserItemUPP(drawUPP);
     DisposeControlActionUPP(gBarUPP);
     gDlg = NULL;
+    gReq = NULL;
     SetPort(save);
     return result;
 }

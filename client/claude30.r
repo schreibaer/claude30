@@ -8,7 +8,7 @@
 #include "Icons.r"
 #include "src/mac/resources.h"
 
-/* ---- memory: 2 MB preferred, 1 MB minimum ----------------------------- */
+/* ---- memory: 3.5 MB preferred, 2 MB minimum (six tabs, six file windows) */
 
 resource 'SIZE' (-1) {
 	reserved,
@@ -27,14 +27,14 @@ resource 'SIZE' (-1) {
 	reserved,
 	reserved,
 	reserved,
-	2048 * 1024,
-	1024 * 1024
+	3584 * 1024,
+	2048 * 1024
 };
 
 /* ---- menus ------------------------------------------------------------- */
 
 resource 'MBAR' (kMenuBar) {
-	{ kAppleMenu, kFileMenu, kEditMenu, kSessionMenu }
+	{ kAppleMenu, kFileMenu, kEditMenu, kSessionMenu, kWindowMenu }
 };
 
 resource 'MENU' (kAppleMenu) {
@@ -46,8 +46,13 @@ resource 'MENU' (kAppleMenu) {
 };
 
 resource 'MENU' (kFileMenu) {
-	kFileMenu, textMenuProc, 0x7FFFFFFD, enabled, "File",
+	kFileMenu, textMenuProc, 0x7FFFFF5F, enabled, "File",
 	{
+		"Open Project File\0xC9", noIcon, "O", noMark, plain;
+		"Close", noIcon, "W", noMark, plain;
+		"Save", noIcon, "S", noMark, plain;
+		"Revert to Saved", noIcon, noKey, noMark, plain;
+		"-", noIcon, noKey, noMark, plain;
 		"Full Screen", noIcon, "F", noMark, plain;
 		"-", noIcon, noKey, noMark, plain;
 		"Quit", noIcon, "Q", noMark, plain
@@ -70,13 +75,23 @@ resource 'MENU' (kEditMenu) {
 };
 
 resource 'MENU' (kSessionMenu) {
-	kSessionMenu, textMenuProc, 0x7FFFFFF7, enabled, "Session",
+	kSessionMenu, textMenuProc, 0x7FFFFF6F, enabled, "Session",
 	{
 		"Connect", noIcon, "K", noMark, plain;
 		"Disconnect", noIcon, noKey, noMark, plain;
 		"Stop", noIcon, ".", noMark, plain;
 		"-", noIcon, noKey, noMark, plain;
+		"New Tab\0xC9", noIcon, "T", noMark, plain;
+		"Close Tab", noIcon, noKey, noMark, plain;
+		"-", noIcon, noKey, noMark, plain;
 		"Link Test\0xC9", noIcon, noKey, noMark, plain
+	}
+};
+
+/* Filled at run time: the tabs (Cmd-1 to Cmd-6), then the file windows. */
+resource 'MENU' (kWindowMenu) {
+	kWindowMenu, textMenuProc, allEnabled, enabled, "Window",
+	{
 	}
 };
 
@@ -105,9 +120,10 @@ resource 'DITL' (kAboutAlert) {
 	{
 		{ 88, 290, 108, 370 }, Button { enabled, "OK" };
 		{ 10, 10, 80, 370 }, StaticText { disabled,
-			"Claude30 1.0\r"
-			"Use Claude Code from this Mac through se30bridge and a WiFi232 modem.\r"
-			"Speaks app mode of protocol version 1." };
+			"Claude30 2.0\r"
+			"Use Claude Code from this Mac through se30bridge and a WiFi232 modem: "
+			"up to six projects in tabs, and their files.\r"
+			"Speaks protocol version 2." };
 	}
 };
 
@@ -172,6 +188,146 @@ resource 'DITL' (kPermDialog) {
 	}
 };
 
+/* ---- alerts for tabs and files ------------------------------------------ */
+
+resource 'ALRT' (kNoteAlert) {
+	{ 80, 76, 196, 436 },
+	kNoteAlert,
+	{ OK, visible, silent; OK, visible, silent; OK, visible, silent; OK, visible, silent },
+	alertPositionMainScreen
+};
+
+resource 'DITL' (kNoteAlert) {
+	{
+		{ 84, 270, 104, 350 }, Button { enabled, "OK" };
+		{ 10, 60, 74, 350 }, StaticText { disabled, "^0" };
+		{ 10, 14, 42, 46 }, Icon { disabled, 1 };
+	}
+};
+
+resource 'ALRT' (kCloseBusyAlert) {
+	{ 80, 76, 186, 436 },
+	kCloseBusyAlert,
+	{ Cancel, visible, silent; Cancel, visible, silent; Cancel, visible, silent; Cancel, visible, silent },
+	alertPositionMainScreen
+};
+
+resource 'DITL' (kCloseBusyAlert) {
+	{
+		{ 74, 270, 94, 350 }, Button { enabled, "Close" };
+		{ 74, 180, 94, 260 }, Button { enabled, "Cancel" };
+		{ 10, 60, 64, 350 }, StaticText { disabled,
+			"Claude is still working in \"^0\". Close the tab and stop its turn?" };
+		{ 10, 14, 42, 46 }, Icon { disabled, 2 };
+	}
+};
+
+resource 'ALRT' (kSaveChangesAlert) {
+	{ 80, 66, 186, 446 },
+	kSaveChangesAlert,
+	{ OK, visible, silent; OK, visible, silent; OK, visible, silent; OK, visible, silent },
+	alertPositionMainScreen
+};
+
+resource 'DITL' (kSaveChangesAlert) {
+	{
+		{ 74, 290, 94, 370 }, Button { enabled, "Save" };
+		{ 74, 200, 94, 280 }, Button { enabled, "Cancel" };
+		{ 74, 60, 94, 150 }, Button { enabled, "Don\0xD5t Save" };
+		{ 10, 60, 64, 370 }, StaticText { disabled,
+			"Save changes to \"^0\" on the host?" };
+		{ 10, 14, 42, 46 }, Icon { disabled, 2 };
+	}
+};
+
+resource 'ALRT' (kCantSaveAlert) {
+	{ 80, 66, 186, 446 },
+	kCantSaveAlert,
+	{ Cancel, visible, silent; Cancel, visible, silent; Cancel, visible, silent; Cancel, visible, silent },
+	alertPositionMainScreen
+};
+
+resource 'DITL' (kCantSaveAlert) {
+	{
+		{ 74, 290, 94, 370 }, Button { enabled, "Don\0xD5t Save" };
+		{ 74, 200, 94, 280 }, Button { enabled, "Cancel" };
+		{ 10, 60, 64, 370 }, StaticText { disabled,
+			"Can\0xD5t save \"^0\": not connected. Don\0xD5t Save throws away your changes." };
+		{ 10, 14, 42, 46 }, Icon { disabled, 2 };
+	}
+};
+
+resource 'ALRT' (kConflictAlert) {
+	{ 80, 66, 186, 446 },
+	kConflictAlert,
+	{ OK, visible, silent; OK, visible, silent; OK, visible, silent; OK, visible, silent },
+	alertPositionMainScreen
+};
+
+resource 'DITL' (kConflictAlert) {
+	{
+		{ 74, 290, 94, 370 }, Button { enabled, "Cancel" };
+		{ 74, 200, 94, 280 }, Button { enabled, "Replace" };
+		{ 10, 60, 64, 370 }, StaticText { disabled,
+			"\"^0\" changed on the host since you opened it. Replace it with your version?" };
+		{ 10, 14, 42, 46 }, Icon { disabled, 2 };
+	}
+};
+
+resource 'ALRT' (kRevertAlert) {
+	{ 80, 66, 186, 446 },
+	kRevertAlert,
+	{ Cancel, visible, silent; Cancel, visible, silent; Cancel, visible, silent; Cancel, visible, silent },
+	alertPositionMainScreen
+};
+
+resource 'DITL' (kRevertAlert) {
+	{
+		{ 74, 290, 94, 370 }, Button { enabled, "Revert" };
+		{ 74, 200, 94, 280 }, Button { enabled, "Cancel" };
+		{ 10, 60, 64, 370 }, StaticText { disabled,
+			"Throw away your changes to \"^0\" and load it again from the host?" };
+		{ 10, 14, 42, 46 }, Icon { disabled, 2 };
+	}
+};
+
+/* ---- project picker -------------------------------------------------------- */
+
+resource 'DLOG' (kPickerDialog) {
+	{ 50, 106, 290, 406 },
+	dBoxProc, invisible, noGoAway, 0,
+	kPickerDialog, "", alertPositionMainScreen
+};
+
+resource 'DITL' (kPickerDialog) {
+	{
+		{ 208, 210, 228, 290 }, Button { enabled, "Open" };
+		{ 208, 120, 228, 200 }, Button { enabled, "Cancel" };
+		{ 46, 12, 198, 288 }, UserItem { disabled };
+		{ 8, 12, 40, 288 }, StaticText { disabled, "Open a project in a new tab:" };
+	}
+};
+
+/* ---- Open Project File ------------------------------------------------------ */
+
+resource 'DLOG' (kOpenDialog) {
+	{ 40, 66, 300, 446 },
+	dBoxProc, invisible, noGoAway, 0,
+	kOpenDialog, "", alertPositionMainScreen
+};
+
+resource 'DITL' (kOpenDialog) {
+	{
+		{ 228, 290, 248, 370 }, Button { enabled, "Open" };
+		{ 228, 200, 248, 280 }, Button { enabled, "Cancel" };
+		{ 34, 12, 188, 370 }, UserItem { disabled };
+		{ 10, 12, 26, 300 }, StaticText { disabled, "" };
+		{ 8, 310, 26, 370 }, Button { enabled, "Up" };
+		{ 192, 12, 208, 370 }, StaticText { disabled, "" };
+		{ 210, 12, 226, 370 }, StaticText { disabled, "" };
+	}
+};
+
 /* ---- link test ----------------------------------------------------------- */
 
 resource 'DLOG' (kLinkMinutesDialog) {
@@ -219,7 +375,7 @@ resource 'FREF' (128) {
 
 type kCreator as 'STR ';
 resource kCreator (0, "Owner resource") {
-	"Claude30 1.0"
+	"Claude30 2.0"
 };
 
 resource 'ICN#' (128) {

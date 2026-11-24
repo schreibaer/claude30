@@ -92,5 +92,31 @@ class ConcurrentPermissionTest(unittest.TestCase):
         asyncio.run(run())
 
 
+class ChannelPermissionTest(unittest.TestCase):
+    """The same one-at-a-time rule for a protocol version 2 session."""
+
+    def test_second_request_waits_in_a_channel(self):
+        async def run():
+            _stub_sdk()
+            args = types.SimpleNamespace(cols=80, rows=24, charset="macroman", window=0,
+                                         accept_edits=False, model=None, files="off")
+            link = FakeLink()
+            term = bridge.Terminal(link, args)
+            term.mode = "app2"
+            ch = bridge.Channel(bridge.V2(term, args), 3, "project", "/tmp/project")
+            sess = bridge.ClaudeSession(ch, ch.cfg)
+            a = asyncio.ensure_future(sess._can_use_tool("Bash", {"command": "git status"}, None))
+            b = asyncio.ensure_future(sess._can_use_tool("Bash", {"command": "git diff"}, None))
+            await asyncio.sleep(0.05)
+            self.assertEqual(link.lines(), ["3Q 1 Bash git status", "3? 1"])
+            await ch.answers.put("1 y")
+            await asyncio.sleep(0.05)
+            self.assertTrue(a.done())
+            self.assertEqual(link.lines()[2:], ["3Q 2 Bash git diff", "3? 2"])
+            await ch.answers.put("2 n")
+            await asyncio.wait_for(b, 1)
+        asyncio.run(run())
+
+
 if __name__ == "__main__":
     unittest.main()

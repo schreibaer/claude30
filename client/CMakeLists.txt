@@ -14,6 +14,8 @@ add_application(Claude30
     src/core/prompt.c
     src/core/protocol.c
     src/core/batch.c
+    src/core/files.c
+    src/core/crc32.c
     src/mac/main.c
     src/mac/serial.c
     src/mac/modem.c
@@ -22,6 +24,10 @@ add_application(Claude30
     src/mac/prefs.c
     src/mac/log.c
     src/mac/linktest.c
+    src/mac/tabs.c
+    src/mac/picker.c
+    src/mac/opendlg.c
+    src/mac/filewin.c
     claude30.r
     CREATOR "Cl30"
     TYPE "APPL")

@@ -47,32 +47,33 @@ static void test_linebuf(void)
 
 static void encode(const char *text, const char *expect, int expect_lines)
 {
-    char out[256];
+    char out[512];
     int n = 0;
-    long len = prompt_encode(text, (long)strlen(text), out, sizeof(out), &n);
+    long len = prompt_encode(text, (long)strlen(text), "3P ", out, sizeof(out), &n);
     CHECK_MEM(out, len, expect);
     CHECK_EQ_LONG(n, expect_lines);
 }
 
 static void test_prompt(void)
 {
-    char small[4];
+    char small[8];
     int n;
-    encode("fix the parser", "fix the parser\r", 1);
-    encode("line one\rline two\rthree", "line one\\\rline two\\\rthree\r", 3);
-    encode("crlf\r\nnext", "crlf\\\rnext\r", 2);
-    encode("lf\nnext", "lf\\\rnext\r", 2);
+    encode("fix the parser", "3P fix the parser\r", 1);
+    encode("line one\rline two\rthree", "3P line one\\\r3P line two\\\r3P three\r", 3);
+    encode("crlf\r\nnext", "3P crlf\\\r3P next\r", 2);
+    encode("lf\nnext", "3P lf\\\r3P next\r", 2);
     /* A last line ending in a backslash gets a space, or the bridge waits. */
-    encode("see C:\\", "see C:\\ \r", 1);
+    encode("see C:\\", "3P see C:\\ \r", 1);
     /* A middle line ending in a backslash keeps it; the bridge strips one. */
-    encode("a\\\rb", "a\\\\\rb\r", 2);
-    /* A prompt that is exactly a flow-control command is not swallowed. */
-    encode("!ACK", "!ACK \r", 1);
-    encode("!STOP", "!STOP \r", 1);
-    encode("/new", "/new\r", 1);
+    encode("a\\\rb", "3P a\\\\\r3P b\r", 2);
+    /* Prefixed, a flow-control word is an ordinary prompt line. */
+    encode("!ACK", "3P !ACK\r", 1);
+    encode("/new", "3P /new\r", 1);
+    /* An empty middle line still gets its prefix. */
+    encode("a\r\rb", "3P a\\\r3P \\\r3P b\r", 3);
     /* Mac Roman bytes pass through unchanged. */
-    encode("caf\x8E", "caf\x8E\r", 1);
-    CHECK_EQ_LONG(prompt_encode("abc", 3, small, sizeof(small), &n), -1);
+    encode("caf\x8E", "3P caf\x8E\r", 1);
+    CHECK_EQ_LONG(prompt_encode("abc", 3, "3P ", small, sizeof(small), &n), -1);
 }
 
 int main(void)

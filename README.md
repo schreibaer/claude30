@@ -23,9 +23,34 @@ The bridge uses the same login as your `claude` command. Run `claude` once in a 
 ```sh
 ./run.sh --demo                       # fake Claude: test the link, spends nothing
 ./run.sh --cwd ~/code/myproject       # the real thing
+./run.sh --projects ~/code            # Claude30 tabs: any folder in ~/code is a project
 ```
 
-`run.sh` listens on port 2324 and only accepts connections from the WiFi232 (192.168.0.9). Every call starts a fresh bridge with a fresh conversation. Log messages appear in the Terminal window where you started it.
+`run.sh` listens on port 2324 and only accepts connections from the WiFi232 (192.168.0.9). Every call starts a fresh bridge with fresh conversations. Log messages appear in the Terminal window where you started it.
+
+### Projects for Claude30's tabs
+
+The Claude30 app can keep up to six conversations open at once, one per tab, each in its own project. It asks the bridge for a list of projects and can open only those. You choose what is on the list:
+
+- `--projects DIR` offers every folder inside `DIR` (hidden folders excepted). Repeat it for more than one root.
+- `--cwd DIR` adds `DIR` itself to the list.
+- With neither option, the list is the folder you started `run.sh` in.
+
+The SE/30 never sends a path, only a name from the list, so it can't reach anything else on your Mac. Anyone on your LAN who can dial the WiFi232 gets the same list, so offer only folders you are happy to share that way.
+
+Tabs need the Claude30 app from the same version of this repository. **Update `bridge.py` and the app together**: a new app can't talk to an old bridge (it reports that the bridge did not answer), while an older app and ZTerm keep working with the new bridge.
+
+### Project files on the SE/30
+
+From a tab, Claude30 can browse the tab's project, read any text file in it and save small edits. `--files` controls this:
+
+- `rw` (the default): browse, read and save.
+- `ro`: browse and read only.
+- `off`: no file access from the SE/30 at all.
+
+The SE/30 can only see files inside a project folder. It never sees `.git`, `.ssh`, `.env*`, `*.pem`, `*.key`, `id_rsa*` or `id_ed25519*`, or anything your git ignore rules exclude. It can't create, rename or delete files. A save replaces the file in one step and is refused if the file changed since the SE/30 opened it, unless the person on the SE/30 chooses Replace. Claude is told which files the person saved at the start of its next turn.
+
+The link is unencrypted, and `--files` applies to anyone who can dial in. Use `ro` or `off` if that matters on your network.
 
 ## On the SE/30 (ZTerm, 57600 8N1)
 
@@ -42,7 +67,10 @@ Press ctrl-C to stop Claude, use `/help` for commands, and type `+++`, wait a se
 
 | Flag | Default | |
 |---|---|---|
-| `--cwd DIR` | current dir | project Claude works in |
+| `--cwd DIR` | current dir | project for ZTerm and older apps; also offered to tabs |
+| `--projects DIR` | none | offer every folder in `DIR` to Claude30's tabs (repeatable) |
+| `--max-sessions N` | 6 | tabs open at once |
+| `--files rw\|ro\|off` | rw | what Claude30 may do with project files |
 | `--demo` | off | no Claude, canned output |
 | `--baud N` | 57600 | pace output to the serial speed (0 = off) |
 | `--cols / --rows` | 80 / 24 | wrap width and pager height |
