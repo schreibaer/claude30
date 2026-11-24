@@ -118,6 +118,8 @@ static void list_folder(void)
     gFailed = false;
     LSetDrawingMode(false, gList);
     LDelRow(0, 0, gList);
+    if ((*gList)->visible.top != 0)
+        LScroll(0, (short)-(*gList)->visible.top, gList);   /* new folder starts at the top */
     LSetDrawingMode(true, gList);
     InvalRect(&gListRect);
     if (proto_list(session_proto(), gTab->sid, gPath)) {
@@ -214,6 +216,10 @@ static pascal void draw_list(DialogPtr d, short item)
     (void)item;
     InsetRect(&r, -1, -1);
     FrameRect(&r);
+    /* LUpdate draws only rows that exist and InvalRect erases nothing, so
+       rows from a longer earlier listing would stay on screen. */
+    r = (*gList)->rView;
+    EraseRect(&r);
     LUpdate(d->visRgn, gList);
 }
 

@@ -12,6 +12,7 @@
 #include "batch.h"
 #include "log.h"
 #include "permdlg.h"
+#include "promptmarks.h"
 
 #define MAX_TABS 6
 #define TAB_NAME_MAX 63
@@ -37,6 +38,7 @@ typedef struct Tab {
     OSErr log_err;               /* last log error, until reported */
     long lost_bytes;             /* trimmed without reaching the log */
     char last_tool[64];
+    PromptMarks marks;           /* where its prompts start in the transcript */
 } Tab;
 
 /* Adds a tab for project with the given session id, after the front tab

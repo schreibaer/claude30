@@ -1,6 +1,8 @@
 #include "window.h"
 #include "filewin.h"
 #include "log.h"
+#include "mascot.h"
+#include "modem.h"
 #include "resources.h"
 #include "toolbox.h"
 #include <Fonts.h>
@@ -29,9 +31,13 @@ static TEHandle gInput;       /* the front tab's input area, or NULL */
 static TEHandle gFocus;       /* the one that has the selection for Copy */
 static ControlHandle gScroll, gSend;
 static Rect gTabsRect, gTransView, gInputView, gStatusRect;
+static Rect gSpotRect;         /* the mascot's place beside Send while text is typed */
 static char gStatus[128];
 static short gLineH, gAscent;  /* one line height for every style */
 static Boolean gActive;
+
+static void mascot_erase(void);
+static void mascot_invalidate(void);
 
 /* ---- styles ------------------------------------------------------------- */
 
@@ -85,6 +91,11 @@ static void layout(void)
             inputTop - MARGIN);
     SetRect(&gInputView, r.left + MARGIN, inputTop + MARGIN, r.right - 70, statusTop - MARGIN);
     SetRect(&gStatusRect, r.left + MARGIN, statusTop + 2, r.right - MARGIN, r.bottom - 1);
+    {
+        short cx = (short)((gInputView.right + r.right) / 2);
+        SetRect(&gSpotRect, cx - MASCOT_W / 2, gInputView.top + 36, cx + MASCOT_W / 2,
+                gInputView.top + 36 + MASCOT_H);
+    }
 }
 
 /* ---- drawing suppression for background records ---------------------------- */
@@ -503,6 +514,7 @@ void window_update(void)
     if (gTrans) {
         TEUpdate(&gTransView, gTrans);
         TEUpdate(&gInputView, gInput);
+        mascot_invalidate();       /* erased above; the next idle draws it */
     } else {
         draw_empty();
     }
@@ -567,6 +579,7 @@ void window_show_tab(Tab *t)
     }
     sync_scrollbar();
     HiliteControl(gScroll, gActive && gTrans ? 0 : 255);
+    mascot_invalidate();
     InvalRect(&gWin->portRect);
 }
 
@@ -636,6 +649,7 @@ static void trim(Tab *t, long cut, long incoming)
     scrolled = scrolled_px(te);
     TESetSelect(0, cut, te);
     TEDelete(te);
+    pm_cut(&t->marks, cut);
     if (hCut > scrolled)
         hCut = scrolled;
     OffsetRect(&(*te)->destRect, 0, (short)hCut);
@@ -670,6 +684,14 @@ void window_append(Tab *t)
     quiet_begin(te);
     for (i = 0; i < b->nruns; i++) {
         trim_for(t, b->runs[i].len);
+        if (b->runs[i].style == RS_PROMPT) {
+            /* The run may open with the line break that starts its block. */
+            const char *p = b->text + b->runs[i].start;
+            long k = 0;
+            while (k < b->runs[i].len && p[k] == '\r')
+                k++;
+            pm_add(&t->marks, (*te)->teLength + k);
+        }
         insert_run(te, b->text + b->runs[i].start, b->runs[i].len, b->runs[i].style);
     }
     trim_for(t, 0);
@@ -778,14 +800,235 @@ short window_key(EventRecord *ev)
     set_focus(gInput);
     if (ch != '\b' && (*gInput)->teLength >= INPUT_MAX)
         return kKeyHandled;
+    mascot_erase();               /* it may stand where the text goes */
     TEKey(ch, gInput);
     return kKeyHandled;
+}
+
+/* ---- the mascot ----------------------------------------------------------- */
+
+/* While the front tab's turn runs, the Claude mascot walks in the empty
+   input box beside a word, or steps in place beside Send once text is typed.
+   Paced by TickCount from window_idle, so it never holds up the serial pump,
+   and it pauses while a modal dialog runs its own loop. */
+static unsigned short gMRows[MF_COUNT][MASCOT_H];
+static Boolean gMReady;
+static Boolean gMDrawn;          /* something of it is on screen */
+static MascotView gMView;
+static Rect gMRect, gWRect;      /* the sprite and the word as drawn */
+
+static void mascot_erase(void)
+{
+    if (!gMDrawn)
+        return;
+    SetPort(gWin);
+    EraseRect(&gMRect);
+    if (!EmptyRect(&gWRect))
+        EraseRect(&gWRect);
+    gMDrawn = false;
+}
+
+static void mascot_invalidate(void)
+{
+    gMDrawn = false;
+    gMView.place = MP_HIDDEN;
+}
+
+static void mascot_sprite(MascotFrame f, const Rect *dst)
+{
+    BitMap bm;
+    short r;
+    if (!gMReady) {
+        short k;
+        for (k = 0; k < MF_COUNT; k++)
+            for (r = 0; r < MASCOT_H; r++)
+                gMRows[k][r] = mascot_row((MascotFrame)k, r);
+        gMReady = true;
+    }
+    bm.baseAddr = (Ptr)gMRows[f];
+    bm.rowBytes = 2;
+    SetRect(&bm.bounds, 0, 0, MASCOT_W, MASCOT_H);
+    CopyBits(&bm, &gWin->portBits, &bm.bounds, dst, srcCopy, NULL);
+}
+
+static void mascot_tick(void)
+{
+    MascotView v;
+    unsigned long now = TickCount();
+    Boolean busy = false, waiting = false;
+    const char *tool = NULL;
+    Rect m, w;
+    short wordW = 0, left, track, mid;
+    GrafPtr save;
+
+    if (gTab && gInput) {
+        busy = gTab->running;
+        waiting = session_tab_waiting(gTab);
+        tool = gTab->last_tool;
+    }
+    mascot_view(now, busy, waiting, gInput && (*gInput)->teLength > 0, tool, &v);
+
+    GetPort(&save);
+    SetPort(gWin);
+    SetRect(&w, 0, 0, 0, 0);
+    if (v.place == MP_SPOT) {
+        m = gSpotRect;
+    } else if (v.place == MP_BOX) {
+        /* The word stays put at the left; the mascot walks to its right. */
+        TextFont(3);
+        TextSize(FONT_SIZE);
+        TextFace(italic);
+        wordW = TextWidth(v.word, 0, (short)strlen(v.word));
+        mid = (short)((gInputView.top + gInputView.bottom) / 2);
+        left = (short)(gInputView.left + 8);
+        SetRect(&w, left, (short)(mid - gLineH / 2), (short)(left + wordW + 1),
+                (short)(mid - gLineH / 2 + gLineH));
+        left = (short)(w.right + 8);
+        track = (short)(gInputView.right - 4 - MASCOT_W - left);
+        if (!waiting)
+            left = (short)(left + mascot_walk_x(now, track));
+        SetRect(&m, left, (short)(mid - MASCOT_H / 2), (short)(left + MASCOT_W),
+                (short)(mid - MASCOT_H / 2 + MASCOT_H));
+    } else {
+        SetRect(&m, 0, 0, 0, 0);
+    }
+
+    if (gMDrawn && v.place == gMView.place && EqualRect(&m, &gMRect)
+            && EqualRect(&w, &gWRect) && strcmp(v.word, gMView.word) == 0) {
+        if (v.frame != gMView.frame) {
+            mascot_sprite(v.frame, &m);   /* same place: the new frame covers the old */
+            gMView.frame = v.frame;
+        }
+        TextFace(0);
+        SetPort(save);
+        return;
+    }
+    if (gMDrawn || v.place != MP_HIDDEN) {
+        Boolean wordSame = gMDrawn && EqualRect(&w, &gWRect) && strcmp(v.word, gMView.word) == 0;
+        if (gMDrawn) {
+            EraseRect(&gMRect);
+            if (!wordSame && !EmptyRect(&gWRect))
+                EraseRect(&gWRect);
+        }
+        if (v.place != MP_HIDDEN) {
+            mascot_sprite(v.frame, &m);
+            if (!wordSame && v.word[0]) {
+                MoveTo(w.left, (short)(w.top + gAscent));
+                DrawText(v.word, 0, (short)strlen(v.word));
+            }
+        }
+    }
+    TextFace(0);
+    gMDrawn = v.place != MP_HIDDEN;
+    gMView = v;
+    gMRect = m;
+    gWRect = w;
+    SetPort(save);
 }
 
 void window_idle(void)
 {
     if (gActive && gFocus)
         TEIdle(gFocus);
+    if (gWin)
+        mascot_tick();
+}
+
+/* ---- keyboard scrolling ------------------------------------------------- */
+
+/* Every transcript line has the same height (gLineH), so lines and pixels
+   convert by multiplication. */
+static short line_of(TEHandle te, long off)
+{
+    short lo = 0, hi = (short)((*te)->nLines - 1), m;
+    if (hi < 0)
+        return 0;
+    while (lo < hi) {
+        m = (short)((lo + hi + 1) / 2);
+        if ((*te)->lineStarts[m] <= off)
+            lo = m;
+        else
+            hi = (short)(m - 1);
+    }
+    return lo;
+}
+
+void window_jump_prompt(short dir)
+{
+    long px, pos, off, target;
+    short top;
+    if (!gTrans || !gTab) {
+        SysBeep(1);
+        return;
+    }
+    SetPort(gWin);
+    px = scrolled_px(gTrans);
+    top = (short)(px / gLineH);
+    if (top >= (*gTrans)->nLines)
+        top = (short)((*gTrans)->nLines - 1);
+    pos = top >= 0 ? (*gTrans)->lineStarts[top] : 0;
+    off = dir < 0 ? pm_prev(&gTab->marks, pos) : pm_next(&gTab->marks, pos);
+    while (off >= 0) {
+        target = (long)line_of(gTrans, off) * gLineH;
+        if (target > max_scroll_px(gTrans))
+            target = max_scroll_px(gTrans);
+        if (target != px) {
+            scroll_to_px(gTrans, target);
+            return;
+        }
+        /* Near the end a prompt cannot reach the top: try the next one. */
+        off = dir < 0 ? pm_prev(&gTab->marks, off) : pm_next(&gTab->marks, off);
+    }
+    if (dir > 0 && px < max_scroll_px(gTrans))
+        scroll_to_px(gTrans, max_scroll_px(gTrans));
+    else
+        SysBeep(1);
+}
+
+/* Virtual key codes of the extended keyboard's navigation keys. */
+#define kHomeKey     0x73
+#define kPageUpKey   0x74
+#define kEndKey      0x77
+#define kPageDownKey 0x79
+
+Boolean window_scroll_key(EventRecord *ev)
+{
+    char ch = (char)(ev->message & charCodeMask);
+    short code = (short)((ev->message & keyCodeMask) >> 8);
+    short mods = ev->modifiers;
+    Boolean arrow = ch == 0x1E || ch == 0x1F;
+    short dir = ch == 0x1E ? -1 : 1;
+    long page, px;
+
+    if (code == kPageUpKey || code == kPageDownKey || code == kHomeKey || code == kEndKey) {
+        arrow = false;
+    } else if (!arrow || !(mods & (cmdKey | optionKey | controlKey))) {
+        return false;
+    }
+    if (!gTrans) {
+        SysBeep(1);
+        return true;
+    }
+    SetPort(gWin);
+    page = (gTransView.bottom - gTransView.top) - gLineH;
+    px = scrolled_px(gTrans);
+    if (code == kPageUpKey)
+        scroll_to_px(gTrans, px - page);
+    else if (code == kPageDownKey)
+        scroll_to_px(gTrans, px + page);
+    else if (code == kHomeKey)
+        scroll_to_px(gTrans, 0);
+    else if (code == kEndKey)
+        scroll_to_px(gTrans, max_scroll_px(gTrans));
+    else if ((mods & cmdKey) && (mods & optionKey))
+        scroll_to_px(gTrans, dir < 0 ? 0 : max_scroll_px(gTrans));
+    else if (mods & cmdKey)
+        window_jump_prompt(dir);
+    else if (mods & optionKey)
+        scroll_to_px(gTrans, px + dir * page);
+    else
+        scroll_to_px(gTrans, px + dir * 3L * gLineH);
+    return true;
 }
 
 /* ---- Edit menu ---------------------------------------------------------- */
@@ -825,6 +1068,7 @@ void window_edit(short item)
     if (!gFocus)
         return;
     SetPort(gWin);
+    mascot_erase();
     switch (item) {
     case kCopyItem:
         copy_selection(gFocus);

@@ -37,9 +37,11 @@
 #define kConnectItem    1
 #define kDisconnectItem 2
 #define kStopItem       3
-#define kNewTabItem     5
-#define kCloseTabItem   6
-#define kLinkTestItem   8
+#define kPrevPromptItem 5
+#define kNextPromptItem 6
+#define kNewTabItem     8
+#define kCloseTabItem   9
+#define kLinkTestItem   11
 
 /* Window */
 #define kMainWindow     128

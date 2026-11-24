@@ -37,6 +37,8 @@ Boolean session_online(void);    /* a call is up or being set up */
 Boolean session_tab_ready(const Tab *t);
 /* Its turn is running or waiting for permission. */
 Boolean session_tab_busy(const Tab *t);
+/* The tab waits for a permission answer. */
+Boolean session_tab_waiting(const Tab *t);
 
 /* Sends the front tab's input as a prompt. Returns true if it was sent. */
 Boolean session_send_input(void);

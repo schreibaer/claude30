@@ -55,7 +55,7 @@ Going back to an earlier prompt means dragging the scroll bar thumb or holding a
 **Claude is working**
 
 - R3. While the front tab's turn runs, the input area shows a Claude animation. It stops as soon as the turn ends or is stopped.
-- R4. The animation is a 1-bit pixel version of the Claude mascot with a few frames of movement, beside a short word that changes every few seconds. While a tool runs, the word names the tool (for example "Running Bash"). While the tab waits for a permission answer, the mascot stands still with a "?" and the word reads "Waiting for you".
+- R4. The animation is a 1-bit pixel version of the Claude mascot with a few frames of movement, beside a short word that changes every few seconds. While a tool runs, the word names the tool (for example "Running Bash"). While the tab waits for a permission answer, the mascot stands still with its arms up and the word reads "Waiting for you".
 - R5. When the input box is empty, the mascot and word sit inside the input box. When the person has typed text, the animation moves to a small spot beside the Send button and never draws over the text.
 - R6. The animation belongs to the front tab. Switching to an idle tab hides it; switching to a busy tab shows it.
 - R7. The animation never delays receiving serial data. It pauses while a modal dialog is open.
@@ -133,7 +133,7 @@ frame A (stand)      frame B (step)       wait (?)
 ................     ..#.#....#.#....     ..#.#..#.#......
 ```
 
-A wide body with two eye holes, stubby arms out the sides and four short legs. Frames: stand, step (legs and body shift one pixel), blink (eyes closed), and wait (still, with a "?"). In the empty input box the mascot walks slowly from left to right and back, the word following it. In the small spot it only steps in place.
+A wide body with two eye holes, stubby arms out the sides and four short legs. Frames: stand, step (legs and body shift one pixel), blink (eyes closed), and wait (still, with a "?"). In the empty input box the word sits at the left and the mascot walks back and forth to its right. In the small spot it only steps in place.
 
 Words cycle through a short list in the Claude Code spirit, for example "Pondering", "Noodling", "Tinkering", "Scheming", "Musing", "Percolating", each followed by "…" (Mac Roman 0xC9). When the tab's `last_tool` is set, the word is "Running " plus the tool name, truncated to fit.
 

@@ -83,6 +83,22 @@ If the link drops, an alert offers **Redial**. A redial reopens every tab in the
 - The bridge decides how much the SE/30 may do: `run.sh --files rw` (the default) allows saving, `--files ro` only reading, and `--files off` removes Open Project File from the menu.
 - Claude30 never creates, renames or deletes host files. Those stay with Claude, behind its permission prompts.
 
+### Moving around the transcript
+
+You never need the scroll bar. These keys work whether you are typing in the input box or have clicked in the transcript; plain arrow keys still move the cursor in the input box.
+
+| Keys | Moves the transcript |
+|---|---|
+| Cmd-↑ / Cmd-↓ | to your previous or next prompt (also **Session > Previous Prompt** and **Next Prompt**). Cmd-↓ after your last prompt goes to the end. |
+| Control-↑ / Control-↓ | three lines |
+| Option-↑ / Option-↓ | one page |
+| Cmd-Option-↑ / Cmd-Option-↓ | to the top or the bottom |
+| Page Up, Page Down, Home, End | the same, on keyboards that have them |
+
+Prompts that have already moved to the log file can't be reached this way.
+
+While Claude works in the front tab, the Claude mascot walks in the empty input box beside a word that changes every few seconds, or names the tool Claude is running. When Claude waits for your permission it stands still with its arms up. Once you type ahead, it steps in place beside the Send button so it never covers your text.
+
 ### Transcript and logs
 
 Each tab keeps roughly the last 20 to 28 KB of its conversation, which is TextEdit's practical limit. Older text moves to a log file as it leaves the window, so nothing is lost, including in background tabs.

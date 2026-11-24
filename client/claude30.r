@@ -75,11 +75,14 @@ resource 'MENU' (kEditMenu) {
 };
 
 resource 'MENU' (kSessionMenu) {
-	kSessionMenu, textMenuProc, 0x7FFFFF6F, enabled, "Session",
+	kSessionMenu, textMenuProc, 0x7FFFFB6F, enabled, "Session",
 	{
 		"Connect", noIcon, "K", noMark, plain;
 		"Disconnect", noIcon, noKey, noMark, plain;
 		"Stop", noIcon, ".", noMark, plain;
+		"-", noIcon, noKey, noMark, plain;
+		"Previous Prompt (Cmd-Up)", noIcon, noKey, noMark, plain;
+		"Next Prompt (Cmd-Down)", noIcon, noKey, noMark, plain;
 		"-", noIcon, noKey, noMark, plain;
 		"New Tab\0xC9", noIcon, "T", noMark, plain;
 		"Close Tab", noIcon, noKey, noMark, plain;

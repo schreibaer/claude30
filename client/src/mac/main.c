@@ -157,6 +157,8 @@ static void adjust_menus(void)
     enable(gSession, kConnectItem, s == ST_IDLE);
     enable(gSession, kDisconnectItem, s != ST_IDLE && s != ST_HANGUP);
     enable(gSession, kStopItem, t && session_tab_busy(t));
+    enable(gSession, kPrevPromptItem, t != NULL && front == window_ptr());
+    enable(gSession, kNextPromptItem, t != NULL && front == window_ptr());
     enable(gSession, kNewTabItem, online && tabs_count() < MAX_TABS);
     enable(gSession, kCloseTabItem, t != NULL);
     enable(gSession, kLinkTestItem, s == ST_IDLE);
@@ -288,6 +290,8 @@ static void do_menu(long choice)
         case kConnectItem:    session_connect(); break;
         case kDisconnectItem: disconnect(); break;
         case kStopItem:       session_stop(); break;
+        case kPrevPromptItem: window_jump_prompt(-1); break;
+        case kNextPromptItem: window_jump_prompt(1); break;
         case kNewTabItem:     session_new_tab(); break;
         case kCloseTabItem:   session_close_tab(tabs_front()); break;
         case kLinkTestItem:   linktest_run(); break;
@@ -346,6 +350,9 @@ static void do_key(EventRecord *ev)
 {
     char ch = (char)(ev->message & charCodeMask);
     WindowPtr front = FrontWindow();
+    /* Transcript scroll keys, before the menus and the input box see them. */
+    if (front == window_ptr() && window_scroll_key(ev))
+        return;
     if (ev->modifiers & cmdKey) {
         if (ch == '.') {
             session_stop();          /* always the front tab, from any window */
