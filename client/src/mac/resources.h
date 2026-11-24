@@ -24,7 +24,8 @@
 #define kSaveItem       3
 #define kRevertItem     4
 #define kFullScreenItem 6
-#define kQuitItem       8
+#define kCompactItem    7
+#define kQuitItem       9
 
 #define kUndoItem       1
 #define kCutItem        3

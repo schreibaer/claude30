@@ -3,6 +3,7 @@
 #include "log.h"
 #include "mascot.h"
 #include "modem.h"
+#include "prefs.h"
 #include "resources.h"
 #include "toolbox.h"
 #include <Fonts.h>
@@ -32,6 +33,10 @@ static TEHandle gFocus;       /* the one that has the selection for Copy */
 static ControlHandle gScroll, gSend;
 static Rect gTabsRect, gTransView, gInputView, gStatusRect;
 static Rect gSpotRect;         /* the mascot's place beside Send while text is typed */
+static Rect gSendRect;         /* the Send button */
+static Rect gTriRect;          /* the collapse triangle on the line above the input */
+static Boolean gCompact;       /* the input box is one line tall now */
+static Boolean gAutoOpen;      /* ... but opened for a prompt longer than a line */
 static char gStatus[128];
 static short gLineH, gAscent;  /* one line height for every style */
 static Boolean gActive;
@@ -80,21 +85,34 @@ static void measure_fonts(void)
 
 /* ---- layout ------------------------------------------------------------- */
 
+#define COMPACT_H    24     /* the input band when collapsed to one line */
+
 static void layout(void)
 {
     Rect r = gWin->portRect;
     short statusTop = r.bottom - (gLineH + 5);
-    short inputTop = statusTop - (gLineH * 5 + 8);
+    short inputTop = gCompact ? statusTop - COMPACT_H : statusTop - (gLineH * 5 + 8);
 
     SetRect(&gTabsRect, r.left, r.top, r.right, r.top + TAB_H);
     SetRect(&gTransView, r.left + MARGIN, gTabsRect.bottom + MARGIN, r.right - 16 - MARGIN,
             inputTop - MARGIN);
-    SetRect(&gInputView, r.left + MARGIN, inputTop + MARGIN, r.right - 70, statusTop - MARGIN);
     SetRect(&gStatusRect, r.left + MARGIN, statusTop + 2, r.right - MARGIN, r.bottom - 1);
-    {
-        short cx = (short)((gInputView.right + r.right) / 2);
+    SetRect(&gTriRect, r.left + 2, inputTop - 4, r.left + 12, inputTop + 4);
+    if (gCompact) {
+        /* One text line, the mascot's spot, then Send, all in one strip. */
+        short top = (short)(inputTop + (COMPACT_H - gLineH) / 2);
+        SetRect(&gInputView, r.left + MARGIN, top, r.right - 70 - MASCOT_W - 6, top + gLineH);
+        SetRect(&gSpotRect, gInputView.right + 3, inputTop + (COMPACT_H - MASCOT_H) / 2,
+                gInputView.right + 3 + MASCOT_W, inputTop + (COMPACT_H - MASCOT_H) / 2 + MASCOT_H);
+        SetRect(&gSendRect, r.right - 62, inputTop + 2, r.right - 8, inputTop + 22);
+    } else {
+        short cx;
+        SetRect(&gInputView, r.left + MARGIN, inputTop + MARGIN, r.right - 70, statusTop - MARGIN);
+        cx = (short)((gInputView.right + r.right) / 2);
         SetRect(&gSpotRect, cx - MASCOT_W / 2, gInputView.top + 36, cx + MASCOT_W / 2,
                 gInputView.top + 36 + MASCOT_H);
+        SetRect(&gSendRect, gInputView.right + 8, gInputView.top + 8, r.right - 8,
+                gInputView.top + 28);
     }
 }
 
@@ -256,10 +274,45 @@ static void relayout(void)
     r = gWin->portRect;
     MoveControl(gScroll, r.right - 16, gTabsRect.bottom - 1);
     SizeControl(gScroll, 17, (short)(gTransView.bottom + MARGIN - gTabsRect.bottom + 1));
-    MoveControl(gSend, gInputView.right + 8, gInputView.top + 8);
-    SizeControl(gSend, (short)(r.right - 8 - gInputView.right - 8), 20);
+    MoveControl(gSend, gSendRect.left, gSendRect.top);
+    SizeControl(gSend, (short)(gSendRect.right - gSendRect.left), 20);
     sync_scrollbar();
+    mascot_invalidate();
     InvalRect(&gWin->portRect);
+}
+
+/* ---- collapsing the input box -------------------------------------------- */
+
+static void set_compact(Boolean on)
+{
+    if (on == gCompact)
+        return;
+    gCompact = on;
+    SetPort(gWin);
+    relayout();
+}
+
+/* A collapsed box opens while the prompt needs more than one line. */
+static void check_grow(void)
+{
+    if (gCompact && gInput && (*gInput)->nLines > 1) {
+        gAutoOpen = true;
+        set_compact(false);
+    }
+}
+
+Boolean window_input_compact(void)
+{
+    return gPrefs.compact_input != 0;
+}
+
+void window_toggle_input(void)
+{
+    gPrefs.compact_input = !gPrefs.compact_input;
+    prefs_save();
+    gAutoOpen = false;
+    set_compact(gPrefs.compact_input != 0);
+    check_grow();
 }
 
 Boolean window_full_screen(void)
@@ -318,15 +371,14 @@ void window_create(void)
     gWin = GetNewWindow(kMainWindow, NULL, (WindowPtr)-1);
     SetPort(gWin);
     measure_fonts();
+    gCompact = gPrefs.compact_input != 0;
     layout();
     gScrollUPP = NewControlActionUPP(scroll_action);
 
     r = gWin->portRect;
     SetRect(&r, r.right - 16, gTabsRect.bottom - 1, r.right + 1, gTransView.bottom + MARGIN);
     gScroll = NewControl(gWin, &r, "\p", true, 0, 0, 0, scrollBarProc, 0);
-    SetRect(&r, gInputView.right + 8, gInputView.top + 8, gWin->portRect.right - 8,
-            gInputView.top + 28);
-    gSend = NewControl(gWin, &r, "\pSend", true, 0, 0, 1, pushButProc, 0);
+    gSend = NewControl(gWin, &gSendRect, "\pSend", true, 0, 0, 1, pushButProc, 0);
     window_set_send_enabled(false);
     window_set_status("Not connected");
     ShowWindow(gWin);
@@ -387,6 +439,26 @@ static void draw_status(void)
     DrawText(gStatus, 0, (short)strlen(gStatus));
 }
 
+/* The Finder's disclosure triangle: pointing down while the input box is
+   open, right while it is collapsed. */
+static void draw_triangle(void)
+{
+    short i, x = (short)(gTriRect.left + 1), y = (short)(gTriRect.top);
+    EraseRect(&gTriRect);
+    if (gPrefs.compact_input) {
+        for (i = 0; i < 7; i++) {             /* rows 1,2,3,4,3,2,1 wide */
+            short w = (short)(i < 4 ? i : 6 - i);
+            MoveTo((short)(x + 2), (short)(y + i));
+            LineTo((short)(x + 2 + w), (short)(y + i));
+        }
+    } else {
+        for (i = 0; i < 4; i++) {             /* rows 7,5,3,1 wide */
+            MoveTo((short)(x + i), (short)(y + 2 + i));
+            LineTo((short)(x + 6 - i), (short)(y + 2 + i));
+        }
+    }
+}
+
 static void draw_frames(void)
 {
     Rect r = gWin->portRect;
@@ -395,6 +467,7 @@ static void draw_frames(void)
     LineTo(r.right, y1);
     MoveTo(r.left, y2);
     LineTo(r.right, y2);
+    draw_triangle();
 }
 
 static short tab_width(void)
@@ -579,6 +652,11 @@ void window_show_tab(Tab *t)
     }
     sync_scrollbar();
     HiliteControl(gScroll, gActive && gTrans ? 0 : 255);
+    if (gAutoOpen && (!gInput || (*gInput)->teLength == 0)) {
+        gAutoOpen = false;
+        set_compact(gPrefs.compact_input != 0);
+    }
+    check_grow();
     mascot_invalidate();
     InvalRect(&gWin->portRect);
 }
@@ -726,6 +804,10 @@ void window_clear_input(void)
     SetPort(gWin);
     TESetSelect(0, 32767, gInput);
     TEDelete(gInput);
+    if (gAutoOpen) {              /* sent: the box collapses again */
+        gAutoOpen = false;
+        set_compact(gPrefs.compact_input != 0);
+    }
 }
 
 static void set_focus(TEHandle te)
@@ -749,6 +831,10 @@ short window_click(EventRecord *ev, Tab **tab)
 
     SetPort(gWin);
     GlobalToLocal(&p);
+    if (PtInRect(p, &gTriRect)) {
+        window_toggle_input();
+        return kClickNone;
+    }
     if (PtInRect(p, &gTabsRect)) {
         for (i = 0; i < tabs_count(); i++) {
             tab_rect(i, &r);
@@ -802,6 +888,7 @@ short window_key(EventRecord *ev)
         return kKeyHandled;
     mascot_erase();               /* it may stand where the text goes */
     TEKey(ch, gInput);
+    check_grow();
     return kKeyHandled;
 }
 
@@ -812,10 +899,12 @@ short window_key(EventRecord *ev)
    Paced by TickCount from window_idle, so it never holds up the serial pump,
    and it pauses while a modal dialog runs its own loop. */
 static unsigned short gMRows[MF_COUNT][MASCOT_H];
+static unsigned short gPRows[PF_COUNT][MASCOT_H];
 static Boolean gMReady;
 static Boolean gMDrawn;          /* something of it is on screen */
 static MascotView gMView;
 static Rect gMRect, gWRect;      /* the sprite and the word as drawn */
+static Rect gPRect;              /* the little Mac, in the box only */
 
 static void mascot_erase(void)
 {
@@ -825,6 +914,8 @@ static void mascot_erase(void)
     EraseRect(&gMRect);
     if (!EmptyRect(&gWRect))
         EraseRect(&gWRect);
+    if (!EmptyRect(&gPRect))
+        EraseRect(&gPRect);
     gMDrawn = false;
 }
 
@@ -834,21 +925,29 @@ static void mascot_invalidate(void)
     gMView.place = MP_HIDDEN;
 }
 
-static void mascot_sprite(MascotFrame f, const Rect *dst)
+static void blit16(unsigned short *rows, const Rect *dst)
 {
     BitMap bm;
+    bm.baseAddr = (Ptr)rows;
+    bm.rowBytes = 2;
+    SetRect(&bm.bounds, 0, 0, MASCOT_W, MASCOT_H);
+    CopyBits(&bm, &gWin->portBits, &bm.bounds, dst, srcCopy, NULL);
+}
+
+static void mascot_sprite(MascotFrame f, const Rect *dst)
+{
     short r;
     if (!gMReady) {
         short k;
         for (k = 0; k < MF_COUNT; k++)
             for (r = 0; r < MASCOT_H; r++)
                 gMRows[k][r] = mascot_row((MascotFrame)k, r);
+        for (k = 0; k < PF_COUNT; k++)
+            for (r = 0; r < MASCOT_H; r++)
+                gPRows[k][r] = mascot_prop_row((PropFrame)k, r);
         gMReady = true;
     }
-    bm.baseAddr = (Ptr)gMRows[f];
-    bm.rowBytes = 2;
-    SetRect(&bm.bounds, 0, 0, MASCOT_W, MASCOT_H);
-    CopyBits(&bm, &gWin->portBits, &bm.bounds, dst, srcCopy, NULL);
+    blit16(gMRows[f], dst);
 }
 
 static void mascot_tick(void)
@@ -857,7 +956,7 @@ static void mascot_tick(void)
     unsigned long now = TickCount();
     Boolean busy = false, waiting = false;
     const char *tool = NULL;
-    Rect m, w;
+    Rect m, w, pr;
     short wordW = 0, left, track, mid;
     GrafPtr save;
 
@@ -871,6 +970,7 @@ static void mascot_tick(void)
     GetPort(&save);
     SetPort(gWin);
     SetRect(&w, 0, 0, 0, 0);
+    SetRect(&pr, 0, 0, 0, 0);
     if (v.place == MP_SPOT) {
         m = gSpotRect;
     } else if (v.place == MP_BOX) {
@@ -883,8 +983,12 @@ static void mascot_tick(void)
         left = (short)(gInputView.left + 8);
         SetRect(&w, left, (short)(mid - gLineH / 2), (short)(left + wordW + 1),
                 (short)(mid - gLineH / 2 + gLineH));
+        SetRect(&pr, (short)(gInputView.right - 4 - MASCOT_W), (short)(mid - MASCOT_H / 2),
+                (short)(gInputView.right - 4), (short)(mid - MASCOT_H / 2 + MASCOT_H));
         left = (short)(w.right + 8);
-        track = (short)(gInputView.right - 4 - MASCOT_W - left);
+        track = (short)(pr.left - 4 - MASCOT_W - left);
+        if (track < 0)            /* too narrow for the Mac: no Mac */
+            SetRect(&pr, 0, 0, 0, 0);
         if (!waiting)
             left = (short)(left + mascot_walk_x(now, track));
         SetRect(&m, left, (short)(mid - MASCOT_H / 2), (short)(left + MASCOT_W),
@@ -894,10 +998,15 @@ static void mascot_tick(void)
     }
 
     if (gMDrawn && v.place == gMView.place && EqualRect(&m, &gMRect)
-            && EqualRect(&w, &gWRect) && strcmp(v.word, gMView.word) == 0) {
+            && EqualRect(&w, &gWRect) && EqualRect(&pr, &gPRect)
+            && strcmp(v.word, gMView.word) == 0) {
         if (v.frame != gMView.frame) {
             mascot_sprite(v.frame, &m);   /* same place: the new frame covers the old */
             gMView.frame = v.frame;
+        }
+        if (v.prop != gMView.prop && !EmptyRect(&pr)) {
+            blit16(gPRows[v.prop], &pr);
+            gMView.prop = v.prop;
         }
         TextFace(0);
         SetPort(save);
@@ -910,8 +1019,12 @@ static void mascot_tick(void)
             if (!wordSame && !EmptyRect(&gWRect))
                 EraseRect(&gWRect);
         }
+        if (gMDrawn && !EmptyRect(&gPRect) && !EqualRect(&pr, &gPRect))
+            EraseRect(&gPRect);
         if (v.place != MP_HIDDEN) {
             mascot_sprite(v.frame, &m);
+            if (!EmptyRect(&pr))
+                blit16(gPRows[v.prop], &pr);
             if (!wordSame && v.word[0]) {
                 MoveTo(w.left, (short)(w.top + gAscent));
                 DrawText(v.word, 0, (short)strlen(v.word));
@@ -923,6 +1036,7 @@ static void mascot_tick(void)
     gMView = v;
     gMRect = m;
     gWRect = w;
+    gPRect = pr;
     SetPort(save);
 }
 
@@ -1082,6 +1196,7 @@ void window_edit(short item)
     case kPasteItem:
         set_focus(gInput);
         paste_text();
+        check_grow();
         break;
     case kClearItem:
         if (gFocus == gInput)

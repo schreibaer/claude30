@@ -12,6 +12,11 @@ static void test_art(void)
     CHECK_EQ_LONG(mascot_row(MF_STAND, 0), 0);
     CHECK_EQ_LONG(mascot_row(MF_STAND, 5), 0x3BDC);      /* ..###.####.###.. */
     CHECK_EQ_LONG(mascot_row(MF_COUNT, 0), 0);
+    for (f = 0; f < PF_COUNT; f++)
+        for (r = 0; r < MASCOT_H; r++)
+            CHECK_EQ_LONG(strlen(mascot_prop_art[f][r]), MASCOT_W);
+    CHECK_EQ_LONG(mascot_prop_row(PF_HAPPY, 13), 0x7FFC);
+    CHECK_EQ_LONG(mascot_prop_row(PF_COUNT, 0), 0);
 }
 
 static void test_view(void)
@@ -55,9 +60,24 @@ static void test_view(void)
     mascot_view(179, 1, 0, 0, NULL, &v);
     CHECK(strcmp(v.word, "Pondering\xC9") == 0);
     mascot_view(180, 1, 0, 0, NULL, &v);
-    CHECK(strcmp(v.word, "Noodling\xC9") == 0);
-    mascot_view(180 * 10, 1, 0, 0, NULL, &v);
+    CHECK(strcmp(v.word, "Warming up the 68030\xC9") == 0);
+    mascot_view(180 * 20, 1, 0, 0, NULL, &v);
     CHECK(strcmp(v.word, "Pondering\xC9") == 0);
+}
+
+static void test_prop(void)
+{
+    MascotView v;
+    mascot_view(0, 1, 0, 0, NULL, &v);
+    CHECK_EQ_LONG(v.prop, PF_HAPPY);
+    mascot_view(MASCOT_PROP_TICKS, 1, 0, 0, NULL, &v);
+    CHECK_EQ_LONG(v.prop, PF_WATCH1);
+    mascot_view(2 * MASCOT_PROP_TICKS, 1, 0, 0, NULL, &v);
+    CHECK_EQ_LONG(v.prop, PF_WATCH2);
+    mascot_view(4 * MASCOT_PROP_TICKS, 1, 0, 0, NULL, &v);
+    CHECK_EQ_LONG(v.prop, PF_HAPPY);
+    mascot_view(MASCOT_PROP_TICKS, 1, 1, 0, NULL, &v);
+    CHECK_EQ_LONG(v.prop, PF_HAPPY);      /* waiting: the Mac smiles */
 }
 
 static void test_walk(void)
@@ -85,6 +105,7 @@ int main(void)
 {
     test_art();
     test_view();
+    test_prop();
     test_walk();
     CHECK_DONE();
 }

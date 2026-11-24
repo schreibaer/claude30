@@ -249,3 +249,10 @@ mascot_step(state, ticks, busy, waiting, has_text, tool, box_width):
 - The exact pixels of each mascot frame, tuned on screen at 1 bit.
 - The final word list and how long a tool name may be before it is cut.
 - Whether `LDelRow(0, 0, ...)` already resets the list's scroll position.
+
+## Additions During Implementation
+
+Asked for by the person after the plan was confirmed, and built in the same pull request:
+
+- **Collapsible input box.** File > Compact Input (Cmd-E) and a disclosure triangle on the line above the input box collapse it to a one-line strip with Send and the mascot spot beside it. A prompt longer than one line opens it until sent. Remembered in prefs version 3 (version 2 prefs load with the box open). Files: `client/src/mac/window.c`, `prefs.c`, `prefs.h`, `main.c`, `resources.h`, `client/claude30.r`.
+- **Whimsical, vintage-Mac mascot.** In the empty box the mascot paces between its word and a tiny compact Mac whose screen flips between a Happy Mac and the wristwatch cursor, and the word list mixes whimsy with 68030, ROM, SCC, MultiFinder and floppy jokes. Files: `client/src/core/mascot.c`, `client/tests/test_mascot.c`.

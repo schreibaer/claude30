@@ -134,6 +134,8 @@ Run these in the emulator, and the hardware rows on the SE/30. Tick each one.
 | ☐ | A permission request shows the mascot with its arms up and "Waiting for you"; it is still while the dialog is up and gone after the turn | Emulator | `perm` |
 | ☐ | Switching between a busy and an idle tab shows and hides the mascot; Full Screen during a turn moves it to the new layout | Emulator | Two tabs, `stream` |
 | ☐ | `burst` shows no line-noise markers that the previous release does not also show | Emulator, then SE/30 | `burst` |
+| ☐ | Cmd-E and the triangle collapse the input box to one line and back; the transcript keeps following the bottom; an Option-Return prompt opens the box and sending collapses it again; the setting survives a relaunch, and version 2 prefs load with the box open | Emulator | Any bridge |
+| ☐ | The mascot and the little Mac fit the collapsed one-line box, and the spot beside Send holds the mascot while text is typed | Emulator | `stream` |
 | ☐ | With several prompts, Cmd-↑ and Cmd-↓ step between them, Cmd-↓ after the last goes to the end, Cmd-↑ before the first beeps; still right after `long` forced a trim | Emulator | Stress bridge |
 | ☐ | Control-, Option- and Cmd-Option-arrows scroll three lines, a page and to the ends from both the input box and the transcript; plain arrows still move the input cursor | Emulator and SE/30 | Any transcript |
 | ☐ | On an extended keyboard Page Up, Page Down, Home and End scroll the transcript | SE/30 | Apple Extended Keyboard |

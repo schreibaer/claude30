@@ -153,6 +153,7 @@ static void adjust_menus(void)
     enable(gFile, file_item(kSaveItem), fw && filewin_can_save(front));
     enable(gFile, file_item(kRevertItem), fw && filewin_can_revert(front));
     enable(gFile, file_item(kFullScreenItem), filewin_count() == 0);
+    CheckItem(gFile, file_item(kCompactItem), window_input_compact());
 
     enable(gSession, kConnectItem, s == ST_IDLE);
     enable(gSession, kDisconnectItem, s != ST_IDLE && s != ST_HANGUP);
@@ -272,6 +273,7 @@ static void do_menu(long choice)
             window_set_full_screen(!window_full_screen());
             CheckItem(gFile, file_item(kFullScreenItem), window_full_screen());
             break;
+        case kCompactItem:  window_toggle_input(); break;
         case kQuitItem:     quit_app(); break;
         }
         break;

@@ -97,7 +97,9 @@ You never need the scroll bar. These keys work whether you are typing in the inp
 
 Prompts that have already moved to the log file can't be reached this way.
 
-While Claude works in the front tab, the Claude mascot walks in the empty input box beside a word that changes every few seconds, or names the tool Claude is running. When Claude waits for your permission it stands still with its arms up. Once you type ahead, it steps in place beside the Send button so it never covers your text.
+While Claude works in the front tab, the Claude mascot paces the empty input box between a word that changes every few seconds ("Warming up the 68030…", or the tool Claude is running) and a tiny compact Mac whose screen flips between a Happy Mac and the wristwatch. When Claude waits for your permission it stands still with its arms up. Once you type ahead, it steps in place beside the Send button so it never covers your text.
+
+**File > Compact Input** (Cmd-E), or the small triangle at the left end of the line above the input box, collapses the input box to a single line so the transcript gets about four more lines. A prompt that needs a second line (Option-Return, or text that wraps) opens the box again until you send it. The setting is remembered.
 
 ### Transcript and logs
 
