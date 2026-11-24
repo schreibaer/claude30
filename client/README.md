@@ -52,6 +52,7 @@ The build makes two release files:
    - If the app ran out of memory while the request arrived, the dialog says part of it could not be shown and offers only Deny.
    - Long lines wrap onto rows marked with `¬`, so you see every character of a command.
 6. **Session > Disconnect** ends the session and hangs up. Quit also disconnects first.
+7. **File > Full Screen** (Cmd-F) makes the window cover the whole screen and hides the menu bar. Menus still work by their Command keys, and Cmd-F again brings the menu bar back. Quitting or switching to another application also leaves full screen. If the app crashes while in full screen, restart the Mac to get the menu bar back.
 
 If the link drops, an alert offers **Redial**. A redial starts a fresh conversation, and the transcript marks it "New conversation".
 

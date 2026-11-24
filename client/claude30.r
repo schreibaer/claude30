@@ -46,8 +46,10 @@ resource 'MENU' (kAppleMenu) {
 };
 
 resource 'MENU' (kFileMenu) {
-	kFileMenu, textMenuProc, allEnabled, enabled, "File",
+	kFileMenu, textMenuProc, 0x7FFFFFFD, enabled, "File",
 	{
+		"Full Screen", noIcon, "F", noMark, plain;
+		"-", noIcon, noKey, noMark, plain;
 		"Quit", noIcon, "Q", noMark, plain
 	}
 };

@@ -15,7 +15,8 @@
 #define kSessionMenu    131
 
 #define kAboutItem      1
-#define kQuitItem       1
+#define kFullScreenItem 1
+#define kQuitItem       3
 #define kUndoItem       1
 #define kCutItem        3
 #define kCopyItem       4

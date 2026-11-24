@@ -146,6 +146,98 @@ static pascal void scroll_action(ControlHandle c, short part)
     scroll_to_px(scrolled_px() + delta);
 }
 
+/* ---- full screen -------------------------------------------------------- */
+
+static Boolean gFull;
+static Rect gNormalBounds;       /* content rect in global coordinates */
+static short gSavedMBarH;
+
+/* The desktop region (low memory GrayRgn at 0x09EE). GCC mistakes the
+   fixed address for an empty array, so its bounds warning is off here. */
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Warray-bounds"
+static RgnHandle gray_rgn(void)
+{
+    return GetGrayRgn();
+}
+#pragma GCC diagnostic pop
+
+/* Moves the scroll bar, Send button and text views after a resize. */
+static void relayout(void)
+{
+    Rect r;
+    Boolean follow = at_bottom();
+    long scrolled = scrolled_px();
+
+    layout();
+    (*gTrans)->viewRect = gTransView;
+    (*gTrans)->destRect = gTransView;
+    TECalText(gTrans);
+    OffsetRect(&(*gTrans)->destRect, 0, (short)-(scrolled > 30000 ? 30000 : scrolled));
+
+    (*gInput)->viewRect = gInputView;
+    (*gInput)->destRect = gInputView;
+    TECalText(gInput);
+    TESelView(gInput);
+
+    r = gWin->portRect;
+    MoveControl(gScroll, r.right - 16, r.top - 1);
+    SizeControl(gScroll, 17, (short)(gTransView.bottom + MARGIN - r.top + 1));
+    MoveControl(gSend, gInputView.right + 8, gInputView.top + 8);
+    SizeControl(gSend, (short)(r.right - 8 - gInputView.right - 8), 20);
+
+    scroll_to_px(follow ? max_scroll_px() : scrolled);
+    InvalRect(&gWin->portRect);
+}
+
+Boolean window_full_screen(void)
+{
+    return gFull;
+}
+
+void window_set_full_screen(Boolean on)
+{
+    Rect screen = qd.screenBits.bounds, bar;
+    RgnHandle barRgn;
+    Point tl;
+
+    if (on == gFull)
+        return;
+    SetPort(gWin);
+    barRgn = NewRgn();
+    if (on) {
+        gNormalBounds = gWin->portRect;
+        tl.h = gNormalBounds.left;
+        tl.v = gNormalBounds.top;
+        LocalToGlobal(&tl);
+        OffsetRect(&gNormalBounds, (short)(tl.h - gNormalBounds.left), (short)(tl.v - gNormalBounds.top));
+
+        /* Give the menu bar strip to the desktop, then cover the screen.
+           The title bar sits just above the top edge, out of sight. */
+        gSavedMBarH = GetMBarHeight();
+        SetRect(&bar, screen.left, screen.top, screen.right, screen.top + gSavedMBarH);
+        RectRgn(barRgn, &bar);
+        UnionRgn(gray_rgn(), barRgn, gray_rgn());
+        LMSetMBarHeight(0);
+        MoveWindow(gWin, screen.left, screen.top, true);
+        SizeWindow(gWin, (short)(screen.right - screen.left), (short)(screen.bottom - screen.top), true);
+        gFull = true;
+    } else {
+        MoveWindow(gWin, gNormalBounds.left, gNormalBounds.top, true);
+        SizeWindow(gWin, (short)(gNormalBounds.right - gNormalBounds.left),
+                   (short)(gNormalBounds.bottom - gNormalBounds.top), true);
+        LMSetMBarHeight(gSavedMBarH);
+        SetRect(&bar, screen.left, screen.top, screen.right, screen.top + gSavedMBarH);
+        RectRgn(barRgn, &bar);
+        DiffRgn(gray_rgn(), barRgn, gray_rgn());
+        DrawMenuBar();
+        gFull = false;
+    }
+    DisposeRgn(barRgn);
+    SetPort(gWin);
+    relayout();
+}
+
 /* ---- creation ----------------------------------------------------------- */
 
 void window_create(void)

@@ -84,6 +84,7 @@ static void quit_app(void)
 {
     unsigned long until;
     EventRecord ev;
+    window_set_full_screen(false);   /* the Finder needs its menu bar back */
     if (session_online()) {
         session_disconnect();
         until = TickCount() + QUIT_WAIT_TICKS;
@@ -113,8 +114,12 @@ static void do_menu(long choice)
         }
         break;
     case kFileMenu:
-        if (item == kQuitItem)
+        if (item == kFullScreenItem) {
+            window_set_full_screen(!window_full_screen());
+            CheckItem(gFile, kFullScreenItem, window_full_screen());
+        } else if (item == kQuitItem) {
             quit_app();
+        }
         break;
     case kEditMenu:
         if (!SystemEdit(item - 1)) {
@@ -211,6 +216,11 @@ int main(void)
             break;
         case osEvt:
             if (((ev.message >> 24) & 0xFF) == kSuspendResumeMessage) {
+                if (!(ev.message & kResumeFlag) && window_full_screen()) {
+                    /* Other applications need the menu bar. */
+                    window_set_full_screen(false);
+                    CheckItem(gFile, kFullScreenItem, false);
+                }
                 window_activate((ev.message & kResumeFlag) != 0);
             }
             break;
