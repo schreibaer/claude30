@@ -45,8 +45,11 @@ resource 'MENU' (kAppleMenu) {
 	}
 };
 
+/* The enable flags are Rez's 31-bit field: bit 0 is item 1, bit 1 item 2,
+   and so on (the menu's own flag is the boolean after it). Separators are
+   off; adjust_menus() sets the rest at every menu pull. */
 resource 'MENU' (kFileMenu) {
-	kFileMenu, textMenuProc, 0x7FFFFEDF, enabled, "File",
+	kFileMenu, textMenuProc, 0x7FFFFF6F, enabled, "File",
 	{
 		"Open Project File\0xC9", noIcon, "O", noMark, plain;
 		"Close", noIcon, "W", noMark, plain;
@@ -76,7 +79,7 @@ resource 'MENU' (kEditMenu) {
 };
 
 resource 'MENU' (kSessionMenu) {
-	kSessionMenu, textMenuProc, 0x7FFFFB6F, enabled, "Session",
+	kSessionMenu, textMenuProc, 0x7FFFFDB7, enabled, "Session",
 	{
 		"Connect", noIcon, "K", noMark, plain;
 		"Disconnect", noIcon, noKey, noMark, plain;
