@@ -121,7 +121,17 @@ kill <pid>
 
 ## Building
 
-The client builds with [Retro68](https://github.com/autc04/Retro68). Retro68 has no tagged releases, so this project pins a commit: `a4a389c41e90b1095a40ccf13f28678b6cfbba86` (master, 2026-11-10). Build the 68k toolchain from that commit:
+The client builds with [Retro68](https://github.com/autc04/Retro68). Retro68 has no tagged releases, so this project pins a commit: `a4a389c41e90b1095a40ccf13f28678b6cfbba86` (master, 2026-11-10). The pin lives in `tools/setup-retro68.sh`.
+
+Install the 68k toolchain with:
+
+```sh
+tools/setup-retro68.sh
+```
+
+The script puts the toolchain in `/opt/Retro68-build` (set `RETRO68_PREFIX` to change it). It first looks for a prebuilt archive in `/mnt/project-files/toolchain/` (set `RETRO68_CACHE_DIR` to change it) and unpacks it in seconds. Without one, it builds Retro68 from source, which takes about half an hour, and saves the result there for next time. `--rebuild` ignores the cache and refreshes it. Each archive has a `.txt` manifest next to it that records the Retro68 commit, the build options and the host it was built on. The archive only works on the same kind of host (it is named after the OS and CPU) and at the same prefix, because the toolchain holds absolute paths; the script picks the matching archive by name and builds when there is none. On a host without `apt-get`, install the packages listed in the script first.
+
+To build by hand instead:
 
 ```sh
 git clone https://github.com/autc04/Retro68.git && cd Retro68
@@ -136,7 +146,7 @@ Then build from this repository's root:
 ```sh
 # the app: build-68k/Claude30.bin, Claude30.dsk, Claude30.APPL
 cmake -S client -B build-68k \
-  -DCMAKE_TOOLCHAIN_FILE=<Retro68-build>/toolchain/m68k-apple-macos/cmake/retro68.toolchain.cmake
+  -DCMAKE_TOOLCHAIN_FILE=/opt/Retro68-build/toolchain/m68k-apple-macos/cmake/retro68.toolchain.cmake
 cmake --build build-68k
 
 # the portable core's tests, with the host compiler (needs python3 for the bridge test)
