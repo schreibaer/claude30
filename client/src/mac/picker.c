@@ -125,6 +125,10 @@ static pascal void draw_list(DialogPtr d, short item)
     (void)item;
     InsetRect(&r, -1, -1);
     FrameRect(&r);
+    /* LUpdate draws only rows that exist and InvalRect erases nothing, so
+       rows from a longer earlier listing would stay on screen. */
+    r = (*gList)->rView;
+    EraseRect(&r);
     LUpdate(d->visRgn, gList);
 }
 

@@ -46,7 +46,7 @@ resource 'MENU' (kAppleMenu) {
 };
 
 resource 'MENU' (kFileMenu) {
-	kFileMenu, textMenuProc, 0x7FFFFF5F, enabled, "File",
+	kFileMenu, textMenuProc, 0x7FFFFEDF, enabled, "File",
 	{
 		"Open Project File\0xC9", noIcon, "O", noMark, plain;
 		"Close", noIcon, "W", noMark, plain;
@@ -54,6 +54,7 @@ resource 'MENU' (kFileMenu) {
 		"Revert to Saved", noIcon, noKey, noMark, plain;
 		"-", noIcon, noKey, noMark, plain;
 		"Full Screen", noIcon, "F", noMark, plain;
+		"Compact Input", noIcon, "E", noMark, plain;
 		"-", noIcon, noKey, noMark, plain;
 		"Quit", noIcon, "Q", noMark, plain
 	}
@@ -75,11 +76,14 @@ resource 'MENU' (kEditMenu) {
 };
 
 resource 'MENU' (kSessionMenu) {
-	kSessionMenu, textMenuProc, 0x7FFFFF6F, enabled, "Session",
+	kSessionMenu, textMenuProc, 0x7FFFFB6F, enabled, "Session",
 	{
 		"Connect", noIcon, "K", noMark, plain;
 		"Disconnect", noIcon, noKey, noMark, plain;
 		"Stop", noIcon, ".", noMark, plain;
+		"-", noIcon, noKey, noMark, plain;
+		"Previous Prompt (Cmd-Up)", noIcon, noKey, noMark, plain;
+		"Next Prompt (Cmd-Down)", noIcon, noKey, noMark, plain;
 		"-", noIcon, noKey, noMark, plain;
 		"New Tab\0xC9", noIcon, "T", noMark, plain;
 		"Close Tab", noIcon, noKey, noMark, plain;

@@ -109,6 +109,8 @@ Run these in the emulator, and the hardware rows on the SE/30. Tick each one.
 |---|---|---|---|
 | ☐ | The Open dialog lists folders first, then files with sizes; `.env`, `.git` and ignored files are absent | Emulator | Demo bridge on a copy of this repo |
 | ☐ | Opening a folder and pressing Up returns to the root listing; an empty folder says "Empty folder" | Emulator | Same |
+| ☐ | From the root listing, opening a folder with fewer entries leaves no names from the root below the new rows, and the list starts at the top even if the root was scrolled down | Emulator | Stress bridge, `stress` project, `subfolder/` |
+| ☐ | The New Tab list refilled after a fresh project list arrives has no leftover rows | Emulator | Open New Tab right after Connect |
 | ☐ | Output from a background tab keeps arriving while the Open dialog is up, and a front-tab permission request shows "Claude is waiting for permission in…" in the dialog, then opens right after Cancel | Emulator | Stress bridge, `stream` and `perm` |
 | ☐ | With `--files off` the Open command is absent; with `--files ro` files open read-only and Save is dimmed | Emulator | Stress bridge with each option |
 | ☐ | `big.txt` opens read-only; dragging the scroll bar to the middle shows that region within a few seconds, and scrolling back up refetches the start | Emulator | Stress bridge, `files-bigread` |
@@ -122,6 +124,21 @@ Run these in the emulator, and the hardware rows on the SE/30. Tick each one.
 | ☐ | With tab 2's file window in front, Cmd-period stops tab 1's turn, Paste goes into the file window, and Cmd-O browses tab 2's project | Emulator | Two tabs |
 | ☐ | Switching to tab 1 hides tab 2's file windows; switching back shows them | Emulator | Two tabs |
 | ☐ | A file containing tabs displays usably in Monaco 9 (TextEdit's tab drawing on the real ROM) | Emulator and SE/30 | Any file with tabs |
+
+**Mascot and keyboard scrolling**
+
+| | Check | Where | How |
+|---|---|---|---|
+| ☐ | During a turn the mascot walks in the empty input box beside a changing word, and the word reads "Running *tool*" while a tool runs | Emulator | Stress bridge, `silent` |
+| ☐ | Typing during a turn moves the mascot beside Send without touching the text; deleting the text brings it back; the caret keeps blinking | Emulator | `stream` |
+| ☐ | A permission request shows the mascot with its arms up and "Waiting for you"; it is still while the dialog is up and gone after the turn | Emulator | `perm` |
+| ☐ | Switching between a busy and an idle tab shows and hides the mascot; Full Screen during a turn moves it to the new layout | Emulator | Two tabs, `stream` |
+| ☐ | `burst` shows no line-noise markers that the previous release does not also show | Emulator, then SE/30 | `burst` |
+| ☐ | Cmd-E and the triangle collapse the input box to one line and back; the transcript keeps following the bottom; an Option-Return prompt opens the box and sending collapses it again; the setting survives a relaunch, and version 2 prefs load with the box open | Emulator | Any bridge |
+| ☐ | The mascot and the little Mac fit the collapsed one-line box, and the spot beside Send holds the mascot while text is typed | Emulator | `stream` |
+| ☐ | With several prompts, Cmd-↑ and Cmd-↓ step between them, Cmd-↓ after the last goes to the end, Cmd-↑ before the first beeps; still right after `long` forced a trim | Emulator | Stress bridge |
+| ☐ | Control-, Option- and Cmd-Option-arrows scroll three lines, a page and to the ends from both the input box and the transcript; plain arrows still move the input cursor | Emulator and SE/30 | Any transcript |
+| ☐ | On an extended keyboard Page Up, Page Down, Home and End scroll the transcript | SE/30 | Apple Extended Keyboard |
 
 **Window, settings and dialog**
 

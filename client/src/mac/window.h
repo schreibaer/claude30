@@ -61,6 +61,19 @@ void window_set_send_enabled(Boolean on);
 Handle window_input_text(long *len);
 void window_clear_input(void);
 
+/* Collapses the input box to one line, or opens it again (remembered in
+   the prefs). A collapsed box opens by itself while a prompt needs more than
+   one line, and collapses again once it is sent. */
+void window_toggle_input(void);
+Boolean window_input_compact(void);
+
+/* Scrolls the front tab's transcript to the previous (dir < 0) or next
+   prompt; past the last prompt, to the end. Beeps when there is none. */
+void window_jump_prompt(short dir);
+/* Transcript scroll keys (Cmd-, Option- and Control-arrows, Page Up/Down,
+   Home, End). True when ev was one and has been handled. */
+Boolean window_scroll_key(EventRecord *ev);
+
 /* Edit menu commands for the front tab. */
 void window_edit(short item);
 

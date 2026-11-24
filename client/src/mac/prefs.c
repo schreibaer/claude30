@@ -6,6 +6,7 @@
 #include <Files.h>
 #include <Resources.h>
 #include <TextUtils.h>
+#include <stddef.h>
 #include <string.h>
 
 Prefs gPrefs;
@@ -14,6 +15,7 @@ static const unsigned char kPrefsName[] = "\pClaude30 Prefs";
 
 /* Version 1 ended after the dial string. */
 #define PREFS_V1_SIZE (3 * sizeof(short) + sizeof(Str63))
+#define PREFS_V2_SIZE ((long)offsetof(Prefs, compact_input))
 
 /* Folder Manager selectors; Multiversal has FindFolder but not these names. */
 #define kOnSystemDiskVol  ((short)0x8000)
@@ -56,6 +58,9 @@ void prefs_load(void)
         short i;
         if (((Prefs *)*h)->version == PREFS_VERSION && GetHandleSize(h) == sizeof(Prefs)) {
             memcpy(&gPrefs, *h, sizeof(Prefs));
+        } else if (((Prefs *)*h)->version == 2 && GetHandleSize(h) >= PREFS_V2_SIZE) {
+            memcpy(&gPrefs, *h, PREFS_V2_SIZE);   /* version 2: input expanded */
+            gPrefs.compact_input = 0;
         } else {
             memcpy(&gPrefs, *h, PREFS_V1_SIZE);   /* version 1: no tabs */
             gPrefs.ntabs = 0;
@@ -72,6 +77,7 @@ void prefs_load(void)
             gPrefs.port = kPortModem;
         if (gPrefs.dial[0] > 63)
             gPrefs.dial[0] = 63;
+        gPrefs.compact_input = gPrefs.compact_input != 0;
     }
     CloseResFile(ref);
     UseResFile(saved);

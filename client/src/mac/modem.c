@@ -472,6 +472,11 @@ Boolean session_tab_busy(const Tab *t)
     return s == SS_BUSY || s == SS_PERMISSION;
 }
 
+Boolean session_tab_waiting(const Tab *t)
+{
+    return t->want_perm || proto_sess_state(&gProto, t->sid) == SS_PERMISSION;
+}
+
 static Boolean open_port(void)
 {
     OSErr err = serial_open(gPrefs.port, gPrefs.speed);

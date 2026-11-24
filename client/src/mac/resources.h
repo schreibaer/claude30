@@ -24,7 +24,8 @@
 #define kSaveItem       3
 #define kRevertItem     4
 #define kFullScreenItem 6
-#define kQuitItem       8
+#define kCompactItem    7
+#define kQuitItem       9
 
 #define kUndoItem       1
 #define kCutItem        3
@@ -37,9 +38,11 @@
 #define kConnectItem    1
 #define kDisconnectItem 2
 #define kStopItem       3
-#define kNewTabItem     5
-#define kCloseTabItem   6
-#define kLinkTestItem   8
+#define kPrevPromptItem 5
+#define kNextPromptItem 6
+#define kNewTabItem     8
+#define kCloseTabItem   9
+#define kLinkTestItem   11
 
 /* Window */
 #define kMainWindow     128

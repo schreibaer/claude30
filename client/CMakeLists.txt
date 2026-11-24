@@ -16,6 +16,8 @@ add_application(Claude30
     src/core/batch.c
     src/core/files.c
     src/core/crc32.c
+    src/core/mascot.c
+    src/core/promptmarks.c
     src/mac/main.c
     src/mac/serial.c
     src/mac/modem.c

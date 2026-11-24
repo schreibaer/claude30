@@ -1,6 +1,9 @@
 #include "window.h"
 #include "filewin.h"
 #include "log.h"
+#include "mascot.h"
+#include "modem.h"
+#include "prefs.h"
 #include "resources.h"
 #include "toolbox.h"
 #include <Fonts.h>
@@ -29,9 +32,17 @@ static TEHandle gInput;       /* the front tab's input area, or NULL */
 static TEHandle gFocus;       /* the one that has the selection for Copy */
 static ControlHandle gScroll, gSend;
 static Rect gTabsRect, gTransView, gInputView, gStatusRect;
+static Rect gSpotRect;         /* the mascot's place beside Send while text is typed */
+static Rect gSendRect;         /* the Send button */
+static Rect gTriRect;          /* the collapse triangle on the line above the input */
+static Boolean gCompact;       /* the input box is one line tall now */
+static Boolean gAutoOpen;      /* ... but opened for a prompt longer than a line */
 static char gStatus[128];
 static short gLineH, gAscent;  /* one line height for every style */
 static Boolean gActive;
+
+static void mascot_erase(void);
+static void mascot_invalidate(void);
 
 /* ---- styles ------------------------------------------------------------- */
 
@@ -74,17 +85,35 @@ static void measure_fonts(void)
 
 /* ---- layout ------------------------------------------------------------- */
 
+#define COMPACT_H    24     /* the input band when collapsed to one line */
+
 static void layout(void)
 {
     Rect r = gWin->portRect;
     short statusTop = r.bottom - (gLineH + 5);
-    short inputTop = statusTop - (gLineH * 5 + 8);
+    short inputTop = gCompact ? statusTop - COMPACT_H : statusTop - (gLineH * 5 + 8);
 
     SetRect(&gTabsRect, r.left, r.top, r.right, r.top + TAB_H);
     SetRect(&gTransView, r.left + MARGIN, gTabsRect.bottom + MARGIN, r.right - 16 - MARGIN,
             inputTop - MARGIN);
-    SetRect(&gInputView, r.left + MARGIN, inputTop + MARGIN, r.right - 70, statusTop - MARGIN);
     SetRect(&gStatusRect, r.left + MARGIN, statusTop + 2, r.right - MARGIN, r.bottom - 1);
+    SetRect(&gTriRect, r.left + 2, inputTop - 4, r.left + 12, inputTop + 4);
+    if (gCompact) {
+        /* One text line, the mascot's spot, then Send, all in one strip. */
+        short top = (short)(inputTop + (COMPACT_H - gLineH) / 2);
+        SetRect(&gInputView, r.left + MARGIN, top, r.right - 70 - MASCOT_W - 6, top + gLineH);
+        SetRect(&gSpotRect, gInputView.right + 3, inputTop + (COMPACT_H - MASCOT_H) / 2,
+                gInputView.right + 3 + MASCOT_W, inputTop + (COMPACT_H - MASCOT_H) / 2 + MASCOT_H);
+        SetRect(&gSendRect, r.right - 62, inputTop + 2, r.right - 8, inputTop + 22);
+    } else {
+        short cx;
+        SetRect(&gInputView, r.left + MARGIN, inputTop + MARGIN, r.right - 70, statusTop - MARGIN);
+        cx = (short)((gInputView.right + r.right) / 2);
+        SetRect(&gSpotRect, cx - MASCOT_W / 2, gInputView.top + 36, cx + MASCOT_W / 2,
+                gInputView.top + 36 + MASCOT_H);
+        SetRect(&gSendRect, gInputView.right + 8, gInputView.top + 8, r.right - 8,
+                gInputView.top + 28);
+    }
 }
 
 /* ---- drawing suppression for background records ---------------------------- */
@@ -245,10 +274,45 @@ static void relayout(void)
     r = gWin->portRect;
     MoveControl(gScroll, r.right - 16, gTabsRect.bottom - 1);
     SizeControl(gScroll, 17, (short)(gTransView.bottom + MARGIN - gTabsRect.bottom + 1));
-    MoveControl(gSend, gInputView.right + 8, gInputView.top + 8);
-    SizeControl(gSend, (short)(r.right - 8 - gInputView.right - 8), 20);
+    MoveControl(gSend, gSendRect.left, gSendRect.top);
+    SizeControl(gSend, (short)(gSendRect.right - gSendRect.left), 20);
     sync_scrollbar();
+    mascot_invalidate();
     InvalRect(&gWin->portRect);
+}
+
+/* ---- collapsing the input box -------------------------------------------- */
+
+static void set_compact(Boolean on)
+{
+    if (on == gCompact)
+        return;
+    gCompact = on;
+    SetPort(gWin);
+    relayout();
+}
+
+/* A collapsed box opens while the prompt needs more than one line. */
+static void check_grow(void)
+{
+    if (gCompact && gInput && (*gInput)->nLines > 1) {
+        gAutoOpen = true;
+        set_compact(false);
+    }
+}
+
+Boolean window_input_compact(void)
+{
+    return gPrefs.compact_input != 0;
+}
+
+void window_toggle_input(void)
+{
+    gPrefs.compact_input = !gPrefs.compact_input;
+    prefs_save();
+    gAutoOpen = false;
+    set_compact(gPrefs.compact_input != 0);
+    check_grow();
 }
 
 Boolean window_full_screen(void)
@@ -307,15 +371,14 @@ void window_create(void)
     gWin = GetNewWindow(kMainWindow, NULL, (WindowPtr)-1);
     SetPort(gWin);
     measure_fonts();
+    gCompact = gPrefs.compact_input != 0;
     layout();
     gScrollUPP = NewControlActionUPP(scroll_action);
 
     r = gWin->portRect;
     SetRect(&r, r.right - 16, gTabsRect.bottom - 1, r.right + 1, gTransView.bottom + MARGIN);
     gScroll = NewControl(gWin, &r, "\p", true, 0, 0, 0, scrollBarProc, 0);
-    SetRect(&r, gInputView.right + 8, gInputView.top + 8, gWin->portRect.right - 8,
-            gInputView.top + 28);
-    gSend = NewControl(gWin, &r, "\pSend", true, 0, 0, 1, pushButProc, 0);
+    gSend = NewControl(gWin, &gSendRect, "\pSend", true, 0, 0, 1, pushButProc, 0);
     window_set_send_enabled(false);
     window_set_status("Not connected");
     ShowWindow(gWin);
@@ -376,6 +439,26 @@ static void draw_status(void)
     DrawText(gStatus, 0, (short)strlen(gStatus));
 }
 
+/* The Finder's disclosure triangle: pointing down while the input box is
+   open, right while it is collapsed. */
+static void draw_triangle(void)
+{
+    short i, x = (short)(gTriRect.left + 1), y = (short)(gTriRect.top);
+    EraseRect(&gTriRect);
+    if (gPrefs.compact_input) {
+        for (i = 0; i < 7; i++) {             /* rows 1,2,3,4,3,2,1 wide */
+            short w = (short)(i < 4 ? i : 6 - i);
+            MoveTo((short)(x + 2), (short)(y + i));
+            LineTo((short)(x + 2 + w), (short)(y + i));
+        }
+    } else {
+        for (i = 0; i < 4; i++) {             /* rows 7,5,3,1 wide */
+            MoveTo((short)(x + i), (short)(y + 2 + i));
+            LineTo((short)(x + 6 - i), (short)(y + 2 + i));
+        }
+    }
+}
+
 static void draw_frames(void)
 {
     Rect r = gWin->portRect;
@@ -384,6 +467,7 @@ static void draw_frames(void)
     LineTo(r.right, y1);
     MoveTo(r.left, y2);
     LineTo(r.right, y2);
+    draw_triangle();
 }
 
 static short tab_width(void)
@@ -503,6 +587,7 @@ void window_update(void)
     if (gTrans) {
         TEUpdate(&gTransView, gTrans);
         TEUpdate(&gInputView, gInput);
+        mascot_invalidate();       /* erased above; the next idle draws it */
     } else {
         draw_empty();
     }
@@ -567,6 +652,12 @@ void window_show_tab(Tab *t)
     }
     sync_scrollbar();
     HiliteControl(gScroll, gActive && gTrans ? 0 : 255);
+    if (gAutoOpen && (!gInput || (*gInput)->teLength == 0)) {
+        gAutoOpen = false;
+        set_compact(gPrefs.compact_input != 0);
+    }
+    check_grow();
+    mascot_invalidate();
     InvalRect(&gWin->portRect);
 }
 
@@ -636,6 +727,7 @@ static void trim(Tab *t, long cut, long incoming)
     scrolled = scrolled_px(te);
     TESetSelect(0, cut, te);
     TEDelete(te);
+    pm_cut(&t->marks, cut);
     if (hCut > scrolled)
         hCut = scrolled;
     OffsetRect(&(*te)->destRect, 0, (short)hCut);
@@ -670,6 +762,14 @@ void window_append(Tab *t)
     quiet_begin(te);
     for (i = 0; i < b->nruns; i++) {
         trim_for(t, b->runs[i].len);
+        if (b->runs[i].style == RS_PROMPT) {
+            /* The run may open with the line break that starts its block. */
+            const char *p = b->text + b->runs[i].start;
+            long k = 0;
+            while (k < b->runs[i].len && p[k] == '\r')
+                k++;
+            pm_add(&t->marks, (*te)->teLength + k);
+        }
         insert_run(te, b->text + b->runs[i].start, b->runs[i].len, b->runs[i].style);
     }
     trim_for(t, 0);
@@ -704,6 +804,10 @@ void window_clear_input(void)
     SetPort(gWin);
     TESetSelect(0, 32767, gInput);
     TEDelete(gInput);
+    if (gAutoOpen) {              /* sent: the box collapses again */
+        gAutoOpen = false;
+        set_compact(gPrefs.compact_input != 0);
+    }
 }
 
 static void set_focus(TEHandle te)
@@ -727,6 +831,10 @@ short window_click(EventRecord *ev, Tab **tab)
 
     SetPort(gWin);
     GlobalToLocal(&p);
+    if (PtInRect(p, &gTriRect)) {
+        window_toggle_input();
+        return kClickNone;
+    }
     if (PtInRect(p, &gTabsRect)) {
         for (i = 0; i < tabs_count(); i++) {
             tab_rect(i, &r);
@@ -778,14 +886,266 @@ short window_key(EventRecord *ev)
     set_focus(gInput);
     if (ch != '\b' && (*gInput)->teLength >= INPUT_MAX)
         return kKeyHandled;
+    mascot_erase();               /* it may stand where the text goes */
     TEKey(ch, gInput);
+    check_grow();
     return kKeyHandled;
+}
+
+/* ---- the mascot ----------------------------------------------------------- */
+
+/* While the front tab's turn runs, the Claude mascot walks in the empty
+   input box beside a word, or steps in place beside Send once text is typed.
+   Paced by TickCount from window_idle, so it never holds up the serial pump,
+   and it pauses while a modal dialog runs its own loop. */
+static unsigned short gMRows[MF_COUNT][MASCOT_H];
+static unsigned short gPRows[PF_COUNT][MASCOT_H];
+static Boolean gMReady;
+static Boolean gMDrawn;          /* something of it is on screen */
+static MascotView gMView;
+static Rect gMRect, gWRect;      /* the sprite and the word as drawn */
+static Rect gPRect;              /* the little Mac, in the box only */
+
+static void mascot_erase(void)
+{
+    if (!gMDrawn)
+        return;
+    SetPort(gWin);
+    EraseRect(&gMRect);
+    if (!EmptyRect(&gWRect))
+        EraseRect(&gWRect);
+    if (!EmptyRect(&gPRect))
+        EraseRect(&gPRect);
+    gMDrawn = false;
+}
+
+static void mascot_invalidate(void)
+{
+    gMDrawn = false;
+    gMView.place = MP_HIDDEN;
+}
+
+static void blit16(unsigned short *rows, const Rect *dst)
+{
+    BitMap bm;
+    bm.baseAddr = (Ptr)rows;
+    bm.rowBytes = 2;
+    SetRect(&bm.bounds, 0, 0, MASCOT_W, MASCOT_H);
+    CopyBits(&bm, &gWin->portBits, &bm.bounds, dst, srcCopy, NULL);
+}
+
+static void mascot_sprite(MascotFrame f, const Rect *dst)
+{
+    short r;
+    if (!gMReady) {
+        short k;
+        for (k = 0; k < MF_COUNT; k++)
+            for (r = 0; r < MASCOT_H; r++)
+                gMRows[k][r] = mascot_row((MascotFrame)k, r);
+        for (k = 0; k < PF_COUNT; k++)
+            for (r = 0; r < MASCOT_H; r++)
+                gPRows[k][r] = mascot_prop_row((PropFrame)k, r);
+        gMReady = true;
+    }
+    blit16(gMRows[f], dst);
+}
+
+static void mascot_tick(void)
+{
+    MascotView v;
+    unsigned long now = TickCount();
+    Boolean busy = false, waiting = false;
+    const char *tool = NULL;
+    Rect m, w, pr;
+    short wordW = 0, left, track, mid;
+    GrafPtr save;
+
+    if (gTab && gInput) {
+        busy = gTab->running;
+        waiting = session_tab_waiting(gTab);
+        tool = gTab->last_tool;
+    }
+    mascot_view(now, busy, waiting, gInput && (*gInput)->teLength > 0, tool, &v);
+
+    GetPort(&save);
+    SetPort(gWin);
+    SetRect(&w, 0, 0, 0, 0);
+    SetRect(&pr, 0, 0, 0, 0);
+    if (v.place == MP_SPOT) {
+        m = gSpotRect;
+    } else if (v.place == MP_BOX) {
+        /* The word stays put at the left; the mascot walks to its right. */
+        TextFont(3);
+        TextSize(FONT_SIZE);
+        TextFace(italic);
+        wordW = TextWidth(v.word, 0, (short)strlen(v.word));
+        mid = (short)((gInputView.top + gInputView.bottom) / 2);
+        left = (short)(gInputView.left + 8);
+        SetRect(&w, left, (short)(mid - gLineH / 2), (short)(left + wordW + 1),
+                (short)(mid - gLineH / 2 + gLineH));
+        SetRect(&pr, (short)(gInputView.right - 4 - MASCOT_W), (short)(mid - MASCOT_H / 2),
+                (short)(gInputView.right - 4), (short)(mid - MASCOT_H / 2 + MASCOT_H));
+        left = (short)(w.right + 8);
+        track = (short)(pr.left - 4 - MASCOT_W - left);
+        if (track < 0)            /* too narrow for the Mac: no Mac */
+            SetRect(&pr, 0, 0, 0, 0);
+        if (!waiting)
+            left = (short)(left + mascot_walk_x(now, track));
+        SetRect(&m, left, (short)(mid - MASCOT_H / 2), (short)(left + MASCOT_W),
+                (short)(mid - MASCOT_H / 2 + MASCOT_H));
+    } else {
+        SetRect(&m, 0, 0, 0, 0);
+    }
+
+    if (gMDrawn && v.place == gMView.place && EqualRect(&m, &gMRect)
+            && EqualRect(&w, &gWRect) && EqualRect(&pr, &gPRect)
+            && strcmp(v.word, gMView.word) == 0) {
+        if (v.frame != gMView.frame) {
+            mascot_sprite(v.frame, &m);   /* same place: the new frame covers the old */
+            gMView.frame = v.frame;
+        }
+        if (v.prop != gMView.prop && !EmptyRect(&pr)) {
+            blit16(gPRows[v.prop], &pr);
+            gMView.prop = v.prop;
+        }
+        TextFace(0);
+        SetPort(save);
+        return;
+    }
+    if (gMDrawn || v.place != MP_HIDDEN) {
+        Boolean wordSame = gMDrawn && EqualRect(&w, &gWRect) && strcmp(v.word, gMView.word) == 0;
+        if (gMDrawn) {
+            EraseRect(&gMRect);
+            if (!wordSame && !EmptyRect(&gWRect))
+                EraseRect(&gWRect);
+        }
+        if (gMDrawn && !EmptyRect(&gPRect) && !EqualRect(&pr, &gPRect))
+            EraseRect(&gPRect);
+        if (v.place != MP_HIDDEN) {
+            mascot_sprite(v.frame, &m);
+            if (!EmptyRect(&pr))
+                blit16(gPRows[v.prop], &pr);
+            if (!wordSame && v.word[0]) {
+                MoveTo(w.left, (short)(w.top + gAscent));
+                DrawText(v.word, 0, (short)strlen(v.word));
+            }
+        }
+    }
+    TextFace(0);
+    gMDrawn = v.place != MP_HIDDEN;
+    gMView = v;
+    gMRect = m;
+    gWRect = w;
+    gPRect = pr;
+    SetPort(save);
 }
 
 void window_idle(void)
 {
     if (gActive && gFocus)
         TEIdle(gFocus);
+    if (gWin)
+        mascot_tick();
+}
+
+/* ---- keyboard scrolling ------------------------------------------------- */
+
+/* Every transcript line has the same height (gLineH), so lines and pixels
+   convert by multiplication. */
+static short line_of(TEHandle te, long off)
+{
+    short lo = 0, hi = (short)((*te)->nLines - 1), m;
+    if (hi < 0)
+        return 0;
+    while (lo < hi) {
+        m = (short)((lo + hi + 1) / 2);
+        if ((*te)->lineStarts[m] <= off)
+            lo = m;
+        else
+            hi = (short)(m - 1);
+    }
+    return lo;
+}
+
+void window_jump_prompt(short dir)
+{
+    long px, pos, off, target;
+    short top;
+    if (!gTrans || !gTab) {
+        SysBeep(1);
+        return;
+    }
+    SetPort(gWin);
+    px = scrolled_px(gTrans);
+    top = (short)(px / gLineH);
+    if (top >= (*gTrans)->nLines)
+        top = (short)((*gTrans)->nLines - 1);
+    pos = top >= 0 ? (*gTrans)->lineStarts[top] : 0;
+    off = dir < 0 ? pm_prev(&gTab->marks, pos) : pm_next(&gTab->marks, pos);
+    while (off >= 0) {
+        target = (long)line_of(gTrans, off) * gLineH;
+        if (target > max_scroll_px(gTrans))
+            target = max_scroll_px(gTrans);
+        if (target != px) {
+            scroll_to_px(gTrans, target);
+            return;
+        }
+        /* Near the end a prompt cannot reach the top: try the next one. */
+        off = dir < 0 ? pm_prev(&gTab->marks, off) : pm_next(&gTab->marks, off);
+    }
+    if (dir > 0 && px < max_scroll_px(gTrans))
+        scroll_to_px(gTrans, max_scroll_px(gTrans));
+    else
+        SysBeep(1);
+}
+
+/* The Control key modifier (Multiversal spells it ControlKey, Apple controlKey). */
+#define kControlMask 0x1000
+
+/* Virtual key codes of the extended keyboard's navigation keys. */
+#define kHomeKey     0x73
+#define kPageUpKey   0x74
+#define kEndKey      0x77
+#define kPageDownKey 0x79
+
+Boolean window_scroll_key(EventRecord *ev)
+{
+    char ch = (char)(ev->message & charCodeMask);
+    short code = (short)((ev->message & keyCodeMask) >> 8);
+    short mods = ev->modifiers;
+    Boolean arrow = ch == 0x1E || ch == 0x1F;
+    short dir = ch == 0x1E ? -1 : 1;
+    long page, px;
+
+    if (code == kPageUpKey || code == kPageDownKey || code == kHomeKey || code == kEndKey) {
+        arrow = false;
+    } else if (!arrow || !(mods & (cmdKey | optionKey | kControlMask))) {
+        return false;
+    }
+    if (!gTrans) {
+        SysBeep(1);
+        return true;
+    }
+    SetPort(gWin);
+    page = (gTransView.bottom - gTransView.top) - gLineH;
+    px = scrolled_px(gTrans);
+    if (code == kPageUpKey)
+        scroll_to_px(gTrans, px - page);
+    else if (code == kPageDownKey)
+        scroll_to_px(gTrans, px + page);
+    else if (code == kHomeKey)
+        scroll_to_px(gTrans, 0);
+    else if (code == kEndKey)
+        scroll_to_px(gTrans, max_scroll_px(gTrans));
+    else if ((mods & cmdKey) && (mods & optionKey))
+        scroll_to_px(gTrans, dir < 0 ? 0 : max_scroll_px(gTrans));
+    else if (mods & cmdKey)
+        window_jump_prompt(dir);
+    else if (mods & optionKey)
+        scroll_to_px(gTrans, px + dir * page);
+    else
+        scroll_to_px(gTrans, px + dir * 3L * gLineH);
+    return true;
 }
 
 /* ---- Edit menu ---------------------------------------------------------- */
@@ -825,6 +1185,7 @@ void window_edit(short item)
     if (!gFocus)
         return;
     SetPort(gWin);
+    mascot_erase();
     switch (item) {
     case kCopyItem:
         copy_selection(gFocus);
@@ -838,6 +1199,7 @@ void window_edit(short item)
     case kPasteItem:
         set_focus(gInput);
         paste_text();
+        check_grow();
         break;
     case kClearItem:
         if (gFocus == gInput)
