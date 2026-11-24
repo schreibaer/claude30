@@ -12,10 +12,10 @@ execution: code
 
 ## Goal Capsule
 
-- **Objective:** On the SE/30, the person can hang up and wipe a half-typed prompt from the keyboard, and can give the conversation transcript the full window width once they no longer need its scroll bar.
-- **Means:** A `D` key equivalent on Session > Disconnect (KTD1), a Cmd-Backspace check in the main event loop that empties the front tab's input box (KTD2), and a remembered Settings checkbox that hides the transcript scroll bar and widens the transcript (KTD3, KTD4).
+- **Objective:** On the SE/30, the person can hang up and wipe a half-typed prompt from the keyboard, and can give the conversation transcript nearly the full window width once they no longer need its scroll bar, while still seeing where they are in the text.
+- **Means:** A `D` key equivalent on Session > Disconnect (KTD1), a Cmd-Backspace check in the main event loop that empties the front tab's input box (KTD2), a remembered Settings checkbox that hides the transcript scroll bar and widens the transcript (KTD3, KTD4), and in its place a thin position strip plus a percentage in the status line (KTD5, KTD6).
 - **Product authority:** This Product Contract. PROTOCOL.md v2, the bridge and tty mode are not touched.
-- **Execution profile:** One pull request to `schreibaer/claude30`, client only. Build order U1, U2, U3. Each unit stands alone.
+- **Execution profile:** One pull request to `schreibaer/claude30`, client only. Build order U1, U2, U3, U4. U4 needs U3; the rest stand alone.
 - **Stop conditions:** Stop and ask if Cmd-D turns out to be taken by something not found here, or if rewrapping every tab's transcript when the bar is toggled takes visibly long on the emulator with full 32 KB transcripts.
 - **Who finishes:** An implementing agent builds the app with the shared Retro68 toolchain cache (`tools/setup-retro68.sh`), runs the host tests and the emulator rows below, and refreshes the release files in `/mnt/project-files/release/`. The person checks the hardware rows on the real SE/30.
 - **Open blockers:** None.
@@ -29,7 +29,8 @@ execution: code
 Three small changes to Claude30.
 Cmd-D disconnects, exactly like Session > Disconnect.
 Cmd-Backspace empties the front tab's input box in one keystroke.
-A "Hide scroll bar" checkbox in Settings removes the transcript's scroll bar and lets the transcript text use that width; keyboard scrolling keeps working.
+A "Hide scroll bar" checkbox in Settings removes the transcript's scroll bar and lets the transcript text use most of that width; keyboard scrolling keeps working.
+While the bar is hidden, a 3-pixel strip at the window's right edge shows a black marker for the part of the transcript on screen, and the right end of the status line shows Top, End, or a percentage.
 
 ### Problem Frame
 
@@ -42,6 +43,7 @@ The scroll bar takes 16 of the 512 pixels across the SE/30 screen, and the perso
 - **Cmd-D is free and becomes Disconnect.** No menu item, window, or dialog filter in the client uses Cmd-D today (menus use O W S F E Q Z X C V K . T and 1 to 6; the dialog filters use Y N A and period). Governs R1.
 - **Cmd-Backspace has no undo.** The main window has no Undo today, and the person asked only for the clear. Governs R3.
 - **Only the conversation transcript's bar can be hidden.** File windows keep theirs, because dragging it is how large read-only files load their pieces. Governs R5.
+- **Hiding the bar keeps a quiet position cue.** The person asked for a way to see where they are without the bar: a thin marker for a glance, a percentage for a precise read. Governs R9, R10.
 - **The setting applies at once.** Unlike port and speed, which wait for the next Connect, the bar disappears when the person clicks OK. Governs R6.
 
 ### Requirements
@@ -63,9 +65,15 @@ The scroll bar takes 16 of the 512 pixels across the SE/30 screen, and the perso
 - R7. The choice is remembered across launches; prefs saved by earlier versions load with the bar shown and every other setting kept.
 - R8. With the bar hidden, all transcript scroll keys and the prompt jumps still work.
 
+**Knowing where you are with the bar hidden**
+
+- R9. While the bar is hidden, a strip a few pixels wide along the transcript's right edge shows a solid marker whose top and height match the part of the transcript on screen; it follows every scroll, new text, and trim, and is empty when everything fits.
+- R10. While the bar is hidden, the right end of the status line shows "Top" at the top, "End" at the bottom, and otherwise how far down the transcript the view is as a whole percentage; it shows nothing when everything fits and never covers the status text. With the bar shown, neither cue appears.
+
 ### Scope Boundaries
 
 - Considered and not built: an undo for Cmd-Backspace. The main window has no undo machinery, and a one-step stash adds state for a keystroke the person chose on purpose. Revisit if the person reports losing prompts by accident.
+- Considered and not built: clicking or dragging the position strip. It is a passive cue; the person can bring the bar back for mouse scrolling.
 - Considered and not built: Cmd-Backspace in file windows. The request names the input box; in a file window the key keeps doing nothing.
 - Considered and not built: a Cmd-D "Don't Save" button in the Save Changes alert. That alert is a plain `CautionAlert` with no key filter, so the classic convention is not there to clash with.
 
@@ -78,9 +86,12 @@ The scroll bar takes 16 of the 512 pixels across the SE/30 screen, and the perso
 - KTD1. **Add `D` to the Disconnect item in the `MENU` resource and nothing else.** `do_key` in `client/src/mac/main.c` already sends every Cmd key through `adjust_menus` and `MenuKey`, so the enable rule in `adjust_menus` (`s != ST_IDLE && s != ST_HANGUP`) gives R2 for free, and the existing `disconnect()` keeps its unsaved-files check. Menu keys work in full screen, where the menu bar is hidden.
 - KTD2. **Catch Cmd-Backspace in `do_key` before the menu branch, only when the main window is in front.** Match the character code `0x08` or the ADB key code `0x33`, so the check holds whatever keyboard layout the KCHR maps under Cmd. It calls a new `window.c` function that focuses the input record, erases the mascot (it may stand on the text), and deletes all text the same way `window_clear_input` does, including collapsing an auto-opened compact box. `window_scroll_key` runs first but ignores this key, because it only takes arrows and the navigation key codes.
 - KTD3. **Prefs version 4 appends `short hide_scrollbar` to `Prefs`.** `prefs_load` gains a version 3 branch that copies up to `offsetof(Prefs, hide_scrollbar)` and sets the new field to 0, mirroring the existing version 2 branch. The value is normalised to 0 or 1 on load like `compact_input`.
-- KTD4. **Hidden means `HideControl` plus a wider transcript view, done in `layout` and `relayout`.** `layout()` drops the 16-pixel reserve from `gTransView.right` when the pref is set. `relayout()` shows or hides `gScroll` and refits every tab with `fit_tab`, which already keeps each tab's scroll place and rewraps with `TECalText` (the same path Compact Input and Full Screen use). `window_create` makes the control with its visible flag set from the pref. The scroll code keeps updating the hidden control; `FindControl` ignores invisible controls, so no click can reach it. A new exported call (for example `window_prefs_changed`) runs `relayout` only when the value changed, and `main.c` calls it after `prefs_dialog()` returns true.
+- KTD4. **Hidden means `HideControl` plus a wider transcript view, done in `layout` and `relayout`.** `layout()` shrinks the 16-pixel reserve to the 4 pixels the position strip needs (KTD5) when the pref is set, so the text gains 12 pixels. `relayout()` shows or hides `gScroll` and refits every tab with `fit_tab`, which already keeps each tab's scroll place and rewraps with `TECalText` (the same path Compact Input and Full Screen use). `window_create` makes the control with its visible flag set from the pref. The scroll code keeps updating the hidden control; `FindControl` ignores invisible controls, so no click can reach it. A new exported call (for example `window_prefs_changed`) runs `relayout` only when the value changed, and `main.c` calls it after `prefs_dialog()` returns true.
 
-Toolbox calls relied on: Menu Manager (`MenuKey`, key equivalents in `MENU`), TextEdit (`TESetSelect`, `TEDelete`), Control Manager (`HideControl`, `ShowControl`, `FindControl`, `GetControlValue`/`SetControlValue`), Dialog Manager (`GetDialogItem`, check box value through `SetControlValue`), Resource Manager for the prefs. All are in System 6 and 7; nothing needs a newer System or more memory.
+- KTD5. **The position strip is drawn by hand, not a Control.** A 3-pixel-wide rect (`gPosRect`, set in `layout`) at the window's right edge, from the tab strip to the transcript's bottom rule, framed by a 1-pixel line on its left. The marker's top is `scrolled_px / text_height` of the strip and its height is `view height / text_height`, at least 6 pixels. It is redrawn from `sync_scrollbar`, which every scroll, append, trim, tab switch and relayout already calls, by erasing the old marker rect and painting the new one only when either changed, so streaming text at 57,600 baud adds two small rect fills at most per update. `window_update` draws it too. All arithmetic is in `long`, since transcripts reach 32 KB of text and many thousands of pixels.
+- KTD6. **The percentage lives at the right end of the status line.** `draw_status` reserves a right-aligned field about 30 pixels wide while the bar is hidden: "Top" when `scrolled_px` is 0, "End" when `at_bottom`, otherwise `scrolled_px * 100 / max_scroll_px` clamped to 1 to 99 and followed by "%". The status text is clipped (`TruncText`) to the remaining width. `sync_scrollbar` redraws only the field, and only when its text changed. The value describes the text in memory; prompts already trimmed to the log file are not counted, the same limit the prompt jumps have.
+
+Toolbox calls relied on: Menu Manager (`MenuKey`, key equivalents in `MENU`), TextEdit (`TESetSelect`, `TEDelete`), Control Manager (`HideControl`, `ShowControl`, `FindControl`, `GetControlValue`/`SetControlValue`), QuickDraw (`FrameRect`/`PaintRect`/`EraseRect`, `StringWidth`), Text Utilities (`TruncText`), Dialog Manager (`GetDialogItem`, check box value through `SetControlValue`), Resource Manager for the prefs. All are in System 6 and 7; nothing needs a newer System or more memory.
 
 ### Assumptions
 
@@ -154,6 +165,31 @@ Toolbox calls relied on: Menu Manager (`MenuKey`, key equivalents in `MENU`), Te
   - File windows still show their own scroll bars in both states.
 - **Verification:** Emulator rows E4 to E6 pass.
 
+### U4. Position strip and percentage while the bar is hidden
+
+- **Goal:** With the bar hidden, the person can still see where they are in the transcript.
+- **Requirements:** R9, R10.
+- **Dependencies:** U3.
+- **Files:** `client/src/mac/window.c`, `client/README.md`.
+- **Approach:**
+  1. Add `gPosRect` to `layout()` and the 4-pixel reserve (KTD4, KTD5).
+  2. Add a strip-drawing routine that remembers the last marker rect, called from `sync_scrollbar` and `window_update`; erase the strip when the bar is shown again.
+  3. Add the right-aligned field to `draw_status` with its own last-text cache (KTD6), redrawn from `sync_scrollbar`.
+  4. README: one sentence on the strip and the percentage under "Moving around the transcript".
+- **Patterns to follow:** `draw_triangle` and `draw_frames` for small hand-drawn shapes; `window_set_status`'s compare-before-redraw.
+- **Test scenarios:**
+  - A transcript that fits the view: the strip is empty and the status line has no percentage.
+  - At the top of a long transcript: the marker touches the strip's top and the status reads "Top".
+  - Halfway down: the marker sits near the middle and the status reads close to 50%.
+  - At the end, then a streamed reply arrives: the marker stays at the bottom, shrinks as text grows, and the status keeps reading "End".
+  - A very long transcript: the marker is never thinner than 6 pixels.
+  - After a trim to the log: the marker and percentage jump to match the shorter text without leftover pixels.
+  - Switch tabs: both cues show the new tab's position at once.
+  - A long status message (for example a redial note): it is cut before the percentage and the two never overlap.
+  - Bar shown again: the strip and percentage disappear and the status line uses its full width.
+  - Burst output at 57,600 baud with the bar hidden: no line-noise markers that the build with the bar shown does not also show.
+- **Verification:** Emulator rows E7 and E8 pass.
+
 ---
 
 ## Verification Contract
@@ -167,12 +203,14 @@ Toolbox calls relied on: Menu Manager (`MenuKey`, key equivalents in `MENU`), Te
   - E4. Toggle the checkbox on and off with two tabs open, one scrolled to the middle and one at the bottom; check positions, thumb and rewrap.
   - E5. Relaunch with the bar hidden, and launch with a version 3 prefs file saved by the current release build.
   - E6. With the bar hidden, run every key in the "Moving around the transcript" table and toggle Full Screen and Compact Input.
-- **Hardware rows (the person):** Cmd-D and Cmd-Backspace on the real ADB keyboard, and the hidden bar on the SE/30 screen.
+  - E7. Every U4 test scenario except the burst one.
+  - E8. Send `burst` with the bar hidden: no line-noise markers that the same burst with the bar shown does not also show.
+- **Hardware rows (the person):** Cmd-D and Cmd-Backspace on the real ADB keyboard, and the hidden bar, position strip and percentage on the SE/30 screen.
 
 ## Definition of Done
 
-- R1 to R8 hold, shown by the emulator rows above.
-- U1 to U3 are merged in one pull request, and `/mnt/project-files/release/Claude30.bin` and `Claude30.dsk` are rebuilt from it.
+- R1 to R10 hold, shown by the emulator rows above.
+- U1 to U4 are merged in one pull request, and `/mnt/project-files/release/Claude30.bin` and `Claude30.dsk` are rebuilt from it.
 - `client/README.md` describes the new keys and the setting.
 - No bridge, PROTOCOL.md or tty-mode changes are in the diff, and no abandoned or debug code remains.
 
@@ -180,3 +218,4 @@ Toolbox calls relied on: Menu Manager (`MenuKey`, key equivalents in `MENU`), Te
 
 - The exact name of the new `window.c` functions.
 - The final pixel positions of the checkbox and the moved buttons in the Settings dialog.
+- Whether the strip reads better with a gray (50% pattern) track behind the black marker; decide on screen at 1 bit.
