@@ -8,6 +8,7 @@
 #   tools/setup-retro68.sh              # install (unpack or build), then print the cmake line
 #   tools/setup-retro68.sh --rebuild    # ignore the cache, build from source and refresh the cache
 #   tools/setup-retro68.sh --no-save    # build if needed but don't write to the cache
+#   tools/setup-retro68.sh --resume     # after a failed build: keep the built gcc, redo the rest
 #
 # Settings (environment):
 #   RETRO68_PREFIX     where the toolchain goes      (default /opt/Retro68-build)
@@ -33,16 +34,20 @@ SRC=${RETRO68_SRC:-$PREFIX-src}
 # Packages needed to run the toolchain, and the extra ones needed to build it.
 RUN_PKGS=(cmake make python3 libgmp10 libmpfr6 libmpc3 zlib1g
           libboost-filesystem-dev libboost-program-options-dev libboost-wave-dev libboost-thread-dev)
+# Retro68's own tests need more of boost than the toolchain does, so the
+# build uses libboost-all-dev as Retro68's README suggests.
 BUILD_PKGS=(git gcc g++ bison flex texinfo ruby libgmp-dev libmpfr-dev libmpc-dev zlib1g-dev
-            libboost-system-dev libboost-log-dev)
+            libboost-all-dev)
 
 rebuild=0
 save=1
+resume=0
 for arg in "$@"; do
   case $arg in
     --rebuild) rebuild=1 ;;
     --no-save) save=0 ;;
-    -h|--help) sed -n '2,22p' "$0"; exit 0 ;;
+    --resume) resume=1; rebuild=1 ;;
+    -h|--help) sed -n '2,23p' "$0"; exit 0 ;;
     *) echo "unknown option: $arg" >&2; exit 2 ;;
   esac
 done
@@ -128,10 +133,15 @@ git -C "$SRC" checkout --quiet --force "$RETRO68_COMMIT"
 git -C "$SRC" submodule update --init --recursive --quiet
 
 log "Building the 68k toolchain in $PREFIX"
-rm -rf "$PREFIX"
-mkdir -p "$PREFIX"
+build_opts=(--no-ppc --no-carbon --multiversal)
+if [ $resume -eq 1 ] && [ -d "$PREFIX/gcc-build" ]; then
+  build_opts+=(--skip-thirdparty)
+else
+  rm -rf "$PREFIX"
+  mkdir -p "$PREFIX"
+fi
 started=$(date +%s)
-( cd "$PREFIX" && "$SRC/build-toolchain.bash" --no-ppc --no-carbon --multiversal )
+( cd "$PREFIX" && "$SRC/build-toolchain.bash" "${build_opts[@]}" )
 echo "$RETRO68_COMMIT" > "$stamp"
 minutes=$(( ($(date +%s) - started) / 60 ))
 
