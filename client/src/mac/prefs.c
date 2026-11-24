@@ -17,6 +17,7 @@ static const unsigned char kPrefsName[] = "\pClaude30 Prefs";
 #define PREFS_V1_SIZE (3 * sizeof(short) + sizeof(Str63))
 #define PREFS_V2_SIZE ((long)offsetof(Prefs, compact_input))
 #define PREFS_V3_SIZE ((long)offsetof(Prefs, hide_scrollbar))
+#define PREFS_V4_SIZE ((long)offsetof(Prefs, tokens))
 
 /* Folder Manager selectors; Multiversal has FindFolder but not these names. */
 #define kOnSystemDiskVol  ((short)0x8000)
@@ -59,6 +60,8 @@ void prefs_load(void)
         short i;
         if (((Prefs *)*h)->version == PREFS_VERSION && GetHandleSize(h) == sizeof(Prefs)) {
             memcpy(&gPrefs, *h, sizeof(Prefs));
+        } else if (((Prefs *)*h)->version == 4 && GetHandleSize(h) >= PREFS_V4_SIZE) {
+            memcpy(&gPrefs, *h, PREFS_V4_SIZE);   /* version 4: no resume tokens */
         } else if (((Prefs *)*h)->version == 3 && GetHandleSize(h) >= PREFS_V3_SIZE) {
             memcpy(&gPrefs, *h, PREFS_V3_SIZE);   /* version 3: scroll bar shown */
             gPrefs.hide_scrollbar = 0;
@@ -75,6 +78,8 @@ void prefs_load(void)
         for (i = 0; i < gPrefs.ntabs; i++)
             if (gPrefs.tabs[i][0] > 63)
                 gPrefs.tabs[i][0] = 63;
+        for (i = 0; i < PREFS_TABS; i++)
+            gPrefs.tokens[i][16] = 0;
         if (gPrefs.speed < kSpeed57600 || gPrefs.speed > kSpeed19200)
             gPrefs.speed = kSpeed57600;
         if (gPrefs.port != kPortPrinter)
@@ -122,23 +127,31 @@ void prefs_save(void)
     UseResFile(saved);
 }
 
-void prefs_set_tabs(const char *const *names, short n)
+void prefs_set_tabs(const char *const *names, const char *const *tokens, short n)
 {
     Str63 tabs[PREFS_TABS];
+    char toks[PREFS_TABS][17];
     short i, k;
     if (n > PREFS_TABS)
         n = PREFS_TABS;
     memset(tabs, 0, sizeof(tabs));
+    memset(toks, 0, sizeof(toks));
     for (i = 0; i < n; i++) {
         k = (short)strlen(names[i]);
         if (k > 63)
             k = 63;
         tabs[i][0] = (unsigned char)k;
         memcpy(tabs[i] + 1, names[i], k);
+        k = (short)strlen(tokens[i]);
+        if (k > 16)
+            k = 16;
+        memcpy(toks[i], tokens[i], k);
     }
-    if (n == gPrefs.ntabs && memcmp(tabs, gPrefs.tabs, sizeof(tabs)) == 0)
+    if (n == gPrefs.ntabs && memcmp(tabs, gPrefs.tabs, sizeof(tabs)) == 0
+            && memcmp(toks, gPrefs.tokens, sizeof(toks)) == 0)
         return;                  /* unchanged: no disk write */
     memcpy(gPrefs.tabs, tabs, sizeof(tabs));
+    memcpy(gPrefs.tokens, toks, sizeof(toks));
     gPrefs.ntabs = n;
     prefs_save();
 }

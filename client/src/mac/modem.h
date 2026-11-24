@@ -32,6 +32,8 @@ void session_deferred(void);
 
 Proto *session_proto(void);
 LinkState session_link_state(void);
+/* A lost link is waiting to be redialed, or being redialed. Disconnect cancels it. */
+Boolean session_redial_pending(void);
 Boolean session_online(void);    /* a call is up or being set up */
 /* The tab's session takes prompts and file requests. */
 Boolean session_tab_ready(const Tab *t);
