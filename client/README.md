@@ -86,7 +86,7 @@ If the link drops, an alert offers **Redial**. A redial reopens every tab in the
 
 ### Moving around the transcript
 
-You never need the scroll bar. These keys work whether you are typing in the input box or have clicked in the transcript; plain arrow keys still move the cursor in the input box.
+You never need the scroll bar; **Edit > Settings…** has a **Hide scroll bar** box that removes it and gives the transcript the width. These keys work whether you are typing in the input box or have clicked in the transcript; plain arrow keys still move the cursor in the input box.
 
 | Keys | Moves the transcript |
 |---|---|

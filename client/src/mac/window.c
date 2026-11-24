@@ -86,6 +86,9 @@ static void measure_fonts(void)
 /* ---- layout ------------------------------------------------------------- */
 
 #define COMPACT_H    24     /* the input band when collapsed to one line */
+#define BAR_W        16     /* the transcript scroll bar's width, less its overlap */
+
+static Boolean gBarHidden;       /* Settings > Hide scroll bar */
 
 static void layout(void)
 {
@@ -94,7 +97,9 @@ static void layout(void)
     short inputTop = gCompact ? statusTop - COMPACT_H : statusTop - (gLineH * 5 + 8);
 
     SetRect(&gTabsRect, r.left, r.top, r.right, r.top + TAB_H);
-    SetRect(&gTransView, r.left + MARGIN, gTabsRect.bottom + MARGIN, r.right - 16 - MARGIN,
+    short reserve = gBarHidden ? 0 : BAR_W;
+
+    SetRect(&gTransView, r.left + MARGIN, gTabsRect.bottom + MARGIN, r.right - reserve - MARGIN,
             inputTop - MARGIN);
     SetRect(&gStatusRect, r.left + MARGIN, statusTop + 2, r.right - MARGIN, r.bottom - 1);
     SetRect(&gTriRect, r.left + 2, inputTop - 4, r.left + 12, inputTop + 4);
@@ -272,6 +277,10 @@ static void relayout(void)
         TESelView(gInput);
 
     r = gWin->portRect;
+    if (gBarHidden)
+        HideControl(gScroll);
+    else
+        ShowControl(gScroll);
     MoveControl(gScroll, r.right - 16, gTabsRect.bottom - 1);
     SizeControl(gScroll, 17, (short)(gTransView.bottom + MARGIN - gTabsRect.bottom + 1));
     MoveControl(gSend, gSendRect.left, gSendRect.top);
@@ -279,6 +288,15 @@ static void relayout(void)
     sync_scrollbar();
     mascot_invalidate();
     InvalRect(&gWin->portRect);
+}
+
+void window_prefs_changed(void)
+{
+    if ((gPrefs.hide_scrollbar != 0) == gBarHidden)
+        return;
+    gBarHidden = !gBarHidden;
+    SetPort(gWin);
+    relayout();
 }
 
 /* ---- collapsing the input box -------------------------------------------- */
@@ -372,12 +390,13 @@ void window_create(void)
     SetPort(gWin);
     measure_fonts();
     gCompact = gPrefs.compact_input != 0;
+    gBarHidden = gPrefs.hide_scrollbar != 0;
     layout();
     gScrollUPP = NewControlActionUPP(scroll_action);
 
     r = gWin->portRect;
     SetRect(&r, r.right - 16, gTabsRect.bottom - 1, r.right + 1, gTransView.bottom + MARGIN);
-    gScroll = NewControl(gWin, &r, "\p", true, 0, 0, 0, scrollBarProc, 0);
+    gScroll = NewControl(gWin, &r, "\p", !gBarHidden, 0, 0, 0, scrollBarProc, 0);
     gSend = NewControl(gWin, &gSendRect, "\pSend", true, 0, 0, 1, pushButProc, 0);
     window_set_send_enabled(false);
     window_set_status("Not connected");

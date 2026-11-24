@@ -1,7 +1,7 @@
 /* Settings: port, speed, dial string and the open tabs' projects (in strip
    order), kept in a PREF resource in "Claude30 Prefs" in the Preferences
    folder. Version 1 prefs load with no remembered tabs, version 2 with
-   the input box expanded.
+   the input box expanded, version 3 with the scroll bar shown.
    Toolbox: Folder Manager (FindFolder), File Manager (FSMakeFSSpec),
    Resource Manager (FSpCreateResFile, FSpOpenResFile, Get1Resource,
    AddResource, ChangedResource, UpdateResFile), Dialog Manager. */
@@ -10,7 +10,7 @@
 
 #include <MacTypes.h>
 
-#define PREFS_VERSION 3
+#define PREFS_VERSION 4
 #define PREFS_TABS    6
 
 typedef struct {
@@ -21,6 +21,7 @@ typedef struct {
     short ntabs;       /* remembered tabs */
     Str63 tabs[PREFS_TABS];  /* their project names, in strip order */
     short compact_input;     /* the input box is collapsed to one line */
+    short hide_scrollbar;    /* the transcript has no scroll bar */
 } Prefs;
 
 extern Prefs gPrefs;

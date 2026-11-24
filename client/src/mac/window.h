@@ -70,6 +70,10 @@ void window_erase_input(void);
 void window_toggle_input(void);
 Boolean window_input_compact(void);
 
+/* Applies Settings changes that affect the window: hiding or showing the
+   transcript scroll bar, which also widens or narrows the transcript. */
+void window_prefs_changed(void);
+
 /* Scrolls the front tab's transcript to the previous (dir < 0) or next
    prompt; past the last prompt, to the end. Beeps when there is none. */
 void window_jump_prompt(short dir);

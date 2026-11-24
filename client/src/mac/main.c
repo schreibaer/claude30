@@ -279,9 +279,10 @@ static void do_menu(long choice)
         break;
     case kEditMenu:
         if (!SystemEdit(item - 1)) {
-            if (item == kSettingsItem)
-                prefs_dialog();
-            else if (filewin_is(front))
+            if (item == kSettingsItem) {
+                if (prefs_dialog())
+                    window_prefs_changed();
+            } else if (filewin_is(front))
                 filewin_edit(front, item);
             else
                 window_edit(item);
