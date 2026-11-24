@@ -154,6 +154,7 @@ static void adjust_menus(void)
     enable(gFile, file_item(kRevertItem), fw && filewin_can_revert(front));
     enable(gFile, file_item(kFullScreenItem), filewin_count() == 0);
     CheckItem(gFile, file_item(kCompactItem), window_input_compact());
+    enable(gFile, file_item(kQuitItem), true);
 
     enable(gSession, kConnectItem, s == ST_IDLE);
     enable(gSession, kDisconnectItem, s != ST_IDLE && s != ST_HANGUP);
