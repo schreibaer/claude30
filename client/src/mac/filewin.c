@@ -126,6 +126,8 @@ static void plain_reason(const char *t, long n, char *out, short max)
         strcpy(out, "The text is too big to save.");
     else if (starts(t, n, "damaged"))
         strcpy(out, "The text arrived damaged, so nothing was written. Try again.");
+    else if (starts(t, n, "control"))
+        strcpy(out, "The text holds control characters, so nothing was written.");
     else if (starts(t, n, "busy"))
         strcpy(out, "The bridge is busy with other saves. Try again.");
     else if (starts(t, n, "files off"))
@@ -279,8 +281,11 @@ static void ro_set_top(FileWin *f, long line)
     if (line < 0)
         line = 0;
     f->top = line;
+    /* The top line being loaded is enough: the edge fetches below fill
+       the rest of the view. (Asking for the whole view could never be met
+       when long lines fill the byte budget of a piece.) */
     if (line >= f->slice_first
-            && (line + visible_lines(f) <= f->slice_first + f->slice_n
+            && (line < f->slice_first + f->slice_n
                 || f->slice_first + f->slice_n >= f->total)) {
         scroll_px_to(f, (line - f->slice_first) * f->line_h);
         if (f->fetch == FETCH_NONE && f->xfer < 0) {
@@ -304,7 +309,7 @@ static void ro_set_top(FileWin *f, long line)
                 proto_xfer_cancel(session_proto(), f->xfer);
                 f->xfer = -1;
             }
-            request_piece(f, line > 40 ? line - 40 : 0, 200, FETCH_REPLACE);
+            request_piece(f, line, 200, FETCH_REPLACE);   /* starts at the target */
         }
         snprintf(s, sizeof(s), "Loading line %ld\xC9", line + 1);
         strcpy(f->status, s);
@@ -852,6 +857,13 @@ void filewin_key(WindowPtr w, EventRecord *ev)
             SysBeep(1);
         return;
     }
+    if (ch == 3)
+        ch = '\r';              /* keypad Enter */
+    if (!arrow && ch != '\b' && ch != '\t' && ch != '\r'
+            && ((unsigned char)ch < 0x20 || ch == 0x7F)) {
+        SysBeep(1);             /* Home, PgDn, Help, Del... would land in the file */
+        return;
+    }
     if (!arrow && ch != '\b' && (*f->te)->teLength - ((*f->te)->selEnd - (*f->te)->selStart)
             >= TEXT_LIMIT) {
         SysBeep(1);
@@ -1258,6 +1270,20 @@ void filewin_edit(WindowPtr w, short item)
         }
         TEDelete(f->te);
         HLock(h);
+        {
+            /* No control characters into a host file: LF becomes CR, the
+               rest are dropped (the bridge refuses them on save). */
+            char *c = *h;
+            long i, k = 0;
+            for (i = 0; i < len; i++) {
+                unsigned char b = (unsigned char)c[i];
+                if (b == '\n')
+                    b = '\r';
+                if (b >= 0x20 ? b != 0x7F : (b == '\t' || b == '\r'))
+                    c[k++] = (char)b;
+            }
+            len = k;
+        }
         TEInsert(*h, len, f->te);
         DisposeHandle(h);
         break;
