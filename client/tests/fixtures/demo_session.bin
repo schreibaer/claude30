@@ -1,0 +1,72 @@
+se30bridge (demo) - /home/user/claude30/client/tests/fixtures
+Ready.
+Type /help for commands.
+> 
+> #HELLO SE30 1
+#OK se30bridge 1
+>
+>
+T You said: Òhello
+T thereÓ Ñ this is demo mode, no tokens spent.
+U Read src/parser.py
+T HereÕs a long paragraph to check word wrapping on a narrow screen. The SE/30 has a 512x342 pixel display, which in Monaco 9 gives roughly 80 columns by 24 rows -> plenty for a conversation if lines
++ wrap nicely.
+T
+T Some list items:
+T - first item, which is deliberately long enough that it has to wrap onto a second line with a hanging indent
+W
+T - second item v
+T
+C[
+C def parse(s):
+C     return [t for t in s.split() if t]  # a fairly long comment that goes past the edge of the screen
+C]
+T Box drawing: +--+ |ok| +--+  emoji: 
+T Pager test line 1 of 30.
+W
+T Pager test line 2 of 30.
+T Pager test line 3 of 30.
+T Pager test line 4 of 30.
+T Pager test line 5 of 30.
+T Pager test line 6 of 30.
+T Pager test line 7 of 30.
+T Pager test line 8 of 30.
+T Pager test line 9 of 30.
+W
+T Pager test line 10 of 30.
+T Pager test line 11 of 30.
+T Pager test line 12 of 30.
+T Pager test line 13 of 30.
+T Pager test line 14 of 30.
+T Pager test line 15 of 30.
+T Pager test line 16 of 30.
+T Pager test line 17 of 30.
+W
+T Pager test line 18 of 30.
+T Pager test line 19 of 30.
+T Pager test line 20 of 30.
+T Pager test line 21 of 30.
+T Pager test line 22 of 30.
+T Pager test line 23 of 30.
+T Pager test line 24 of 30.
+T Pager test line 25 of 30.
+W
+T Pager test line 26 of 30.
+T Pager test line 27 of 30.
+T Pager test line 28 of 30.
+T Pager test line 29 of 30.
+T Pager test line 30 of 30.
+Q 1 Edit src/parser.py
+D[
+D @@ -1,2 +1,2 @@
+W
+D  def parse(s):
+D -    return s.split()
+D +    return [t for t in s.split() if t]
+D]
+? 1
+U Edit src/parser.py (allowed)
+R success $0.0000
+>
+I Bye.
+W
