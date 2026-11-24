@@ -821,6 +821,18 @@ static void set_focus(TEHandle te)
         TEActivate(gFocus);
 }
 
+void window_erase_input(void)
+{
+    if (!gInput) {
+        SysBeep(1);
+        return;
+    }
+    SetPort(gWin);
+    set_focus(gInput);
+    mascot_erase();               /* it may stand on the text */
+    window_clear_input();
+}
+
 short window_click(EventRecord *ev, Tab **tab)
 {
     Point p = ev->where;

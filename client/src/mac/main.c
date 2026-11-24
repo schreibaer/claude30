@@ -348,6 +348,9 @@ static void do_mouse(EventRecord *ev)
     }
 }
 
+/* Virtual key code of the Delete (Backspace) key. */
+#define kDeleteKeyCode 0x33
+
 static void do_key(EventRecord *ev)
 {
     char ch = (char)(ev->message & charCodeMask);
@@ -355,6 +358,13 @@ static void do_key(EventRecord *ev)
     /* Transcript scroll keys, before the menus and the input box see them. */
     if (front == window_ptr() && window_scroll_key(ev))
         return;
+    /* Cmd-Backspace empties the input box. Match the Delete key's code too,
+       in case a keyboard layout maps it to another character under Cmd. */
+    if ((ev->modifiers & cmdKey) && front == window_ptr()
+        && (ch == '\b' || ((ev->message & keyCodeMask) >> 8) == kDeleteKeyCode)) {
+        window_erase_input();
+        return;
+    }
     if (ev->modifiers & cmdKey) {
         if (ch == '.') {
             session_stop();          /* always the front tab, from any window */

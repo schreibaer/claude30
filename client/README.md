@@ -44,6 +44,7 @@ The build makes two release files:
 3. The first time, a list of the host's projects opens. Pick one and click **Open**. It opens in a tab named after the project.
 4. Type a prompt and press **Return**, or click **Send**.
    - **Option-Return** starts a new line in the same prompt.
+   - **Cmd-Backspace** empties the input box in one go. It can't be undone.
    - Bridge commands such as `/new` and `/edits on` work as typed, and affect only that tab's conversation. `/quit` closes the tab.
 5. While Claude works, the status line shows the tool in use.
    - **Cmd-period** (Session > Stop) interrupts Claude in the front tab, and the transcript marks the turn "Interrupted".

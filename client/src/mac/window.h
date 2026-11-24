@@ -60,6 +60,9 @@ void window_set_send_enabled(Boolean on);
 /* The front tab's input text; valid until the next call that changes it. */
 Handle window_input_text(long *len);
 void window_clear_input(void);
+/* Cmd-Backspace: empties the front tab's input box and puts the caret in
+   it. Beeps when no tab is open. There is no undo. */
+void window_erase_input(void);
 
 /* Collapses the input box to one line, or opens it again (remembered in
    the prefs). A collapsed box opens by itself while a prompt needs more than
