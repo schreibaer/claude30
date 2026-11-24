@@ -102,10 +102,9 @@ static void layout(void)
     Rect r = gWin->portRect;
     short statusTop = r.bottom - (gLineH + 5);
     short inputTop = gCompact ? statusTop - COMPACT_H : statusTop - (gLineH * 5 + 8);
-
-    SetRect(&gTabsRect, r.left, r.top, r.right, r.top + TAB_H);
     short reserve = gBarHidden ? POS_W : BAR_W;
 
+    SetRect(&gTabsRect, r.left, r.top, r.right, r.top + TAB_H);
     SetRect(&gTransView, r.left + MARGIN, gTabsRect.bottom + MARGIN, r.right - reserve - MARGIN,
             inputTop - MARGIN);
     SetRect(&gPosRect, r.right - POS_W + 1, gTabsRect.bottom, r.right, gTransView.bottom + MARGIN);
@@ -174,23 +173,34 @@ static long max_scroll_px(TEHandle te)
     return m > 0 ? m : 0;
 }
 
-static Boolean at_bottom(TEHandle te);
-static void draw_status(void);
+static void draw_status_pos(const char *pos);
 
 /* ---- position cues while the scroll bar is hidden ---------------------- */
 
+/* The transcript's full height for the cues, or 0 while the bar is shown.
+   TEGetHeight walks every line, so callers measure once and pass it on. */
+static long pos_total(void)
+{
+    return gBarHidden && gTrans ? text_height(gTrans) : 0;
+}
+
+static long view_height(void)
+{
+    return (*gTrans)->viewRect.bottom - (*gTrans)->viewRect.top;
+}
+
 /* The status line's position field: "Top", "End" or a percentage, empty
    while the bar is shown or the whole transcript fits. */
-static void pos_text(char *out)
+static void pos_text(char *out, long total)
 {
     long maxpx, px, pct;
     out[0] = 0;
-    if (!gBarHidden || !gTrans || (maxpx = max_scroll_px(gTrans)) <= 0)
+    if (total <= 0 || (maxpx = total - view_height()) <= 0)
         return;
     px = scrolled_px(gTrans);
     if (px <= 0) {
         strcpy(out, "Top");
-    } else if (at_bottom(gTrans)) {
+    } else if (px + SCROLL_UNIT >= maxpx) {
         strcpy(out, "End");
     } else {
         pct = px * 100 / maxpx;
@@ -207,14 +217,12 @@ static void pos_text(char *out)
 }
 
 /* The strip's marker covers the share of the transcript that is on screen. */
-static void marker_rect(Rect *m)
+static void marker_rect(Rect *m, long total)
 {
-    long total, view, h, top, stripH = gPosRect.bottom - gPosRect.top;
+    long view, h, top, stripH = gPosRect.bottom - gPosRect.top;
     SetRect(m, 0, 0, 0, 0);
-    if (!gBarHidden || !gTrans || max_scroll_px(gTrans) <= 0)
+    if (total <= 0 || total <= (view = view_height()))
         return;
-    total = text_height(gTrans);
-    view = (*gTrans)->viewRect.bottom - (*gTrans)->viewRect.top;
     top = scrolled_px(gTrans) * stripH / total;
     h = view * stripH / total;
     if (h < POS_MIN_H)
@@ -228,12 +236,12 @@ static void marker_rect(Rect *m)
 }
 
 /* Draws the strip; with force the rule and track too, else only a moved marker. */
-static void draw_strip(Boolean force)
+static void draw_strip(Boolean force, long total)
 {
     Rect m;
     if (!gBarHidden)
         return;
-    marker_rect(&m);
+    marker_rect(&m, total);
     if (!force && EqualRect(&m, &gMarkRect))
         return;
     SetPort(gWin);
@@ -252,12 +260,14 @@ static void draw_strip(Boolean force)
 static void sync_position(void)
 {
     char t[sizeof(gPosText)];
-    if (!gWin)
+    long total;
+    if (!gWin || !gBarHidden)
         return;
-    draw_strip(false);
-    pos_text(t);
+    total = pos_total();
+    draw_strip(false, total);
+    pos_text(t, total);
     if (strcmp(t, gPosText) != 0)
-        draw_status();
+        draw_status_pos(t);
 }
 
 static void sync_scrollbar(void)
@@ -544,7 +554,8 @@ Boolean window_transcript_empty(Tab *t)
 
 /* ---- drawing ------------------------------------------------------------ */
 
-static void draw_status(void)
+/* Draws the status text with pos, the position field, at its right end. */
+static void draw_status_pos(const char *pos)
 {
     short len = (short)strlen(gStatus), room = gStatusRect.right - gStatusRect.left - 4;
     short y = gStatusRect.top + gAscent + 1;
@@ -553,7 +564,7 @@ static void draw_status(void)
     TextFont(3);
     TextSize(FONT_SIZE);
     TextFace(0);
-    pos_text(gPosText);
+    strcpy(gPosText, pos);
     if (gPosText[0]) {
         short w = TextWidth(gPosText, 0, (short)strlen(gPosText));
         MoveTo((short)(gStatusRect.right - 2 - w), y);
@@ -564,6 +575,13 @@ static void draw_status(void)
     }
     MoveTo(gStatusRect.left + 2, y);
     DrawText(gStatus, 0, len);
+}
+
+static void draw_status(void)
+{
+    char pos[sizeof(gPosText)];
+    pos_text(pos, pos_total());
+    draw_status_pos(pos);
 }
 
 /* The Finder's disclosure triangle: pointing down while the input box is
@@ -719,8 +737,13 @@ void window_update(void)
         draw_empty();
     }
     DrawControls(gWin);
-    draw_strip(true);
-    draw_status();
+    {
+        char pos[sizeof(gPosText)];
+        long total = pos_total();
+        draw_strip(true, total);
+        pos_text(pos, total);
+        draw_status_pos(pos);
+    }
     EndUpdate(gWin);
 }
 
