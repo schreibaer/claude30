@@ -155,5 +155,60 @@ class SignalTest(Base):
             self.assertTrue(wait_gone(k, 5), f"child {k} survived")
 
 
+class HeartbeatTest(Base):
+    def test_ping_gets_uncounted_pong(self):
+        c = self.client()
+        start = c.hello() + 1
+        ws = c.ws
+        for _ in range(10):
+            c.send("!PING")
+        c.wait_for(lambda l: c.text()[start:].count("#PONG") == 10, 5, start)
+        self.assertEqual(c.ws, ws)
+        c.close()
+
+    def test_pong_while_waiting_for_ack(self):
+        c = self.client(auto_ack=False)
+        c.hello()
+        c.open(1, "alpha")
+        c.wait_line("1>")
+        c.send("1P hello")
+        w = c.wait_line("W")
+        time.sleep(0.3)
+        c.send("!PING")
+        c.wait_line("#PONG", 3, w)
+        c.send("!ACK")
+        c.close()
+
+    def test_silent_app_is_dropped_after_idle_timeout(self):
+        c = self.client("--idle-timeout", "2", env={"SE30_DEMO_START_DELAY": "0.2"})
+        c.hello()
+        c.open(1, "alpha")
+        c.wait_line("1>")
+        kids = children(c.p.pid)
+        c.send("!PING")
+        c.wait_line("#PONG")
+        start = time.monotonic()
+        self.assertEqual(c.p.wait(6), 0)       # pipes still open: only the timeout ends it
+        self.assertGreater(time.monotonic() - start, 1.5)
+        self.assertTrue(wait_gone(kids[0], 3))
+
+    def test_app_that_never_pings_is_not_timed_out(self):
+        c = self.client("--idle-timeout", "1")
+        c.hello()
+        time.sleep(2.5)
+        self.assertEqual(c.open(1, "alpha"), "1O alpha")
+        c.close()
+
+    def test_any_input_keeps_the_call_alive(self):
+        c = self.client("--idle-timeout", "2")
+        c.hello()
+        c.send("!PING")
+        for _ in range(5):
+            time.sleep(0.8)
+            c.send("!LIST")
+        self.assertIsNone(c.p.poll())
+        self.assertEqual(c.p.wait(6), 0)
+
+
 if __name__ == "__main__":
     unittest.main()

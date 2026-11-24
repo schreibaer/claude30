@@ -213,6 +213,9 @@ class Terminal:
         self._in_fence = False
         self._wlock = asyncio.Lock()
         self.typed = asyncio.Event()      # tty mode: the first key arrived
+        self.idle_timeout = args.idle_timeout
+        self.last_rx = time.monotonic()   # when the last byte arrived
+        self._watchdog = None             # armed by the first !PING
 
     @property
     def charset(self):
@@ -225,6 +228,7 @@ class Terminal:
         try:
             while True:
                 data = await self.link.read()
+                self.last_rx = time.monotonic()
                 for b in data:
                     await self._route(b)
         except EOFError:
@@ -263,11 +267,34 @@ class Terminal:
         self._app_buf = b""
         if line == "!ACK":
             self.acks.release()
+        elif line == "!PING" and self.mode == "app2":
+            self._pong()
         elif line == "!STOP" and self.mode == "app":
             if self.busy and self.on_interrupt:
                 asyncio.ensure_future(self.on_interrupt())
         else:
             await self.lines.put(line)
+
+    def _pong(self):
+        """Answers a heartbeat at once: one whole line, outside the window
+        and its lock, so it gets through while a writer waits for !ACK.
+        The first one arms the idle watchdog; apps that never ping are never
+        timed out."""
+        async def send():
+            with contextlib.suppress(EOFError):
+                await self.link.send(b"#PONG\r\n")
+        asyncio.ensure_future(send())
+        if self._watchdog is None and self.idle_timeout:
+            self._watchdog = asyncio.ensure_future(self._watch())
+
+    async def _watch(self):
+        while not self.eof:
+            left = self.last_rx + self.idle_timeout - time.monotonic()
+            if left <= 0:
+                log(f"nothing from the app for {self.idle_timeout:g} s; ending the call")
+                self.lose_link()
+                return
+            await asyncio.sleep(left)
 
     async def read_key(self):
         k = await self.keys.get()
@@ -1722,6 +1749,9 @@ def main():
     p.add_argument("--accept-edits", action="store_true",
                    help="auto-approve file edits")
     p.add_argument("--model", default=None)
+    p.add_argument("--idle-timeout", type=float, default=180,
+                   help="end the call when an app that sends heartbeats has been "
+                        "silent this many seconds (0 = never)")
     p.add_argument("--state-dir", default="~/.se30bridge",
                    help="where the bridge keeps its call lock and resume records "
                         "(one call at a time per folder)")
