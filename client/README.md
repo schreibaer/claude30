@@ -30,7 +30,7 @@ The build makes two release files:
 
 **Over the WiFi232 (no extra hardware):**
 
-1. On the host, run `tools/send-to-mac.sh`. It needs `socat` and `sz` (`brew install lrzsz`). It waits once on port 2325 and accepts only the WiFi232's address.
+1. On the host, run `tools/send-to-mac.sh`. It needs `socat` and `sz` (`brew install lrzsz socat`). It waits once on port 2325 and accepts only the WiFi232's address. It sends in small windows that ZTerm must acknowledge, because the SE/30 drops bytes in long bursts at 57,600. If a transfer still fails, the script tells you what to try next: smaller bursts through `SZ_OPTS`, or 19,200 baud.
 2. On the SE/30, open ZTerm at 57600 8N1 and turn on MacBinary for received binary files.
 3. Type `ATDT<host-ip>:2325`. ZTerm receives the file by ZMODEM and decodes the MacBinary into the application.
 4. Hang up with `+++`, wait a second, then type `ATH`. Quit ZTerm so it frees the modem port.
