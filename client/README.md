@@ -44,6 +44,7 @@ The build makes two release files:
 3. The first time, a list of the host's projects opens. Pick one and click **Open**. It opens in a tab named after the project.
 4. Type a prompt and press **Return**, or click **Send**.
    - **Option-Return** starts a new line in the same prompt.
+   - **Cmd-Backspace** empties the input box in one go. It can't be undone.
    - Bridge commands such as `/new` and `/edits on` work as typed, and affect only that tab's conversation. `/quit` closes the tab.
 5. While Claude works, the status line shows the tool in use.
    - **Cmd-period** (Session > Stop) interrupts Claude in the front tab, and the transcript marks the turn "Interrupted".
@@ -54,7 +55,7 @@ The build makes two release files:
    - Return and plain keys do nothing, so text you type ahead can't approve anything. Clicks made just before the dialog opens are thrown away, and the buttons ignore clicks for the first three quarters of a second.
    - If the app ran out of memory while the request arrived, the dialog says part of it could not be shown and offers only Deny.
    - Long lines wrap onto rows marked with `¬`, so you see every character of a command.
-7. **Session > Disconnect** ends every conversation and hangs up. Quit also disconnects first.
+7. **Session > Disconnect** (Cmd-D) ends every conversation and hangs up. Quit also disconnects first.
 8. **File > Full Screen** (Cmd-F) makes the window cover the whole screen and hides the menu bar. Menus still work by their Command keys, and Cmd-F again brings the menu bar back. Quitting or switching to another application also leaves full screen. If the app crashes while in full screen, restart the Mac to get the menu bar back. Full Screen is off while a file window is open.
 
 If the link drops, an alert offers **Redial**. A redial reopens every tab in the same project with a fresh conversation, and each transcript marks it "New conversation".
@@ -85,7 +86,7 @@ If the link drops, an alert offers **Redial**. A redial reopens every tab in the
 
 ### Moving around the transcript
 
-You never need the scroll bar. These keys work whether you are typing in the input box or have clicked in the transcript; plain arrow keys still move the cursor in the input box.
+You never need the scroll bar; **Edit > Settings…** has a **Hide scroll bar** box that removes it and gives the transcript the width. These keys work whether you are typing in the input box or have clicked in the transcript; plain arrow keys still move the cursor in the input box.
 
 | Keys | Moves the transcript |
 |---|---|
@@ -96,6 +97,8 @@ You never need the scroll bar. These keys work whether you are typing in the inp
 | Page Up, Page Down, Home, End | the same, on keyboards that have them |
 
 Prompts that have already moved to the log file can't be reached this way.
+
+With the scroll bar hidden, a thin strip at the window's right edge takes its place: its black marker shows which part of the transcript is on screen. The right end of the status line says **Top**, **End**, or how far down you are, such as **42%**. Both count only the text still in the window, not what has moved to the log file.
 
 While Claude works in the front tab, the Claude mascot paces the empty input box between a word that changes every few seconds ("Warming up the 68030…", or the tool Claude is running) and a tiny compact Mac whose screen flips between a Happy Mac and the wristwatch. When Claude waits for your permission it stands still with its arms up. Once you type ahead, it steps in place beside the Send button so it never covers your text.
 

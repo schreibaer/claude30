@@ -60,12 +60,19 @@ void window_set_send_enabled(Boolean on);
 /* The front tab's input text; valid until the next call that changes it. */
 Handle window_input_text(long *len);
 void window_clear_input(void);
+/* Cmd-Backspace: empties the front tab's input box and puts the caret in
+   it. Beeps when no tab is open. There is no undo. */
+void window_erase_input(void);
 
 /* Collapses the input box to one line, or opens it again (remembered in
    the prefs). A collapsed box opens by itself while a prompt needs more than
    one line, and collapses again once it is sent. */
 void window_toggle_input(void);
 Boolean window_input_compact(void);
+
+/* Applies Settings changes that affect the window: hiding or showing the
+   transcript scroll bar, which also widens or narrows the transcript. */
+void window_prefs_changed(void);
 
 /* Scrolls the front tab's transcript to the previous (dir < 0) or next
    prompt; past the last prompt, to the end. Beeps when there is none. */

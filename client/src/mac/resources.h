@@ -73,6 +73,7 @@
 #define kSet38400       6
 #define kSet19200       7
 #define kSetDial        8
+#define kSetHideBar     13
 
 #define kPermAllow      1
 #define kPermDeny       2
