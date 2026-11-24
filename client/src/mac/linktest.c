@@ -54,7 +54,7 @@ static void format_stats(char *out, short max, Boolean done)
     if (done)
         state = st->failed ? st->failure : (st->errors ? "Finished with serial errors." : "Finished: no serial errors.");
     else
-        state = session_state() == ST_DIALING || session_state() == ST_HANDSHAKE
+        state = session_link_state() == ST_DIALING || session_link_state() == ST_HANDSHAKE
               ? "Connecting\xC9" : "Running. Cmd-period or Stop ends the test.";
     snprintf(out, max,
              "Speed: %s on the %s port\r"
@@ -130,8 +130,8 @@ void linktest_run(void)
                 session_linktest_stop();
             continue;
         }
-        if (ev.what == updateEvt && (WindowPtr)ev.message == window_ptr()) {
-            window_update();
+        if (ev.what == updateEvt && (WindowPtr)ev.message != d) {
+            app_update((WindowPtr)ev.message);
             continue;
         }
         if (ev.what == updateEvt && (WindowPtr)ev.message == d) {

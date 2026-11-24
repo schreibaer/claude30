@@ -1,5 +1,5 @@
 /* Toolbox headers. Retro68's Multiversal interfaces have no separate
-   Controls.h, Scrap.h or Folders.h (everything is in Multiverse.h); Apple's
+   Controls.h, Scrap.h, Lists.h or Folders.h (everything is in Multiverse.h); Apple's
    Universal Interfaces do. */
 #ifndef TOOLBOX_H
 #define TOOLBOX_H
@@ -13,6 +13,7 @@
 #ifndef TOOLBOX_INCLUDED
 #  include <Controls.h>
 #  include <Folders.h>
+#  include <Lists.h>
 #  include <Scrap.h>
 #endif
 

@@ -12,6 +12,9 @@ Prefs gPrefs;
 
 static const unsigned char kPrefsName[] = "\pClaude30 Prefs";
 
+/* Version 1 ended after the dial string. */
+#define PREFS_V1_SIZE (3 * sizeof(short) + sizeof(Str63))
+
 /* Folder Manager selectors; Multiversal has FindFolder but not these names. */
 #define kOnSystemDiskVol  ((short)0x8000)
 #define kCreateFolderNow  true
@@ -49,9 +52,20 @@ void prefs_load(void)
     if (ref == -1)
         return;
     h = Get1Resource(kPrefsType, kPrefsID);
-    if (h && GetHandleSize(h) == sizeof(Prefs)
-            && ((Prefs *)*h)->version == PREFS_VERSION) {
-        memcpy(&gPrefs, *h, sizeof(Prefs));
+    if (h && GetHandleSize(h) >= (long)PREFS_V1_SIZE && ((Prefs *)*h)->version >= 1) {
+        short i;
+        if (((Prefs *)*h)->version == PREFS_VERSION && GetHandleSize(h) == sizeof(Prefs)) {
+            memcpy(&gPrefs, *h, sizeof(Prefs));
+        } else {
+            memcpy(&gPrefs, *h, PREFS_V1_SIZE);   /* version 1: no tabs */
+            gPrefs.ntabs = 0;
+        }
+        gPrefs.version = PREFS_VERSION;
+        if (gPrefs.ntabs < 0 || gPrefs.ntabs > PREFS_TABS)
+            gPrefs.ntabs = 0;
+        for (i = 0; i < gPrefs.ntabs; i++)
+            if (gPrefs.tabs[i][0] > 63)
+                gPrefs.tabs[i][0] = 63;
         if (gPrefs.speed < kSpeed57600 || gPrefs.speed > kSpeed19200)
             gPrefs.speed = kSpeed57600;
         if (gPrefs.port != kPortPrinter)
@@ -95,6 +109,27 @@ void prefs_save(void)
     UpdateResFile(ref);
     CloseResFile(ref);
     UseResFile(saved);
+}
+
+void prefs_set_tabs(const char *const *names, short n)
+{
+    Str63 tabs[PREFS_TABS];
+    short i, k;
+    if (n > PREFS_TABS)
+        n = PREFS_TABS;
+    memset(tabs, 0, sizeof(tabs));
+    for (i = 0; i < n; i++) {
+        k = (short)strlen(names[i]);
+        if (k > 63)
+            k = 63;
+        tabs[i][0] = (unsigned char)k;
+        memcpy(tabs[i] + 1, names[i], k);
+    }
+    if (n == gPrefs.ntabs && memcmp(tabs, gPrefs.tabs, sizeof(tabs)) == 0)
+        return;                  /* unchanged: no disk write */
+    memcpy(gPrefs.tabs, tabs, sizeof(tabs));
+    gPrefs.ntabs = n;
+    prefs_save();
 }
 
 void prefs_dial_cstr(char *out, short max)

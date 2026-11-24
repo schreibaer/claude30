@@ -24,6 +24,10 @@ add_application(Claude30
     src/mac/prefs.c
     src/mac/log.c
     src/mac/linktest.c
+    src/mac/tabs.c
+    src/mac/picker.c
+    src/mac/opendlg.c
+    src/mac/filewin.c
     claude30.r
     CREATOR "Cl30"
     TYPE "APPL")

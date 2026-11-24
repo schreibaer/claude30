@@ -13,10 +13,19 @@
 #define kFileMenu       129
 #define kEditMenu       130
 #define kSessionMenu    131
+#define kWindowMenu     132
 
 #define kAboutItem      1
-#define kFullScreenItem 1
-#define kQuitItem       3
+
+/* File menu, as numbered while Open Project File is shown (files=ro|rw);
+   under files=off the item is removed and the rest move up by one. */
+#define kOpenFileItem   1
+#define kCloseItem      2
+#define kSaveItem       3
+#define kRevertItem     4
+#define kFullScreenItem 6
+#define kQuitItem       8
+
 #define kUndoItem       1
 #define kCutItem        3
 #define kCopyItem       4
@@ -24,10 +33,13 @@
 #define kClearItem      6
 #define kSelectAllItem  7
 #define kSettingsItem   9
+
 #define kConnectItem    1
 #define kDisconnectItem 2
 #define kStopItem       3
-#define kLinkTestItem   5
+#define kNewTabItem     5
+#define kCloseTabItem   6
+#define kLinkTestItem   8
 
 /* Window */
 #define kMainWindow     128
@@ -39,6 +51,14 @@
 #define kPermDialog     132
 #define kLinkTestDialog 133
 #define kLinkMinutesDialog 134
+#define kPickerDialog   135
+#define kOpenDialog     136
+#define kNoteAlert      137     /* ^0 with OK */
+#define kCloseBusyAlert 138     /* 1 Close, 2 Cancel */
+#define kSaveChangesAlert 139   /* 1 Save, 2 Cancel, 3 Don't Save */
+#define kCantSaveAlert  140     /* 1 Don't Save, 2 Cancel */
+#define kConflictAlert  141     /* 1 Cancel, 2 Replace */
+#define kRevertAlert    142     /* 1 Revert, 2 Cancel */
 
 #define kRedialButton   1
 
@@ -64,5 +84,18 @@
 #define kMinStart       1
 #define kMinCancel      2
 #define kMinField       3
+
+#define kPickOpen       1
+#define kPickCancel     2
+#define kPickList       3
+#define kPickMessage    4
+
+#define kOpenOpen       1
+#define kOpenCancel     2
+#define kOpenList       3
+#define kOpenPath       4
+#define kOpenUp         5
+#define kOpenMessage    6
+#define kOpenWaiting    7
 
 #endif
