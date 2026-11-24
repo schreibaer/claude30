@@ -79,7 +79,7 @@ resource 'MENU' (kSessionMenu) {
 	kSessionMenu, textMenuProc, 0x7FFFFB6F, enabled, "Session",
 	{
 		"Connect", noIcon, "K", noMark, plain;
-		"Disconnect", noIcon, noKey, noMark, plain;
+		"Disconnect", noIcon, "D", noMark, plain;
 		"Stop", noIcon, ".", noMark, plain;
 		"-", noIcon, noKey, noMark, plain;
 		"Previous Prompt (Cmd-Up)", noIcon, noKey, noMark, plain;

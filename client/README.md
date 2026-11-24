@@ -54,7 +54,7 @@ The build makes two release files:
    - Return and plain keys do nothing, so text you type ahead can't approve anything. Clicks made just before the dialog opens are thrown away, and the buttons ignore clicks for the first three quarters of a second.
    - If the app ran out of memory while the request arrived, the dialog says part of it could not be shown and offers only Deny.
    - Long lines wrap onto rows marked with `¬`, so you see every character of a command.
-7. **Session > Disconnect** ends every conversation and hangs up. Quit also disconnects first.
+7. **Session > Disconnect** (Cmd-D) ends every conversation and hangs up. Quit also disconnects first.
 8. **File > Full Screen** (Cmd-F) makes the window cover the whole screen and hides the menu bar. Menus still work by their Command keys, and Cmd-F again brings the menu bar back. Quitting or switching to another application also leaves full screen. If the app crashes while in full screen, restart the Mac to get the menu bar back. Full Screen is off while a file window is open.
 
 If the link drops, an alert offers **Redial**. A redial reopens every tab in the same project with a fresh conversation, and each transcript marks it "New conversation".
