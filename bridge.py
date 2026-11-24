@@ -489,6 +489,11 @@ class ClaudeSession:
         self.client = None
         self.always = set()   # "Tool" or "Bash:<exact command>"
         self.next_pid = 1
+        # The SDK runs each can_use_tool request as its own task, so two tool
+        # calls can ask at once. Both prompts would read answers from the same
+        # input queue and each would discard the other's answer, leaving the
+        # turn stuck. Ask one at a time.
+        self._perm_lock = asyncio.Lock()
 
     async def start(self):
         from claude_agent_sdk import ClaudeAgentOptions, ClaudeSDKClient
@@ -519,14 +524,17 @@ class ClaudeSession:
     async def _can_use_tool(self, tool_name, input_data, context):
         from claude_agent_sdk.types import PermissionResultAllow, PermissionResultDeny
         key = f"Bash:{input_data.get('command', '')}" if tool_name == "Bash" else tool_name
-        if key in self.always:
-            return PermissionResultAllow(updated_input=input_data)
-        summary, detail = describe_tool(tool_name, input_data, self.args.cwd)
-        pid = self.next_pid
-        self.next_pid += 1
-        ans = await self.term.ask_permission(pid, tool_name, summary, detail)
-        if ans == "a":
-            self.always.add(key)
+        async with self._perm_lock:
+            # Checked inside the lock: an "always" given to the request ahead
+            # of this one may already cover it.
+            if key in self.always:
+                return PermissionResultAllow(updated_input=input_data)
+            summary, detail = describe_tool(tool_name, input_data, self.args.cwd)
+            pid = self.next_pid
+            self.next_pid += 1
+            ans = await self.term.ask_permission(pid, tool_name, summary, detail)
+            if ans == "a":
+                self.always.add(key)
         if ans in ("y", "a"):
             return PermissionResultAllow(updated_input=input_data)
         return PermissionResultDeny(message="The user denied this action.", interrupt=False)
