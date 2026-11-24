@@ -33,7 +33,6 @@ void session_note(const char *text);
 
 SessState session_state(void);
 Boolean session_online(void);
-Boolean session_ready(void);
 
 /* Link test: dial, then send a fixed prompt to the demo bridge repeatedly,
    counting bytes, lines and serial errors. */

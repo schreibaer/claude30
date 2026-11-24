@@ -48,7 +48,8 @@ The build makes two release files:
 5. A permission request opens a dialog.
    - **Cmd-Y** allows, **Cmd-N** denies and **Cmd-A** allows for the rest of the session. You can also click a button.
    - **Cmd-period** denies and stops the turn.
-   - Return and plain keys do nothing, so text you type ahead can't approve anything.
+   - Return and plain keys do nothing, so text you type ahead can't approve anything. Clicks made just before the dialog opens are thrown away, and the buttons ignore clicks for the first three quarters of a second.
+   - If the app ran out of memory while the request arrived, the dialog says part of it could not be shown and offers only Deny.
    - Long lines wrap onto rows marked with `¬`, so you see every character of a command.
 6. **Session > Disconnect** ends the session and hangs up. Quit also disconnects first.
 
@@ -60,6 +61,7 @@ The window keeps roughly the last 20 to 28 KB of the conversation, which is Text
 
 - Logs go in a **Claude30 Logs** folder next to the application, one file per session, for example `Session 2026-11-24 10.31.05`.
 - They are plain text files that open in SimpleText or TeachText.
+- If the log can't be written (for example, the disk is full), the transcript says so, the status line shows "log not saving", and old text stays in the window until it is nearly full. Only then does the oldest text go, and the transcript says how much.
 
 If the serial driver reports lost bytes, the transcript shows "Line noise: output above may be damaged" and the status line says "line noise seen". Protocol version 1 cannot resend lost bytes. If you see this often, use the link test below to pick a slower speed.
 

@@ -283,6 +283,7 @@ static void session_line(Proto *p, const char *line, long n)
 #define TAG(s) (tlen == (long)sizeof(s) - 1 && memcmp(line, s, tlen) == 0)
     if (TAG("W")) {
         p->pending_acks++;
+        p->noise = 0;            /* a W arrived intact: no ACK is owed for it */
     } else if (TAG(">")) {
         if (p->swallow > 0)
             p->swallow--;
@@ -480,6 +481,27 @@ void proto_tick(Proto *p, unsigned long now)
     }
 }
 
+/* True when the bridge will read this prompt as /quit: it lowercases the
+   prompt and compares its first whitespace-separated word. */
+static int is_quit(const char *t, long len)
+{
+    static const char q[] = "/quit";
+    long i = 0, k;
+    while (i < len && (t[i] == ' ' || t[i] == '\t' || t[i] == '\r' || t[i] == '\n'))
+        i++;
+    if (len - i < 5)
+        return 0;
+    for (k = 0; k < 5; k++) {
+        char c = t[i + k];
+        if (c >= 'A' && c <= 'Z')
+            c = (char)(c - 'A' + 'a');
+        if (c != q[k])
+            return 0;
+    }
+    i += 5;
+    return i == len || t[i] == ' ' || t[i] == '\t' || t[i] == '\r' || t[i] == '\n';
+}
+
 int proto_send_prompt(Proto *p, const char *text, long len)
 {
     long cap = prompt_encoded_max(len), n;
@@ -499,6 +521,14 @@ int proto_send_prompt(Proto *p, const char *text, long len)
     reset_turn(p);
     p->swallow = lines - 1;
     p->last_input = p->now;
+    if (is_quit(text, len)) {
+        /* A typed /quit ends the session like Disconnect: the drop that
+           follows is normal, and the hangup runs if it never comes. */
+        p->quit_sent = 1;
+        set_state(p, ST_CLOSING);
+        set_timer(p, T_QUIT);
+        return 1;
+    }
     set_state(p, ST_BUSY);
     return 1;
 }
@@ -518,15 +548,16 @@ void proto_stop(Proto *p)
     }
 }
 
-void proto_answer(Proto *p, char answer)
+int proto_answer(Proto *p, char answer)
 {
     if (p->state != ST_PERMISSION || !p->perm_asked)
-        return;
+        return 0;
     if (answer != 'y' && answer != 'n' && answer != 'a')
-        return;
+        return 0;
     send_answer(p, answer);
     set_state(p, ST_BUSY);
     p->last_input = p->now;
+    return 1;
 }
 
 void proto_drawn(Proto *p)

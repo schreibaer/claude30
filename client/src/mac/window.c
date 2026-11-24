@@ -276,9 +276,17 @@ static void insert_run(const char *text, long len, RunStyle style)
     TEStyleInsert((Ptr)text, len, gScrap, gTrans);
 }
 
+/* While the log cannot be written, text stays in the window until it would
+   pass this size; only then is old text removed without a copy. */
+#define TE_HARD_LIMIT 31000L
+
+static OSErr gLogErr;            /* last log write error, until reported */
+static long gLostBytes;          /* removed without reaching the log */
+
 /* Cuts the first cut bytes to the log, keeping the view on the same text. */
-static void trim(long cut)
+static void trim(long cut, long incoming)
 {
+    OSErr err;
     short line = 0, nLines = (*gTrans)->nLines;
     long hCut = 0, scrolled;
     Rect empty = { 0, 0, 0, 0 };
@@ -292,8 +300,17 @@ static void trim(long cut)
 
     state = HGetState((*gTrans)->hText);
     HLock((*gTrans)->hText);
-    log_append(*(*gTrans)->hText, cut);
+    err = log_append(*(*gTrans)->hText, cut);
     HSetState((*gTrans)->hText, state);
+    if (err) {
+        gLogErr = err;
+        if ((*gTrans)->teLength + incoming < TE_HARD_LIMIT
+                && (*gTrans)->nLines < TRIM_AT_LINES + 300) {
+            DisposeRgn(saveClip);
+            return;              /* keep it; the next append tries again */
+        }
+        gLostBytes += cut;
+    }
 
     /* Delete off screen, then move the text so the visible lines stay put. */
     GetClip(saveClip);
@@ -317,7 +334,7 @@ static void trim_for(long incoming)
     cut = batch_trim_cut(*(*gTrans)->hText, (*gTrans)->teLength, (*gTrans)->nLines, incoming);
     HSetState((*gTrans)->hText, state);
     if (cut > 0)
-        trim(cut);
+        trim(cut, incoming);
 }
 
 void window_append(Batch *b)
@@ -476,4 +493,13 @@ void window_edit(short item)
         TESetSelect(0, 32767, gFocus);
         break;
     }
+}
+
+OSErr window_log_trouble(long *lost)
+{
+    OSErr err = gLogErr;
+    *lost = gLostBytes;
+    gLogErr = noErr;
+    gLostBytes = 0;
+    return err;
 }

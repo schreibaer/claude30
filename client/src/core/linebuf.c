@@ -10,6 +10,7 @@ void linebuf_init(LineBuf *lb)
     lb->len = 0;
     lb->cap = 0;
     lb->overflow = 0;
+    lb->damaged = 0;
 }
 
 void linebuf_free(LineBuf *lb)
@@ -48,6 +49,8 @@ void linebuf_feed(LineBuf *lb, const char *data, long n, LineFn fn, void *ctx)
         if (c == '\n')
             continue;
         if (c == '\r') {
+            if (lb->overflow)
+                lb->damaged++;
             fn(ctx, lb->buf ? lb->buf : "", lb->len);
             lb->len = 0;
             lb->overflow = 0;

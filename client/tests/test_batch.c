@@ -141,7 +141,7 @@ static void test_trim(void)
     /* Soft-wrapped display lines count too. */
     memset(text, 'c', 10000);
     text[5000] = '\r';
-    cut = batch_trim_cut(text, 10000, 7000, 0);
+    cut = batch_trim_cut(text, 10000, 3000, 0);
     CHECK_EQ_LONG(cut, 5001);
 
     /* Text about to arrive counts toward the byte limit. */

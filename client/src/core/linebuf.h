@@ -10,6 +10,7 @@ typedef struct LineBuf {
     long len;
     long cap;
     int overflow;   /* set when memory ran out and bytes were dropped */
+    long damaged;   /* lines delivered with bytes dropped; only ever grows */
 } LineBuf;
 
 void linebuf_init(LineBuf *lb);

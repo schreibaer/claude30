@@ -129,7 +129,10 @@ OSErr log_append(const char *text, long len)
         if (err)
             return err;
     }
-    return FSWrite(gLogRef, &n, text);
+    err = FSWrite(gLogRef, &n, text);
+    if (err == noErr && n != len)
+        err = ioErr;
+    return err;
 }
 
 void log_close(void)

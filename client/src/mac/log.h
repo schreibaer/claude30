@@ -10,7 +10,8 @@
 
 /* Starts a new session file name; the file is created on the first write. */
 void log_new_session(void);
-/* Appends bytes (Mac Roman, CR line breaks). Returns noErr on success. */
+/* Appends bytes (Mac Roman, CR line breaks). Returns noErr only when every
+   byte was written. */
 OSErr log_append(const char *text, long len);
 void log_close(void);
 

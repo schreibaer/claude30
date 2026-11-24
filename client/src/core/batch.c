@@ -25,13 +25,6 @@ void batch_clear(Batch *b)
     b->oom = 0;
 }
 
-void batch_set_need_break(Batch *b, int need)
-{
-    b->need_break = need;
-    if (!need)
-        b->line_len = 0;
-}
-
 static int grow_text(Batch *b, long extra)
 {
     if (b->len + extra > b->cap) {

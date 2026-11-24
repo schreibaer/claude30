@@ -119,7 +119,7 @@ int proto_send_prompt(Proto *p, const char *text, long len);
 /* Cmd-period or Stop. */
 void proto_stop(Proto *p);
 /* Answers the open permission request: 'y', 'n' or 'a'. */
-void proto_answer(Proto *p, char answer);
+int proto_answer(Proto *p, char answer);
 /* The shell has drawn everything received so far: acknowledge each W. */
 void proto_drawn(Proto *p);
 /* The serial driver reported lost bytes. */

@@ -15,6 +15,7 @@
 #define MONACO       4
 #define LIST_SIZE    9
 #define MARK_WIDTH   2           /* "  " or the continuation mark */
+#define ARM_TICKS    45          /* clicks on the buttons are ignored for 0.75 s */
 
 typedef struct {
     long off;                    /* offset into gBody */
@@ -29,6 +30,8 @@ static Handle gRows;
 static long gNRows;
 static Str255 gTitle;
 static Boolean gCloseRequested;
+static Boolean gIncomplete;      /* some of the request could not be kept */
+static unsigned long gArmedAt;   /* buttons take clicks from this tick on */
 
 static DialogPtr gDlg;
 static ControlHandle gBar;
@@ -55,6 +58,7 @@ void permdlg_begin(const char *title, long len)
     gNLines = 0;
     gNRows = 0;
     gCloseRequested = false;
+    gIncomplete = false;
     if (len > 255)
         len = 255;
     gTitle[0] = (unsigned char)len;
@@ -64,10 +68,18 @@ void permdlg_begin(const char *title, long len)
 void permdlg_line(const char *text, long len)
 {
     if (!grow(&gBody, gBodyLen + len) || !grow(&gLineEnds, (gNLines + 1) * sizeof(long)))
-        return;   /* out of memory: the line is dropped; the list says so */
+    {
+        gIncomplete = true;   /* out of memory: the line is dropped */
+        return;
+    }
     memcpy(*gBody + gBodyLen, text, len);
     gBodyLen += len;
     ((long *)*gLineEnds)[gNLines++] = gBodyLen;
+}
+
+void permdlg_mark_incomplete(void)
+{
+    gIncomplete = true;
 }
 
 void permdlg_request_close(void)
@@ -90,8 +102,10 @@ static void build_rows(short cols)
             long n = end - pos;
             if (n > cols)
                 n = cols;
-            if (!grow(&gRows, (gNRows + 1) * sizeof(Row)))
+            if (!grow(&gRows, (gNRows + 1) * sizeof(Row))) {
+                gIncomplete = true;
                 return;
+            }
             r = &((Row *)*gRows)[gNRows++];
             r->off = pos;
             r->len = (short)n;
@@ -177,6 +191,27 @@ static void flash(short item)
     HiliteControl((ControlHandle)h, 0);
 }
 
+/* Part of the request was lost: say so, and leave only Deny and Cmd-period. */
+static void show_incomplete(void)
+{
+    static const unsigned char note[] = "\p  [Part of this request could not be shown. Deny it.]";
+    short type, i;
+    Handle h;
+    Rect r;
+    Str255 t;
+    short room = 255 - gTitle[0];
+    short n = note[0] < room ? note[0] : room;
+    memcpy(t, gTitle, gTitle[0] + 1);
+    memcpy(t + 1 + t[0], note + 1, n);
+    t[0] = (unsigned char)(t[0] + n);
+    GetDialogItem(gDlg, kPermSummary, &type, &h, &r);
+    SetDialogItemText(h, t);
+    for (i = 0; i < 2; i++) {
+        GetDialogItem(gDlg, i == 0 ? kPermAllow : kPermAlways, &type, &h, &r);
+        HiliteControl((ControlHandle)h, 255);
+    }
+}
+
 static pascal Boolean filter(DialogPtr d, EventRecord *ev, short *item)
 {
     char ch;
@@ -191,14 +226,16 @@ static pascal Boolean filter(DialogPtr d, EventRecord *ev, short *item)
     }
     switch (ev->what) {
     case keyDown:
-    case autoKey:
         ch = (char)(ev->message & charCodeMask);
         if (ev->modifiers & cmdKey) {
-            if (ch == 'y' || ch == 'Y') { *item = kPermAllow; flash(kPermAllow); return true; }
+            if ((ch == 'y' || ch == 'Y') && !gIncomplete) { *item = kPermAllow; flash(kPermAllow); return true; }
             if (ch == 'n' || ch == 'N') { *item = kPermDeny; flash(kPermDeny); return true; }
-            if (ch == 'a' || ch == 'A') { *item = kPermAlways; flash(kPermAlways); return true; }
+            if ((ch == 'a' || ch == 'A') && !gIncomplete) { *item = kPermAlways; flash(kPermAlways); return true; }
             if (ch == '.') { *item = -2; return true; }
         }
+        ev->what = nullEvent;     /* Return, Enter and plain keys do nothing */
+        return false;
+    case autoKey:                 /* a held key never answers */
         ev->what = nullEvent;     /* Return, Enter and plain keys do nothing */
         return false;
     case mouseDown:
@@ -214,6 +251,8 @@ static pascal Boolean filter(DialogPtr d, EventRecord *ev, short *item)
                 TrackControl(c, p, gBarUPP);
             }
             ev->what = nullEvent;
+        } else if (TickCount() - gArmedAt < ARM_TICKS) {
+            ev->what = nullEvent;  /* a click aimed at the window, not an answer */
         }
         return false;
     case updateEvt:
@@ -240,7 +279,7 @@ short permdlg_run(void)
     if (gCloseRequested)
         return kPermResultClosed;
     GetPort(&save);
-    FlushEvents(keyDownMask | autoKeyMask, 0);
+    FlushEvents(keyDownMask | autoKeyMask | mDownMask | mUpMask, 0);
     gDlg = GetNewDialog(kPermDialog, NULL, (WindowPtr)-1);
     if (!gDlg)
         return kPermResultDeny;
@@ -272,7 +311,10 @@ short permdlg_run(void)
                       gNRows > gVisible ? (short)(gNRows - gVisible) : 0,
                       scrollBarProc, 0);
 
+    if (gIncomplete)
+        show_incomplete();
     ShowWindow(gDlg);
+    gArmedAt = TickCount();
     filterUPP = NewModalFilterUPP(filter);
     for (;;) {
         ModalDialog(filterUPP, &hit);

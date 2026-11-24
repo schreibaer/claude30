@@ -25,6 +25,10 @@ void window_idle(void);
 
 /* Appends the batch's runs to the transcript, trimming old text to the log. */
 void window_append(Batch *b);
+/* Reports and clears trouble writing the log since the last call: returns
+   the File Manager error (noErr if none) and sets *lost to the bytes that had
+   to leave the window without reaching the log. */
+OSErr window_log_trouble(long *lost);
 /* True when the transcript is empty (nothing appended yet). */
 Boolean window_transcript_empty(void);
 

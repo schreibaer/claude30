@@ -27,6 +27,8 @@ static short gAlert;             /* 0, 1 lost link, 2 failed call */
 static char gAlertMsg[96];
 static Boolean gNoiseSeen;       /* serial errors this session */
 static char gLastTool[64];
+static Boolean gLogTrouble;      /* the log could not be written this session */
+static long gDamagedSeen;        /* gProto.lb.damaged already reported */
 static Boolean gLinkSendNext;
 static Boolean gLinkSession;    /* this call is a link test, until it ends */
 
@@ -107,6 +109,7 @@ static void on_event(void *ctx, EventKind k, const char *t, long n)
     case EV_CONNECTED:
         log_new_session();
         gNoiseSeen = false;
+        gLogTrouble = false;
         gLastTool[0] = 0;
         if (!window_transcript_empty() || gBatch.nruns)
             divider();
@@ -189,6 +192,8 @@ static void update_status(void)
     }
     if (gNoiseSeen && proto_online(&gProto))
         strncat(s, " (line noise seen)", sizeof(s) - strlen(s) - 1);
+    if (gLogTrouble && proto_online(&gProto))
+        strncat(s, " (log not saving)", sizeof(s) - strlen(s) - 1);
     window_set_status(s);
     window_set_send_enabled(gProto.state == ST_READY && !gLink.active);
 }
@@ -235,6 +240,40 @@ void session_disconnect(void)
     update_status();
 }
 
+/* Text the app could not keep for lack of memory gets a visible marker. */
+static void report_losses(void)
+{
+    Boolean lost = gBatch.oom != 0;
+    if (gProto.lb.damaged != gDamagedSeen) {
+        gDamagedSeen = gProto.lb.damaged;
+        lost = true;
+        if (gProto.perm_open)
+            permdlg_mark_incomplete();  /* the request being built lost text */
+    }
+    if (lost) {
+        window_append(&gBatch);         /* clears the batch and its flag */
+        batch_marker(&gBatch, RS_ERROR, "Some output was lost: the app ran out of memory.");
+    }
+}
+
+static void report_log_trouble(void)
+{
+    char s[160];
+    long lost;
+    OSErr err = window_log_trouble(&lost);
+    if (err && !gLogTrouble) {
+        gLogTrouble = true;
+        snprintf(s, sizeof(s), "The session log could not be written (error %d). Older text stays in the window while it fits.", err);
+        batch_marker(&gBatch, RS_ERROR, s);
+    }
+    if (lost > 0) {
+        snprintf(s, sizeof(s), "%ld bytes of older text left the window without reaching the log.", lost);
+        batch_marker(&gBatch, RS_ERROR, s);
+    }
+    if (gBatch.nruns)
+        window_append(&gBatch);
+}
+
 void session_pump(void)
 {
     static char buf[READ_CHUNK];
@@ -273,7 +312,9 @@ void session_pump(void)
         }
         batch_clear(&gBatch);
     } else {
+        report_losses();
         window_append(&gBatch);
+        report_log_trouble();
     }
     proto_drawn(&gProto);              /* everything received is drawn now */
 
@@ -306,8 +347,8 @@ void session_deferred(void)
             answer_note('n');
             proto_stop(&gProto);
         } else if (r != kPermResultClosed) {
-            answer_note((char)r);
-            proto_answer(&gProto, (char)r);
+            if (proto_answer(&gProto, (char)r))
+                answer_note((char)r);
         }
         update_status();
     }
@@ -367,11 +408,6 @@ SessState session_state(void)
 Boolean session_online(void)
 {
     return gProto.state != ST_IDLE;
-}
-
-Boolean session_ready(void)
-{
-    return gProto.state == ST_READY;
 }
 
 void session_linktest_start(long minutes)

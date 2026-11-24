@@ -30,11 +30,12 @@ typedef struct {
 #define BATCH_MAX_RUN   8000L   /* bytes per run */
 #define BATCH_MAX_LINE  4000L   /* a longer line gets a line break inserted */
 
-/* Trim policy. */
+/* Trim policy. TextEdit keeps line positions in 16-bit pixels, so the line
+   count times the line height (12 px or less) must stay under 32,767. */
 #define TRIM_AT_BYTES   28672L
-#define TRIM_AT_LINES   6000L
+#define TRIM_AT_LINES   2400L
 #define TRIM_KEEP_BYTES 20480L
-#define TRIM_KEEP_LINES 4000L
+#define TRIM_KEEP_LINES 1600L
 
 typedef struct {
     char *text;
@@ -52,7 +53,6 @@ void batch_free(Batch *b);
 void batch_clear(Batch *b);
 /* Starts the next block on a fresh line, e.g. after the transcript was
    emptied (call with 0) or when text already exists (call with 1). */
-void batch_set_need_break(Batch *b, int need);
 
 void batch_event(Batch *b, EventKind kind, const char *text, long len);
 void batch_prompt(Batch *b, const char *text, long len);

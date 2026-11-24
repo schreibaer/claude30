@@ -480,6 +480,66 @@ static void test_silence(void)
     CHECK_EQ_LONG(count(EV_SILENCE), 2);
 }
 
+static void test_prompt_guards(void)
+{
+    /* An empty prompt, or one sent outside Ready, sends nothing. */
+    reset();
+    CHECK_EQ_LONG(proto_send_prompt(&P, "hi", 2), 0);      /* Idle */
+    proto_connect(&P, "ATDTbridge", now);
+    clear_rec();
+    CHECK_EQ_LONG(proto_send_prompt(&P, "hi", 2), 0);      /* Dialing */
+    CHECK_EQ_LONG(R.nsent, 0);
+    reset();
+    connect_ready();
+    CHECK_EQ_LONG(proto_send_prompt(&P, "", 0), 0);
+    CHECK_EQ_LONG(R.nsent, 0);
+    CHECK_EQ_LONG(proto_send_prompt(&P, "go", 2), 1);
+    clear_rec();
+    CHECK_EQ_LONG(proto_send_prompt(&P, "again", 5), 0);   /* Busy */
+    feed("Q 3 Bash ls\r\n? 3\r\n");
+    CHECK_EQ_LONG(P.state, ST_PERMISSION);
+    CHECK_EQ_LONG(proto_send_prompt(&P, "y", 1), 0);       /* Permission */
+    CHECK_EQ_LONG(R.nsent, 0);
+}
+
+static void test_acks_batched(void)
+{
+    /* Two W lines received before one draw get exactly two !ACKs. */
+    reset();
+    connect_ready();
+    proto_send_prompt(&P, "go", 2);
+    feed("Q 8 Write a.txt\r\nW\r\nD[\r\nD x\r\nW\r\nD]\r\n");
+    clear_rec();
+    proto_drawn(&P);
+    CHECK_EQ_LONG(count_sent("!ACK\r"), 2);
+    clear_rec();
+    proto_drawn(&P);
+    CHECK_EQ_LONG(R.nsent, 0);
+}
+
+static void test_typed_quit(void)
+{
+    /* A typed /quit ends the session like Disconnect: the drop is normal. */
+    reset();
+    connect_ready();
+    CHECK_EQ_LONG(proto_send_prompt(&P, "  /QUIT", 7), 1);
+    CHECK_EQ_LONG(P.state, ST_CLOSING);
+    feed("I Bye.\r\nNO CARRIER\r\n");
+    CHECK(find(EV_CLOSED) >= 0);
+    CHECK_EQ_LONG(count(EV_LOST), 0);
+    /* No drop: the hangup runs after the quit wait. */
+    reset();
+    connect_ready();
+    proto_send_prompt(&P, "/quit", 5);
+    tick(T_QUIT + T_GUARD + 2);
+    CHECK(count_sent("+++") == 1);
+    /* Words that only start with /quit are ordinary prompts. */
+    reset();
+    connect_ready();
+    proto_send_prompt(&P, "/quitter", 8);
+    CHECK_EQ_LONG(P.state, ST_BUSY);
+}
+
 int main(void)
 {
     test_dial_and_handshake();
@@ -493,6 +553,9 @@ int main(void)
     test_link_lost();
     test_disconnect_paths();
     test_silence();
+    test_prompt_guards();
+    test_acks_batched();
+    test_typed_quit();
     proto_free(&P);
     CHECK_DONE();
 }
