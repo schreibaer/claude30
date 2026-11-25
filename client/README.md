@@ -71,6 +71,10 @@ Each tab keeps its conversation's resume token in the preferences, so every tab 
 - Each tab keeps its own transcript, input and log file. Switching tabs leaves the input and the scroll position as you left them.
 - The open tabs are remembered. Connect reopens them, in the same order. If a project is gone from the host, its tab says it is not available and takes no prompts until you close it.
 
+### Subagents
+
+When Claude hands work to a subagent, the transcript gets one italic line for it, starting with », for example `» Explore: find tests · Grep · 3 tools`. It is rewritten in place as the subagent works and ends as `» Explore: done · 4 tools · <what it found>`. The subagent's own prose and tool lines never reach the SE/30. Up to 8 lines are rewritten at once; more subagents than that appear as plain tool lines. If the turn ends or the link drops with a line still open it ends as `stopped`. A line that has scrolled out of the transcript's 28 KB window is not recreated; the end is added as a new line instead. A permission prompt raised by a subagent says which one asked: `(Explore) Bash: ...`. Type `/agents` to list the subagents the project offers; to make a new one, ask Claude or edit `.claude/agents/<name>.md` with Open Project File. This needs a bridge with the `agents` word; against an older one nothing changes.
+
 ### Project files
 
 **File > Open Project File…** (Cmd-O) browses the front tab's project, folders first. Double-click a folder to go into it, and **Up** (or Cmd-up arrow) to go back. Typing selects by name. The list hides `.git`, secrets such as `.env` and keys, and anything the project's git ignore rules exclude.

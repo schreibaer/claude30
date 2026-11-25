@@ -34,6 +34,10 @@ The WiFi232 makes one call at a time, so a new call means the last one is over. 
 
 Claude30 redials by itself and its tabs pick up their conversations where they were (tabs only; ZTerm and the v1 app start fresh each call). The bridge keeps what it needs in `~/.se30bridge` (`--state-dir`): `call.lock`, and `sessions.json`, which maps each tab's resume token to its Claude conversation. A token only resumes conversations the bridge started, in the project it started them in, and is forgotten after 30 days unused or when the tab is closed. Two SE/30 setups on one Mac need different `--state-dir`s, or each call would end the other's.
 
+### Subagents
+
+When Claude starts a subagent (Explore, a project agent, or one it makes up), Claude30 shows one line for it, rewritten as it works (`» Explore: find tests · Grep · 3 tools`) and replaced by a one-line result when it ends. Its own output stays on the Mac. ZTerm gets a plain `[Agent]` line at the start and the end. Type `/agents` to list the subagents the project offers. To create one, ask Claude, or write a file in `.claude/agents/` (Claude30's Open Project File can edit it).
+
 ### Projects for Claude30's tabs
 
 The Claude30 app can keep up to six conversations open at once, one per tab, each in its own project. It asks the bridge for a list of projects and can open only those. You choose what is on the list:

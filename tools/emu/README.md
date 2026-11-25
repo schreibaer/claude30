@@ -72,6 +72,17 @@ Run these in the emulator, and the hardware rows on the SE/30. Tick each one.
 | ☐ | Two lines separated by Option-Return arrive as one prompt with the line break kept, and Send stays dimmed until the turn ends | Emulator | `run.sh --demo` (the demo echoes the prompt) |
 | ☐ | Cmd-period with the dialog open denies, stops, closes the dialog and ends the turn | Emulator | `run.sh --demo` |
 
+**Subagents**
+
+| | Check | Where | How |
+|---|---|---|---|
+| ☐ | A prompt with the word `agents` shows two overlapping `»` lines that update in place (tool count rises) and end as `done` with a summary; no flicker, scroll position and selection stay | Emulator | `run.sh --demo`, prompt `agents` |
+| ☐ | The demo's permission prompt reads `(general-purpose) ...`; answering it lets the line finish | Emulator | `run.sh --demo`, prompt `agents` |
+| ☐ | Press Cmd-period during the demo subagents: both lines end as `stopped` | Emulator | `run.sh --demo` |
+| ☐ | Output fills the 28 KB limit while a line is open: the line is still rewritten in place, or its end appears as a new line once trimmed | Emulator | Demo `agents`, then stress `burst` |
+| ☐ | `/agents` lists the built-in agents and the project's | Emulator | `run.sh --demo` |
+| ☐ | Real Claude: "use an Explore agent to find the tests" shows the line, and a plain-ZTerm call shows `[Agent]` lines | **SE/30** | Real Claude |
+
 **Connection and lifecycle**
 
 | | Check | Where |
