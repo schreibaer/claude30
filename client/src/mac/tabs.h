@@ -9,6 +9,7 @@
 
 #include <MacTypes.h>
 #include <TextEdit.h>
+#include "agentline.h"
 #include "batch.h"
 #include "log.h"
 #include "permdlg.h"
@@ -41,6 +42,8 @@ typedef struct Tab {
     long lost_bytes;             /* trimmed without reaching the log */
     char last_tool[64];
     PromptMarks marks;           /* where its prompts start in the transcript */
+    AgentLines agents;           /* its subagents' lines */
+    int agent_pending;           /* slot whose line the next append draws, or -1 */
 } Tab;
 
 /* Adds a tab for project with the given session id, after the front tab

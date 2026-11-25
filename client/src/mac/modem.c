@@ -288,6 +288,33 @@ static void link_event(EventKind k, const char *t, long n)
 
 /* ---- events for one tab ----------------------------------------------------- */
 
+/* A subagent started, moved on or ended: its line in the transcript. */
+static void agent_event(Tab *t, EventKind k, const char *s, long n)
+{
+    char out[AL_TEXT];
+    int i;
+    if (k == EV_AGENT_START) {
+        i = al_start(&t->agents, s, n, out, sizeof(out));
+        if (i >= 0)
+            window_agent_new(t, i, out);
+        else if (i == -2)
+            batch_event(&t->batch, EV_TOOL, out, (long)strlen(out));
+    } else if (k == EV_AGENT_STEP) {
+        i = al_step(&t->agents, s, n, out, sizeof(out));
+        if (i >= 0)
+            window_agent_update(t, i, out);
+    } else if (n >= 1 && s[0] == '*') {          /* the turn ended: close what is open */
+        while ((i = al_stop_next(&t->agents, out, sizeof(out))) >= 0)
+            window_agent_update(t, i, out);
+    } else {
+        i = al_end(&t->agents, s, n, out, sizeof(out));
+        if (i >= 0)
+            window_agent_update(t, i, out);
+        else if (i == -2)
+            batch_event(&t->batch, EV_TOOL, out, (long)strlen(out));
+    }
+}
+
 static void tab_event(Tab *t, EventKind k, const char *s, long n)
 {
     char msg[160];
@@ -375,6 +402,11 @@ static void tab_event(Tab *t, EventKind k, const char *s, long n)
     case EV_TOOL:
         copy_text(t->last_tool, sizeof(t->last_tool), s, n);
         batch_event(&t->batch, k, s, n);
+        break;
+    case EV_AGENT_START:
+    case EV_AGENT_STEP:
+    case EV_AGENT_END:
+        agent_event(t, k, s, n);
         break;
     case EV_PERM_BEGIN:
         permdlg_begin(&t->perm, s, n);
