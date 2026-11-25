@@ -307,7 +307,7 @@ class WireTests(unittest.TestCase):
 
     def test_ok_advertises_agents(self):
         c = self.client(False)
-        self.assertIn("#OK se30bridge 2 files=rw resume ping agents", c.text())
+        self.assertIn("#OK se30bridge 2 files=rw resume ping models agents", c.text())
 
     def test_without_optin_only_plain_lines(self):
         c = self.client(False)

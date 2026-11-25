@@ -34,6 +34,8 @@ typedef struct Tab {
     Boolean from_picker;         /* made by New Tab: a refused open removes it */
     Boolean refused;             /* ... and it was refused: remove it */
     char token[17];              /* resume token of its conversation ("" = none) */
+    char model[32];              /* its Claude model ("" = the bridge default) */
+    char effort[8];              /* low, medium, high, xhigh or max ("" = default) */
     Boolean token_sent;          /* opened asking to resume: its <n>Y says how it went */
     Boolean opened_once;         /* a conversation ran in it this launch */
     Boolean reopened;            /* opened; waiting for its first > */

@@ -713,6 +713,89 @@ static void test_heartbeat_and_dead_link(void)
     CHECK_EQ_LONG(count(EV_LOST), 1);
 }
 
+static void test_models(void)
+{
+    /* The list comes with the capability word and ends with the defaults. */
+    reset();
+    proto_connect(&P, "ATDTbridge", now);
+    feed("AT\r\nOK\r\nCONNECT 57600\r\n");
+    feed("#OK se30bridge 2 files=rw resume ping models\r\n"
+         "M[\r\nM opus\r\nM sonnet\r\nM haiku\r\nM] sonnet -\r\n"
+         "P[\r\nP alpha\r\nP]\r\n");
+    CHECK_EQ_LONG(P.state, ST_ONLINE);
+    CHECK(proto_models_cap(&P));
+    CHECK_EQ_LONG(proto_nmodels(&P), 3);
+    CHECK(strcmp(proto_model(&P, 0), "opus") == 0);
+    CHECK(strcmp(proto_model(&P, 2), "haiku") == 0);
+    CHECK(strcmp(proto_model(&P, 3), "") == 0);
+    CHECK(strcmp(proto_default_model(&P), "sonnet") == 0);
+    CHECK(strcmp(proto_default_effort(&P), "") == 0);
+    CHECK_EQ_LONG(P.dropped, 0);
+    CHECK_EQ_LONG(P.noise, 0);
+
+    /* Presets and changes go out the same way, open or not. */
+    clear_rec();
+    CHECK(proto_set_model(&P, 3, "sonnet", "high"));
+    CHECK_MEM(R.sent, R.nsent, "3M sonnet high\r");
+    clear_rec();
+    CHECK(proto_set_model(&P, 2, "", NULL));
+    CHECK_MEM(R.sent, R.nsent, "2M - -\r");
+    CHECK(!proto_set_model(&P, 0, "x", "y"));
+    CHECK(!proto_set_model(&P, 7, "x", "y"));
+    CHECK(!proto_set_model(&P, 1, "a b", "y"));
+    clear_rec();
+    CHECK(proto_open(&P, 1, "alpha"));
+    feed("1O alpha\r\n1Y 0123456789abcdef new\r\n1M sonnet high\r\n1>\r\n");
+    CHECK_EQ_LONG(count_sid(EV_MODEL, 1), 1);
+    CHECK(strcmp(R.text[find(EV_MODEL)], "sonnet high") == 0);
+    clear_rec();
+    feed("1M - max\r\n");
+    CHECK(strcmp(R.text[find(EV_MODEL)], "- max") == 0);
+
+    /* A model line for a session that is not open is dropped, like others. */
+    clear_rec();
+    feed("4M opus low\r\n");
+    CHECK_EQ_LONG(count(EV_MODEL), 0);
+    CHECK_EQ_LONG(P.dropped, 1);
+
+    /* More than 16 names keep the first 16; a closing line with no defaults. */
+    reset();
+    proto_connect(&P, "ATDTbridge", now);
+    feed("AT\r\nOK\r\nCONNECT 57600\r\n#OK se30bridge 2 models\r\nM[\r\n");
+    {
+        int i;
+        char line[32];
+        for (i = 0; i < 20; i++) {
+            sprintf(line, "M model%d\r\n", i);
+            feed(line);
+        }
+    }
+    feed("M] - -\r\nP[\r\nP]\r\n");
+    CHECK_EQ_LONG(proto_nmodels(&P), MAX_MODELS);
+    CHECK(strcmp(proto_model(&P, 15), "model15") == 0);
+    CHECK(strcmp(proto_default_model(&P), "") == 0);
+
+    /* No capability word: the lines are ignored without noise and nothing
+       is sent. */
+    reset();
+    proto_connect(&P, "ATDTbridge", now);
+    feed("AT\r\nOK\r\nCONNECT 57600\r\n#OK se30bridge 2 files=rw\r\n"
+         "M[\r\nM opus\r\nM] - -\r\nP[\r\nP alpha\r\nP]\r\n");
+    CHECK_EQ_LONG(P.state, ST_ONLINE);
+    CHECK(!proto_models_cap(&P));
+    CHECK_EQ_LONG(proto_nmodels(&P), 0);
+    CHECK_EQ_LONG(P.dropped, 0);
+    CHECK_EQ_LONG(P.noise, 0);
+    clear_rec();
+    CHECK(!proto_set_model(&P, 1, "opus", "high"));
+    CHECK_EQ_LONG(R.nsent, 0);
+
+    /* A new call forgets the list. */
+    reset();
+    connect_caps();
+    CHECK_EQ_LONG(proto_nmodels(&P), 0);
+}
+
 static void test_demo_session(void)
 {
     long len = 0, at, opened, done, i, ws = 0;
@@ -860,6 +943,7 @@ int main(void)
     test_capabilities_and_resume_open();
     test_heartbeat_and_dead_link();
     test_agent_lines();
+    test_models();
     test_demo_session();
     proto_free(&P);
     CHECK_DONE();

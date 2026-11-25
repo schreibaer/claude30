@@ -42,7 +42,7 @@ class HandshakeTest(Projects, unittest.TestCase):
     def test_hello_gets_ok_and_list(self):
         c = self.client()
         c.hello()
-        self.assertIn("#OK se30bridge 2 files=rw resume ping agents", c.text())
+        self.assertIn("#OK se30bridge 2 files=rw resume ping models agents", c.text())
         self.assertEqual(c.projects(), ["alpha", "beta", "gamma"])
         c.close()
 
@@ -62,7 +62,9 @@ class HandshakeTest(Projects, unittest.TestCase):
         c.close()
 
     def test_list_counts_toward_window(self):
-        for i in range(7):
+        # The model list (five lines) comes first, so a few more projects
+        # than before still fit in the second window.
+        for i in range(2):
             os.mkdir(os.path.join(self.root, f"p{i}"))
         c = self.client("--window", "8", auto_ack=False)
         c.send(b"")

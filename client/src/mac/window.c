@@ -1,5 +1,6 @@
 #include "window.h"
 #include "filewin.h"
+#include "heartbeat.h"
 #include "log.h"
 #include "mascot.h"
 #include "modem.h"
@@ -98,10 +99,21 @@ static Rect gPosRect;            /* the position strip, right of the rule */
 static Rect gMarkRect;           /* its marker as drawn */
 static char gPosText[8];         /* the status line's position field as drawn */
 
+/* The status line's heartbeat light: a 16x16 compact Mac at its right end. */
+static Rect gHeartRect;
+static Heartbeat gHB;
+static HeartPic gHDrawn = HP_COUNT;   /* what is on screen; HP_COUNT: nothing */
+static unsigned short gHRows[HP_COUNT][HB_H];
+static Boolean gHReady;
+
+/* blit16 draws the mascot's and the heart's 16x16 pictures alike. */
+typedef char heart_matches_mascot[(HB_W == MASCOT_W && HB_H == MASCOT_H) ? 1 : -1];
+
 static void layout(void)
 {
     Rect r = gWin->portRect;
-    short statusTop = r.bottom - (gLineH + 5);
+    short statusH = gLineH + 5 > HB_H + 3 ? gLineH + 5 : HB_H + 3;
+    short statusTop = r.bottom - statusH;
     short inputTop = gCompact ? statusTop - COMPACT_H : statusTop - (gLineH * 5 + 8);
     short reserve = gBarHidden ? POS_W : BAR_W;
 
@@ -109,7 +121,9 @@ static void layout(void)
     SetRect(&gTransView, r.left + MARGIN, gTabsRect.bottom + MARGIN, r.right - reserve - MARGIN,
             inputTop - MARGIN);
     SetRect(&gPosRect, r.right - POS_W + 1, gTabsRect.bottom, r.right, gTransView.bottom + MARGIN);
-    SetRect(&gStatusRect, r.left + MARGIN, statusTop + 2, r.right - MARGIN, r.bottom - 1);
+    SetRect(&gHeartRect, r.right - MARGIN - HB_W, r.bottom - 1 - HB_H, r.right - MARGIN, r.bottom - 1);
+    SetRect(&gStatusRect, r.left + MARGIN, statusTop + 2, gHeartRect.left - 4, r.bottom - 1);
+    gHDrawn = HP_COUNT;                 /* the next idle draws it again */
     SetRect(&gTriRect, r.left + 2, inputTop - 4, r.left + 12, inputTop + 4);
     if (gCompact) {
         /* One text line, the mascot's spot, then Send, all in one strip. */
@@ -728,6 +742,7 @@ void window_update(void)
     SetPort(gWin);
     BeginUpdate(gWin);
     EraseRect(&gWin->portRect);
+    gHDrawn = HP_COUNT;            /* the heart is erased too */
     window_draw_tabs();
     draw_frames();
     if (gTrans) {
@@ -1321,12 +1336,48 @@ static void mascot_tick(void)
     SetPort(save);
 }
 
+/* ---- the heartbeat light ------------------------------------------------ */
+
+static void heart_tick(void)
+{
+    HeartInput in;
+    HeartPic pic;
+    LinkState st = session_link_state();
+    const Proto *p = session_proto();
+    GrafPtr save;
+
+    in.link = st == ST_DIALING || st == ST_HANDSHAKE ? HL_DIALING
+            : st == ST_ONLINE || st == ST_CLOSING ? HL_ONLINE : HL_OFF;
+    in.redial = session_redial_pending();
+    in.last_heard = p->last_heard;
+    in.ping_cap = p->ping_cap;
+    in.ping_out = p->ping_out;
+    in.last_ping = p->last_ping;
+    pic = heartbeat_pic(&gHB, &in, TickCount());
+    if (pic == gHDrawn)
+        return;
+    if (!gHReady) {
+        short k, r;
+        for (k = 0; k < HP_COUNT; k++)
+            for (r = 0; r < HB_H; r++)
+                gHRows[k][r] = heartbeat_row((HeartPic)k, r);
+        gHReady = true;
+    }
+    GetPort(&save);
+    SetPort(gWin);
+    blit16(gHRows[pic], &gHeartRect);
+    SetPort(save);
+    gHDrawn = pic;
+}
+
 void window_idle(void)
 {
     if (gActive && gFocus)
         TEIdle(gFocus);
-    if (gWin)
+    if (gWin) {
         mascot_tick();
+        heart_tick();
+    }
 }
 
 /* ---- keyboard scrolling ------------------------------------------------- */

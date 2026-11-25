@@ -3,6 +3,7 @@
 #include "files.h"
 #include "filewin.h"
 #include "log.h"
+#include "modeldlg.h"
 #include "opendlg.h"
 #include "permdlg.h"
 #include "picker.h"
@@ -95,13 +96,15 @@ static void divider(Tab *t)
 
 static void remember_tabs(void)
 {
-    const char *names[MAX_TABS], *tokens[MAX_TABS];
+    const char *names[MAX_TABS], *tokens[MAX_TABS], *models[MAX_TABS], *efforts[MAX_TABS];
     short i, n = tabs_count();
     for (i = 0; i < n; i++) {
         names[i] = tabs_at(i)->project;
         tokens[i] = tabs_at(i)->token;
+        models[i] = tabs_at(i)->model;
+        efforts[i] = tabs_at(i)->effort;
     }
-    prefs_set_tabs(names, tokens, n);
+    prefs_set_tabs(names, tokens, models, efforts, n);
     gTokensChanged = false;
 }
 
@@ -133,6 +136,9 @@ static void open_tab(Tab *t)
         error_line(t, s);
         return;
     }
+    /* The tab's model and effort go first, so Claude starts once with them. */
+    if (gProto.models_cap && (t->model[0] || t->effort[0]))
+        proto_set_model(&gProto, t->sid, t->model, t->effort);
     /* A tab with a resume token asks the bridge to continue that conversation. */
     t->token_sent = gProto.resume_cap && t->token[0];
     if (!proto_open_resume(&gProto, t->sid, t->project, t->token)) {
@@ -367,6 +373,26 @@ static void tab_event(Tab *t, EventKind k, const char *s, long n)
         }
         break;
     }
+    case EV_MODEL: {
+        /* "<model|-> <effort|->": what the tab runs with, or will from its
+           next turn. A value the bridge corrected (a model it no longer
+           offers) arrives as the default, and the bridge says so itself. */
+        const char *sp = memchr(s, ' ', n);
+        char model[sizeof(t->model)], effort[sizeof(t->effort)];
+        long mn = sp ? sp - s : n, en = sp ? n - (sp + 1 - s) : 0;
+        copy_text(model, sizeof(model), s, mn > 31 ? 31 : mn);
+        copy_text(effort, sizeof(effort), sp ? sp + 1 : "", en > 7 ? 7 : en);
+        if (strcmp(model, "-") == 0)
+            model[0] = 0;
+        if (strcmp(effort, "-") == 0)
+            effort[0] = 0;
+        if (strcmp(t->model, model) != 0 || strcmp(t->effort, effort) != 0) {
+            memcpy(t->model, model, sizeof(model));
+            memcpy(t->effort, effort, sizeof(effort));
+            gTokensChanged = true;       /* saved with the tabs */
+        }
+        break;
+    }
     case EV_READY:
         if (t->reopened) {           /* the first > after opening */
             t->reopened = false;
@@ -541,9 +567,14 @@ static void update_status(void)
         else if (waiting > 1)
             snprintf(s, sizeof(s), "%s and %d more tabs are waiting for permission",
                      wait->project, waiting - 1);
-        else if (front)
+        else if (front) {
             front_status(front, s, sizeof(s));
-        else
+            if (front->model[0] || front->effort[0]) {
+                size_t k = strlen(s);
+                snprintf(s + k, sizeof(s) - k, " [%s%s%s]", front->model,
+                         front->model[0] && front->effort[0] ? ", " : "", front->effort);
+            }
+        } else
             strcpy(s, "No project open. Press Cmd-T.");
         ready = front && !front->unavailable
              && proto_sess_state(&gProto, front->sid) == SS_READY;
@@ -558,6 +589,24 @@ static void update_status(void)
 }
 
 /* ---- public -------------------------------------------------------------- */
+
+Boolean session_model_available(void)
+{
+    Tab *t = tabs_front();
+    return t && gProto.state == ST_ONLINE && gProto.models_cap && gProto.nmodels > 0
+        && proto_sess_state(&gProto, t->sid) != SS_NONE
+        && proto_sess_state(&gProto, t->sid) != SS_CLOSING;
+}
+
+void session_model_dialog(void)
+{
+    Tab *t = tabs_front();
+    char model[sizeof(t->model)], effort[sizeof(t->effort)];
+    if (!session_model_available())
+        return;
+    if (modeldlg_run(t->project, t->model, t->effort, model, effort) && session_model_available())
+        proto_set_model(&gProto, t->sid, model, effort);   /* the bridge confirms with EV_MODEL */
+}
 
 void session_init(void)
 {
@@ -575,6 +624,8 @@ void session_init(void)
         if (!t)
             continue;
         copy_text(t->token, sizeof(t->token), gPrefs.tokens[i], (long)strlen(gPrefs.tokens[i]));
+        copy_text(t->model, sizeof(t->model), gPrefs.models[i], (long)strlen(gPrefs.models[i]));
+        copy_text(t->effort, sizeof(t->effort), gPrefs.efforts[i], (long)strlen(gPrefs.efforts[i]));
         if (!window_tab_init(t)) {
             tabs_remove(t);
             continue;

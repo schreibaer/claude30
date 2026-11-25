@@ -123,7 +123,7 @@ class Client:
     def projects(self, start=0):
         i = self.wait_line("P[", start=start)
         j = self.wait_line("P]", start=i)
-        return [l[2:] for l in self.text()[i + 1:j]]
+        return [l[2:] for l in self.text()[i + 1:j] if l.startswith("P ")]
 
     def open(self, sid, name):
         start = len(self.lines)

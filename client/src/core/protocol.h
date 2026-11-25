@@ -17,6 +17,8 @@
 #define MAX_SESS      6
 #define MAX_XFER      8
 #define MAX_PROJECTS  128
+#define MAX_MODELS    16
+#define MODEL_LEN     32   /* a model name, with its NUL */
 
 typedef enum {
     ST_IDLE,        /* no call */
@@ -69,6 +71,8 @@ typedef enum {
     EV_AGENT_STEP,   /* progress: the J~ payload "<k> <steps> <tool> <summary>" */
     EV_AGENT_END,    /* ended: the J- payload "<k> <status> <steps> <summary>", or
                         "* stopped" when the turn ended with subagent lines open */
+    EV_MODEL,        /* the model and effort a session runs with (or will from
+                        its next turn): text is "<model|-> <effort|->" */
     /* Files (files.h). During these, proto_xfer() names the transfer. */
     EV_LIST_BEGIN,   /* text is the folder's path */
     EV_LIST_ENTRY,   /* text is "d|f <size> <name>": see files_parse_entry */
@@ -153,6 +157,13 @@ struct Proto {
     int resume_cap;              /* the bridge resumes conversations (<n>Y) */
     int ping_cap;                /* the bridge answers !PING and times out silent apps */
     int agents_cap;              /* the bridge sends J lines to an app that sent !AGENTS */
+    int models_cap;              /* the bridge sends a model list and takes <n>M */
+
+    /* The models a session may pick, from the handshake's M lines. */
+    char models[MAX_MODELS][MODEL_LEN];
+    int nmodels;
+    char def_model[MODEL_LEN];   /* what "bridge default" means; empty: the CLI decides */
+    char def_effort[MODEL_LEN];
 
     unsigned pending_acks;       /* W lines received but not yet acknowledged */
     int noise;                   /* serial errors since the last intact W */
@@ -220,6 +231,19 @@ int proto_open(Proto *p, int sid, const char *project);
    reports which one started). A bridge without resume, or an empty token,
    opens a new conversation. */
 int proto_open_resume(Proto *p, int sid, const char *project, const char *token);
+/* The models the bridge offers (none without the models capability), and
+   what "bridge default" means: names, or "" when the CLI decides. */
+int proto_models_cap(const Proto *p);
+int proto_nmodels(const Proto *p);
+const char *proto_model(const Proto *p, int i);
+const char *proto_default_model(const Proto *p);
+const char *proto_default_effort(const Proto *p);
+/* Sets session sid's model and effort ("" or NULL: the bridge default),
+   whether or not it is open yet: before it opens, the bridge keeps the
+   values for the next open of that number. The bridge confirms with
+   EV_MODEL. Returns 0 when it was not sent (not online, no models
+   capability, a bad id or a value with a space). */
+int proto_set_model(Proto *p, int sid, const char *model, const char *effort);
 /* Closes a session: the bridge denies its open request, stops its turn and
    confirms. Its file transfers fail. */
 int proto_close(Proto *p, int sid);

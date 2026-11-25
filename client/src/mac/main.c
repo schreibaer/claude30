@@ -163,6 +163,7 @@ static void adjust_menus(void)
     enable(gSession, kNextPromptItem, t != NULL && front == window_ptr());
     enable(gSession, kNewTabItem, online && tabs_count() < MAX_TABS);
     enable(gSession, kCloseTabItem, t != NULL);
+    enable(gSession, kModelItem, session_model_available());
     enable(gSession, kLinkTestItem, s == ST_IDLE);
 
     enable(gEdit, kUndoItem, !fw && front != window_ptr());
@@ -302,6 +303,7 @@ static void do_menu(long choice)
         case kNextPromptItem: window_jump_prompt(1); break;
         case kNewTabItem:     session_new_tab(); break;
         case kCloseTabItem:   session_close_tab(tabs_front()); break;
+        case kModelItem:      session_model_dialog(); break;
         case kLinkTestItem:   linktest_run(); break;
         }
         break;

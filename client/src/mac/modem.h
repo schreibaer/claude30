@@ -49,6 +49,12 @@ void session_stop(void);
 /* Adds an information line to the front tab. */
 void session_note(const char *text);
 
+/* The front tab can take a model and effort now: online, its session is open
+   and the bridge advertised models. */
+Boolean session_model_available(void);
+/* Session > Model and Effort...: asks, then tells the bridge. */
+void session_model_dialog(void);
+
 /* New Tab: runs the project picker and opens the chosen project. */
 void session_new_tab(void);
 /* Close Tab: confirms a busy tab, settles its file windows, then ends its

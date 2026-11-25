@@ -27,6 +27,7 @@ typedef struct {
     char result[64];
     char opened[64];
     char how[16], token[24];   /* from EV_RESUMED: "<how> <token>" */
+    char model[48];            /* the latest EV_MODEL text */
     char said[512];            /* the first paragraph of the latest turn */
     int said_open;             /* ... still being continued */
     int kill_after_text;       /* SIGKILL the bridge after this many T lines */
@@ -150,6 +151,9 @@ static void on_event(void *ctx, int sid, EventKind k, const char *t, long n)
         }
         break;
     }
+    case EV_MODEL:
+        copy_text(r->model, sizeof(r->model), t, n);
+        break;
     case EV_CODE:
         if (n > r->longest_code)
             r->longest_code = n;
@@ -636,6 +640,46 @@ static void test_files_end_to_end(void)
     finish_with_disconnect();
 }
 
+static int never(void) { return 0; }
+static int model_seen(void) { return S.s[1].counts[EV_MODEL] >= 1; }
+
+/* A preset before the tab opens, then a change while it is ready: the
+   bridge confirms each with EV_MODEL and the demo names the settings. */
+static void test_model_and_effort(void)
+{
+    start(demo_argv);
+    proto_connect(&P, "ATDTbridge", ticks());
+    CHECK(run(is_online, 20));
+    CHECK(proto_models_cap(&P));
+    CHECK_EQ_LONG(proto_nmodels(&P), 3);
+    CHECK(strcmp(proto_model(&P, 0), "opus") == 0);
+    CHECK(strcmp(proto_model(&P, 2), "haiku") == 0);
+    CHECK(strcmp(proto_default_model(&P), "") == 0);
+    CHECK(proto_set_model(&P, 1, "sonnet", "high"));
+    CHECK(proto_open(&P, 1, "alpha"));
+    CHECK(run(one_done, 20));
+    CHECK(strcmp(S.s[1].model, "sonnet high") == 0);
+    S.s[1].readies = 0;
+    CHECK(proto_send_prompt(&P, 1, "first", 5));
+    CHECK(run(one_done, 20));
+    CHECK(strstr(S.s[1].said, "model sonnet") != NULL);
+    CHECK(strstr(S.s[1].said, "effort high") != NULL);
+
+    S.s[1].counts[EV_MODEL] = 0;
+    CHECK(proto_set_model(&P, 1, "haiku", ""));
+    CHECK(run(model_seen, 20));         /* confirmed once applied, then a fresh > */
+    run(never, 1);                      /* let that > arrive before prompting */
+    CHECK(strcmp(S.s[1].model, "haiku -") == 0);
+    S.s[1].readies = 0;
+    CHECK(proto_send_prompt(&P, 1, "second", 6));
+    CHECK(run(one_done, 20));
+    CHECK(strstr(S.s[1].said, "model haiku") != NULL);
+    CHECK(strstr(S.s[1].said, "effort") == NULL);
+    CHECK(strstr(S.s[1].said, "turn 2") != NULL);
+    CHECK_EQ_LONG(P.dropped, 0);
+    finish_with_disconnect();
+}
+
 int main(void)
 {
     signal(SIGPIPE, SIG_IGN);
@@ -643,6 +687,7 @@ int main(void)
     test_demo_two_sessions();
     test_demo_agents();
     test_drop_and_resume();
+    test_model_and_effort();
     test_demo_stop_one();
     test_stress_cases();
     test_disconnect_mid_turn();
