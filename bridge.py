@@ -601,6 +601,62 @@ SYSTEM_APPEND = (
 )
 
 
+AGENT_DIRS = (("project", None), ("user", "~/.claude/agents"))
+AGENT_FILES_MAX = 50
+
+
+def read_agent_file(path):
+    """(name, description) from an agent file's frontmatter, or None when it
+    cannot be read. Only the first 4 KB are read."""
+    try:
+        with open(path, "rb") as f:
+            head = f.read(4096).decode("utf-8")
+    except (OSError, UnicodeDecodeError):
+        return None
+    lines = head.splitlines()
+    if not lines or lines[0].strip() != "---":
+        return None
+    meta = {}
+    for line in lines[1:]:
+        if line.strip() == "---":
+            break
+        m = re.match(r"^(name|description):\s*(.*)$", line)
+        if m:
+            meta[m.group(1)] = m.group(2).strip().strip("\"'")
+    else:
+        return None
+    stem = os.path.splitext(os.path.basename(path))[0]
+    return (meta.get("name") or stem, meta.get("description") or "")
+
+
+def agents_lines(cwd, init_names):
+    """The /agents listing: each agent once, with where it is defined."""
+    found = {}
+    for where, d in AGENT_DIRS:
+        d = os.path.join(cwd, ".claude", "agents") if d is None else os.path.expanduser(d)
+        try:
+            root = os.path.realpath(d)
+            names = sorted(n for n in os.listdir(d) if n.endswith(".md"))[:AGENT_FILES_MAX]
+        except OSError:
+            continue
+        for fn in names:
+            path = os.path.join(d, fn)
+            real = os.path.realpath(path)
+            if not (real == root or real.startswith(root + os.sep)) or not os.path.isfile(real):
+                continue                       # a link that leaves the folder
+            got = read_agent_file(path)
+            name, desc = got if got else (os.path.splitext(fn)[0],
+                                          "(unreadable)")
+            found.setdefault(name, (where, desc or "(no description)"))
+    out = [f"{n} ({w}): {clip(d, 100)}" for n, (w, d) in found.items()]
+    if init_names:
+        out += [f"{n} (built in)" for n in init_names if n not in found]
+    else:
+        out.append("Built-in agents are listed after the first reply.")
+    out.append("New or changed agent files apply after /new.")
+    return [clip(l, 120) for l in out]
+
+
 class AgentTracker:
     """Subagents Claude has started in this conversation. The main
     conversation's Agent tool call starts one; everything the subagent then
@@ -868,6 +924,7 @@ class DemoSession:
         self.cfg = cfg
         self._stop = False
         self._child = None
+        self.init_agents = ["Explore", "general-purpose", "Plan"]
 
     async def start(self):
         # Test hook: a slow start with a child process that, like the real
@@ -974,6 +1031,7 @@ def make_session(args, out, cfg):
 HELP = """Commands:
   /new         start a fresh conversation
   /edits on    auto-accept file edits (off asks each time)
+  /agents      list the subagents this project offers
   /help        this text
   /quit        disconnect
 Type a prompt and press return. End a line with \\ to continue it.
@@ -1838,6 +1896,10 @@ class Channel:
                     for line in HELP.split("\n"):
                         await self.notice(line)
                     continue
+                if cmd[0] == "/agents":
+                    for line in agents_lines(self.cfg.cwd, getattr(self.session, "init_agents", [])):
+                        await self.notice(line)
+                    continue
                 if cmd[0] == "/new":
                     if not await self._restart():
                         return
@@ -2059,6 +2121,10 @@ async def main_async(args):
                 break
             if cmd[0] == "/help":
                 for line in HELP.split("\n"):
+                    await term.notice(line)
+                continue
+            if cmd[0] == "/agents":
+                for line in agents_lines(cfg.cwd, getattr(session, "init_agents", [])):
                     await term.notice(line)
                 continue
             if cmd[0] == "/new":

@@ -377,6 +377,91 @@ class WireTests(unittest.TestCase):
                    timeout=25)
 
 
+class AgentsCommandTests(unittest.TestCase):
+    def setUp(self):
+        self.root = tempfile.mkdtemp()
+        self.proj = os.path.join(self.root, "alpha")
+        self.adir = os.path.join(self.proj, ".claude", "agents")
+        os.makedirs(self.adir)
+        self.addCleanup(shutil.rmtree, self.root, True)
+        home = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, home, True)
+        old = os.environ.get("HOME")
+        os.environ["HOME"] = home
+        self.addCleanup(lambda: os.environ.__setitem__("HOME", old) if old else None)
+
+    def write(self, name, text, d=None):
+        with open(os.path.join(d or self.adir, name), "w") as f:
+            f.write(text)
+
+    def test_project_agent_is_listed_with_its_description(self):
+        self.write("reviewer.md", "---\nname: reviewer\ndescription: Reviews diffs for bugs\n---\nbody\n")
+        out = bridge.agents_lines(self.proj, ["Explore", "Plan"])
+        self.assertIn("reviewer (project): Reviews diffs for bugs", out)
+        self.assertIn("Explore (built in)", out)
+        self.assertEqual(out[-1], "New or changed agent files apply after /new.")
+
+    def test_missing_name_and_description(self):
+        self.write("helper.md", "---\ndescription: Helps\n---\n")
+        self.write("quiet.md", "---\nname: quiet\n---\n")
+        out = bridge.agents_lines(self.proj, ["x"])
+        self.assertIn("helper (project): Helps", out)
+        self.assertIn("quiet (project): (no description)", out)
+
+    def test_broken_frontmatter_does_not_stop_the_list(self):
+        self.write("broken.md", "no frontmatter at all\n")
+        self.write("ok.md", "---\nname: ok\ndescription: fine\n---\n")
+        out = bridge.agents_lines(self.proj, ["x"])
+        self.assertIn("broken (project): (unreadable)", out)
+        self.assertIn("ok (project): fine", out)
+
+    def test_symlink_out_of_the_folder_is_skipped(self):
+        outside = os.path.join(self.root, "secret.md")
+        with open(outside, "w") as f:
+            f.write("---\nname: secret\ndescription: leaked\n---\n")
+        os.symlink(outside, os.path.join(self.adir, "secret.md"))
+        out = " ".join(bridge.agents_lines(self.proj, ["x"]))
+        self.assertNotIn("secret", out)
+
+    def test_init_names_defined_by_a_file_appear_once(self):
+        self.write("reviewer.md", "---\nname: reviewer\ndescription: d\n---\n")
+        out = bridge.agents_lines(self.proj, ["reviewer", "Explore"])
+        self.assertEqual(len([l for l in out if l.startswith("reviewer")]), 1)
+        self.assertIn("reviewer (project): d", out)
+
+    def test_before_any_reply_it_says_built_ins_come_later(self):
+        out = bridge.agents_lines(self.proj, [])
+        self.assertIn("Built-in agents are listed after the first reply.", out)
+
+    def test_user_agents_are_listed(self):
+        udir = os.path.join(os.environ["HOME"], ".claude", "agents")
+        os.makedirs(udir)
+        self.write("mine.md", "---\nname: mine\ndescription: personal\n---\n", udir)
+        self.assertIn("mine (user): personal", bridge.agents_lines(self.proj, ["x"]))
+
+    def test_command_over_v2_and_tty(self):
+        self.write("reviewer.md", "---\nname: reviewer\ndescription: Reviews diffs for bugs\n---\n")
+        c = Client("--demo", "--projects", self.root)
+        self.addCleanup(c.reap)
+        c.hello()
+        c.open(1, "alpha")
+        c.wait_line("1>")
+        start = len(c.lines)
+        c.send("1P /agents")
+        c.wait_for(lambda l: l.startswith("1I New or changed"), start=start)
+        got = c.session(1, start)
+        self.assertIn("I reviewer (project): Reviews diffs for bugs", got)
+        self.assertIn("I Explore (built in)", got)
+        self.assertTrue(all(l.startswith("I ") for l in got if l[:1] != ">"))
+        # the same command in tty mode
+        t = Client("--demo", "--projects", self.root)
+        self.addCleanup(t.reap)
+        t.send(b"")
+        time.sleep(0.5)
+        t.send("/agents")
+        t.wait_for(lambda l: "New or changed agent files apply after /new." in l)
+
+
 import time  # noqa: E402
 
 if __name__ == "__main__":
