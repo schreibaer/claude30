@@ -34,6 +34,7 @@ Steps:
 |---|---|
 | `perm` | A Write permission request with a 2,000-line body |
 | `wide` | A Bash permission request whose one command line is 3,000 bytes |
+| `edit` | An Edit permission request whose diff has two hunks, +12 -3 lines, one removed line starting with `--` |
 | `long` | Prose, code and permission lines over 4 KB each |
 | `error` | A turn ending in `I Error: ...` and `>` with no `R`, with a code block left open |
 | `burst` | 600 short lines, windows back to back |
@@ -183,6 +184,9 @@ Run these in the emulator, and the hardware rows on the SE/30. Tick each one.
 | ☐ | Copy from the transcript and paste into the input work | Emulator |
 | ☐ | Change the speed to 38,400, quit and relaunch: the setting persists and the port opens at 38,400 | Emulator |
 | ☐ | The stress bridge's `wide` case shows every character of the 3,000-byte command across marked rows | Emulator |
+| ☐ | The `perm` case's dialog opens with the bold line `Write big.txt: +2000 lines` above the header, and the list still scrolls to the last line | Emulator |
+| ☐ | The `edit` case shows `Edit parser.py: +12 -3 lines in 2 places`, and `wide` shows `Bash: long command (3000 characters), read it below` | Emulator |
+| ☐ | The bold line, the header and the list do not overlap at 512 x 342, and the buttons and keys behave as before (Cmd-Y, Cmd-N, Cmd-A, Cmd-period; Return and a held key do nothing; clicks in the first 0.75 s are ignored) | Emulator |
 
 **Hardware (SE/30)**
 

@@ -1,4 +1,5 @@
 #include "permdlg.h"
+#include "permsum.h"
 #include "modem.h"
 #include "resources.h"
 #include "window.h"
@@ -16,6 +17,8 @@
 #define LIST_SIZE    9
 #define MARK_WIDTH   2           /* "  " or the continuation mark */
 #define ARM_TICKS    45          /* clicks on the buttons are ignored for 0.75 s */
+#define GENEVA       3
+#define HEAD_SIZE    12
 
 typedef struct {
     long off;                    /* offset into the request body */
@@ -32,6 +35,9 @@ static DialogPtr gDlg;
 static ControlHandle gBar;
 static Rect gList;
 static short gRowH, gRowAscent, gVisible;
+static Rect gHeadRect;           /* the bold headline above the header */
+static char gHeadline[PERMSUM_MAX];
+static long gHeadlineLen;
 
 /* ---- collecting the request -------------------------------------------- */
 
@@ -159,6 +165,32 @@ static pascal void draw_list(DialogPtr d, short item)
     TextSize(0);
 }
 
+/* Bold headline, set in the dialog's port before it is measured or drawn. */
+static void headline_font(void)
+{
+    TextFont(GENEVA);
+    TextSize(HEAD_SIZE);
+    TextFace(bold);
+}
+
+static long measure_headline(const char *s, long n)
+{
+    return TextWidth((Ptr)s, 0, (short)n);
+}
+
+static pascal void draw_headline(DialogPtr d, short item)
+{
+    (void)d;
+    (void)item;
+    EraseRect(&gHeadRect);
+    headline_font();
+    MoveTo(gHeadRect.left + 1, gHeadRect.top + 13);
+    DrawText(gHeadline, 0, (short)gHeadlineLen);
+    TextFace(0);
+    TextFont(0);
+    TextSize(0);
+}
+
 static void redraw_list(void)
 {
     SetPort(gDlg);
@@ -276,7 +308,7 @@ short permdlg_run(PermReq *q)
     Rect r, barRect;
     FontInfo fi;
     ModalFilterUPP filterUPP;
-    UserItemUPP drawUPP;
+    UserItemUPP drawUPP, headUPP;
     GrafPtr save;
 
     if (q->close_requested)
@@ -315,6 +347,34 @@ short permdlg_run(PermReq *q)
                       gNRows > gVisible ? (short)(gNRows - gVisible) : 0,
                       scrollBarProc, 0);
 
+    /* The headline comes from what was received: counts of a diff or file,
+       or a note to deny when part of the request was lost. */
+    GetDialogItem(gDlg, kPermHeadline, &type, &h, &gHeadRect);
+    headUPP = NewUserItemUPP(draw_headline);
+    SetDialogItem(gDlg, kPermHeadline, type, (Handle)headUPP, &gHeadRect);
+    headline_font();
+    /* Measuring can load a font and move memory, so the body stays locked. */
+    if (q->body && q->line_ends) {
+        char bodyState = HGetState(q->body), endsState = HGetState(q->line_ends);
+        HLock(q->body);
+        HLock(q->line_ends);
+        gHeadlineLen = permsum_build((const char *)q->title + 1, q->title[0],
+                                     *q->body, (const long *)*q->line_ends,
+                                     q->nlines, q->incomplete,
+                                     measure_headline, gHeadRect.right - gHeadRect.left - 4,
+                                     gHeadline, sizeof(gHeadline));
+        HSetState(q->body, bodyState);
+        HSetState(q->line_ends, endsState);
+    } else {
+        gHeadlineLen = permsum_build((const char *)q->title + 1, q->title[0],
+                                     NULL, NULL, 0, q->incomplete,
+                                     measure_headline, gHeadRect.right - gHeadRect.left - 4,
+                                     gHeadline, sizeof(gHeadline));
+    }
+    TextFace(0);
+    TextFont(0);
+    TextSize(0);
+
     if (q->incomplete)
         show_incomplete();
     ShowWindow(gDlg);
@@ -335,6 +395,7 @@ short permdlg_run(PermReq *q)
     DisposeDialog(gDlg);
     DisposeModalFilterUPP(filterUPP);
     DisposeUserItemUPP(drawUPP);
+    DisposeUserItemUPP(headUPP);
     DisposeControlActionUPP(gBarUPP);
     gDlg = NULL;
     gReq = NULL;

@@ -9,6 +9,7 @@
 #include "check.h"
 #include "protocol.h"
 #include "files.h"
+#include "permsum.h"
 #include <signal.h>
 #include <sys/select.h>
 #include <sys/stat.h>
@@ -20,6 +21,10 @@
 typedef struct {
     int counts[EV_COUNT];
     long longest_text, longest_code, longest_perm;
+    char perm_title[128];      /* the last permission request, as the dialog gets it */
+    char perm_body[4096];
+    long perm_ends[128];
+    long perm_n, perm_len;
     int stop_after_text;       /* call proto_stop after this many T lines */
     int disconnect_after_text; /* call proto_disconnect after this many T lines */
     int texts;
@@ -158,9 +163,18 @@ static void on_event(void *ctx, int sid, EventKind k, const char *t, long n)
         if (n > r->longest_code)
             r->longest_code = n;
         break;
+    case EV_PERM_BEGIN:
+        copy_text(r->perm_title, sizeof(r->perm_title), t, n);
+        r->perm_n = r->perm_len = 0;
+        break;
     case EV_PERM_LINE:
         if (n > r->longest_perm)
             r->longest_perm = n;
+        if (r->perm_n < 128 && r->perm_len + n <= (long)sizeof(r->perm_body)) {
+            memcpy(r->perm_body + r->perm_len, t, n);
+            r->perm_len += n;
+            r->perm_ends[r->perm_n++] = r->perm_len;
+        }
         break;
     case EV_PERM_ASK:
         proto_answer(&P, sid, S.answer);
@@ -488,6 +502,18 @@ static void test_stress_cases(void)
     CHECK(run(s1_done, 30));
     CHECK_EQ_LONG(S.s[1].counts[EV_PERM_LINE], 1);
     CHECK_EQ_LONG(S.s[1].longest_perm, 3000);
+
+    /* The headline counted from the real bridge's diff. */
+    memset(&S.s[1], 0, sizeof(S.s[1]));
+    stress_turn(1, "edit");
+    CHECK(run(s1_done, 30));
+    {
+        char head[PERMSUM_MAX];
+        long n = permsum_build(S.s[1].perm_title, (long)strlen(S.s[1].perm_title),
+                               S.s[1].perm_body, S.s[1].perm_ends, S.s[1].perm_n, 0,
+                               NULL, 1000, head, sizeof(head));
+        CHECK_MEM(head, n, "Edit parser.py: +12 -3 lines in 2 places");
+    }
 
     stress_turn(1, "long");
     CHECK(run(s1_done, 30));

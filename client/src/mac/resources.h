@@ -83,6 +83,7 @@
 #define kPermSummary    4
 #define kPermList       5
 #define kPermHint       6
+#define kPermHeadline   7
 
 #define kLinkStop       1
 #define kLinkInfo       2

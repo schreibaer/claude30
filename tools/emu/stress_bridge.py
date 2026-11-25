@@ -7,6 +7,7 @@ the session that sent it:
 
   perm     a Write permission request with a 2,000-line body
   wide     a Bash permission request whose single command line is 3,000 bytes
+  edit     an Edit permission request with a known diff: +12 -3 lines in 2 places
   long     prose, code and permission lines over 4 KB each
   error    a turn that ends with "I Error: ..." and ">" but no "R"
   burst    600 short lines, windows back to back
@@ -144,6 +145,21 @@ class StressSession:
         await self.tag("U", f"Bash ({'allowed' if ans in 'ya' else 'denied'})")
         await self.tag("R", "success $0.0000")
 
+    async def case_edit(self):
+        # A real Edit diff from the bridge's own describe_tool: one hunk that
+        # removes 3 lines (one of them starts with "--") and one that adds 12.
+        old = [f"line {i:02d}" for i in range(1, 41)]
+        new = list(old)
+        old[2] = "--flag removed with two dashes"
+        new[30:30] = [f"added {i:02d}" for i in range(1, 13)]
+        del new[2:5]
+        summary, body = bridge.describe_tool(
+            "Edit", {"file_path": "/tmp/project/src/parser.py",
+                     "old_string": "\n".join(old), "new_string": "\n".join(new)}, "/tmp/project")
+        ans = await self.ask(3, "Edit", summary, body)
+        await self.tag("U", f"Edit {summary} ({'allowed' if ans in 'ya' else 'denied'})")
+        await self.tag("R", "success $0.0000")
+
     async def case_long(self):
         await self.tag("T", "A prose line over 4 KB: " + "word " * 900)
         await self.tag("C[")
@@ -202,7 +218,7 @@ class StressSession:
         await self.tag("R", "success $0.0000")
 
     async def case_help(self):
-        for line in __doc__.split("\n")[5:22]:
+        for line in __doc__.split("\n")[5:23]:
             await self.tag("I", line.strip())
         await self.tag("R", "success $0.0000")
 
