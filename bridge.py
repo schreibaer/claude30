@@ -459,6 +459,17 @@ class Terminal:
         else:
             await self.out_line(clip(f"  [{name}] {summary}", self.cols - 1))
 
+    # Subagents: ZTerm, the v1 app and the old v2 apps get one line when a
+    # subagent starts and one when it ends, and nothing between.
+    async def agent_start(self, k, typ, task):
+        await self.tool("Agent", f"{typ}: {clip(task, 120)}")
+
+    async def agent_step(self, k, steps, tool, summary):
+        pass
+
+    async def agent_end(self, k, typ, status, steps, summary):
+        await self.tool("Agent", f"{typ} {status}: {clip(summary, 120)}")
+
     async def tool_error(self, msg):
         if self.mode == "app":
             await self.tag("E", clip(msg, 200))
@@ -590,6 +601,106 @@ SYSTEM_APPEND = (
 )
 
 
+class AgentTracker:
+    """Subagents Claude has started in this conversation. The main
+    conversation's Agent tool call starts one; everything the subagent then
+    says or runs carries its parent_tool_use_id and is counted here but never
+    sent to the SE/30, which gets a start, throttled progress and an end."""
+
+    STEP_EVERY = 5.0      # seconds between progress lines for one subagent
+    MAX_OPEN = 99
+
+    def __init__(self, term, clock=time.monotonic):
+        self.term = term
+        self.clock = clock
+        self.running = {}       # tool_use_id -> dict
+        self.ended = set()      # tool_use_ids already ended this turn
+        self.interrupted = False
+
+    def _free_slot(self):
+        used = {a["k"] for a in self.running.values()}
+        return next((k for k in range(1, self.MAX_OPEN + 1) if k not in used), None)
+
+    async def start(self, tool_use_id, inp):
+        k = self._free_slot()
+        if k is None or tool_use_id in self.running:
+            return
+        typ = re.sub(r"\s+", "-", str(inp.get("subagent_type") or "general-purpose").strip())
+        task = " ".join(str(inp.get("description") or inp.get("prompt") or "").split())
+        self.running[tool_use_id] = {"k": k, "type": typ, "task": task, "steps": 0,
+                                     "tool": "", "summary": "", "sent": (0, ""),
+                                     "last": self.clock(), "task_id": None}
+        await self.term.agent_start(k, typ, task)
+
+    def owns(self, tool_use_id):
+        return tool_use_id in self.running or tool_use_id in self.ended
+
+    def bind(self, tool_use_id, task_id):
+        a = self.running.get(tool_use_id)
+        if a and task_id:
+            a["task_id"] = task_id
+
+    async def step(self, tool_use_id, name=None, summary="", steps=None, force=False):
+        """One more tool the subagent used (or the CLI's own count and tool)."""
+        a = self.running.get(tool_use_id)
+        if not a:
+            return
+        if name is not None:
+            a["steps"] = max(a["steps"] + (1 if steps is None else 0), steps or 0)
+            a["tool"], a["summary"] = name, summary
+        elif steps is not None:
+            a["steps"] = max(a["steps"], steps)
+        now = self.clock()
+        if (a["steps"], a["tool"]) == a["sent"] or (not force and now - a["last"] < self.STEP_EVERY):
+            return
+        a["sent"] = (a["steps"], a["tool"])
+        a["last"] = now
+        await self.term.agent_step(a["k"], a["steps"], a["tool"] or "-", a["summary"])
+
+    async def end(self, tool_use_id, status, summary=""):
+        a = self.running.pop(tool_use_id, None)
+        if not a:
+            return
+        self.ended.add(tool_use_id)
+        await self.term.agent_end(a["k"], a["type"], status, a["steps"], summary or a["task"])
+
+    async def end_result(self, tool_use_id, content, is_error):
+        """The Agent tool's own result, when the CLI sent no notification."""
+        status = "failed" if is_error else "done"
+        if is_error and self.interrupted:
+            status = "stopped"
+        await self.end(tool_use_id, status, first_line(content))
+
+    async def close_all(self):
+        for tid in list(self.running):
+            await self.end(tid, "stopped")
+
+    def label_for(self, agent_id):
+        """What to put in front of a permission request: nothing for the main
+        conversation, the subagent's type when it can be told, else "subagent"."""
+        if not agent_id:
+            return ""
+        for a in self.running.values():
+            if a["task_id"] == agent_id:
+                return a["type"]
+        if len(self.running) == 1:
+            return next(iter(self.running.values()))["type"]
+        return "subagent"
+
+
+def result_text(content):
+    if isinstance(content, list):
+        content = " ".join(x.get("text", "") for x in content if isinstance(x, dict))
+    return str(content or "")
+
+
+def first_line(content):
+    for line in result_text(content).splitlines():
+        if line.strip():
+            return line.strip()
+    return ""
+
+
 class SessionConfig:
     """What one conversation runs with. Each v2 session has its own, so a
     /edits in one tab never changes another."""
@@ -618,6 +729,8 @@ class ClaudeSession:
         # input queue and each would discard the other's answer, leaving the
         # turn stuck. Ask one at a time.
         self._perm_lock = asyncio.Lock()
+        self.agents = AgentTracker(term)
+        self.init_agents = []     # agent names from the CLI's init message
 
     async def start(self):
         from claude_agent_sdk import ClaudeAgentOptions, ClaudeSDKClient
@@ -647,6 +760,7 @@ class ClaudeSession:
             await client.disconnect()
 
     async def interrupt(self):
+        self.agents.interrupted = True
         if self.client:
             await self.client.interrupt()
 
@@ -659,6 +773,9 @@ class ClaudeSession:
             if key in self.always:
                 return PermissionResultAllow(updated_input=input_data)
             summary, detail = describe_tool(tool_name, input_data, self.cfg.cwd)
+            label = self.agents.label_for(getattr(context, "agent_id", None))
+            if label:
+                summary = f"({label}) {summary}"
             pid = self.next_pid
             self.next_pid += 1
             ans = await self.term.ask_permission(pid, tool_name, summary, detail)
@@ -669,35 +786,78 @@ class ClaudeSession:
         return PermissionResultDeny(message="The user denied this action.", interrupt=False)
 
     async def turn(self, prompt):
-        from claude_agent_sdk import (AssistantMessage, ResultMessage, TextBlock,
-                                      ToolUseBlock, UserMessage)
+        from claude_agent_sdk import (AssistantMessage, ResultMessage, SystemMessage,
+                                      TextBlock, ToolUseBlock, UserMessage)
         try:
             from claude_agent_sdk import ToolResultBlock
         except ImportError:
             ToolResultBlock = None
+        ag = self.agents
+        ag.interrupted = False
+        ag.ended.clear()
         await self.client.query(prompt)
-        async for msg in self.client.receive_response():
-            if isinstance(msg, AssistantMessage):
-                for block in msg.content:
-                    if isinstance(block, TextBlock) and block.text.strip():
-                        await self.term.text(block.text)
-                    elif isinstance(block, ToolUseBlock):
-                        s, _ = describe_tool(block.name, block.input or {}, self.cfg.cwd)
-                        await self.term.tool(block.name, s)
-            elif isinstance(msg, UserMessage) and ToolResultBlock:
-                content = msg.content if isinstance(msg.content, list) else []
-                for block in content:
-                    if isinstance(block, ToolResultBlock) and block.is_error:
-                        c = block.content
-                        if isinstance(c, list):
-                            c = " ".join(x.get("text", "") for x in c if isinstance(x, dict))
-                        first = (str(c or "error").strip().splitlines() or ["error"])[0]
-                        await self.term.tool_error(first)
-            elif isinstance(msg, ResultMessage):
-                if getattr(msg, "session_id", None):
-                    self.cfg.claude_id = msg.session_id
-                status = "interrupted" if getattr(msg, "terminal_reason", None) else msg.subtype
-                await self.term.result(status, getattr(msg, "total_cost_usd", None))
+        try:
+            async for msg in self.client.receive_response():
+                if isinstance(msg, AssistantMessage):
+                    parent = getattr(msg, "parent_tool_use_id", None)
+                    for block in msg.content:
+                        if parent:
+                            # A subagent's own work: counted, never sent.
+                            if isinstance(block, ToolUseBlock):
+                                s, _ = describe_tool(block.name, block.input or {}, self.cfg.cwd)
+                                await ag.step(parent, block.name, s)
+                        elif isinstance(block, TextBlock) and block.text.strip():
+                            await self.term.text(block.text)
+                        elif isinstance(block, ToolUseBlock):
+                            if block.name in ("Agent", "Task"):
+                                await ag.start(block.id, block.input or {})
+                            else:
+                                s, _ = describe_tool(block.name, block.input or {}, self.cfg.cwd)
+                                await self.term.tool(block.name, s)
+                elif isinstance(msg, UserMessage) and ToolResultBlock:
+                    if getattr(msg, "parent_tool_use_id", None):
+                        continue
+                    content = msg.content if isinstance(msg.content, list) else []
+                    for block in content:
+                        if not isinstance(block, ToolResultBlock):
+                            continue
+                        if ag.owns(block.tool_use_id):
+                            await ag.end_result(block.tool_use_id, block.content,
+                                                bool(block.is_error))
+                        elif block.is_error:
+                            first = first_line(block.content) or "error"
+                            await self.term.tool_error(first)
+                elif isinstance(msg, SystemMessage):
+                    await self._system(msg)
+                elif isinstance(msg, ResultMessage):
+                    await ag.close_all()
+                    if getattr(msg, "session_id", None):
+                        self.cfg.claude_id = msg.session_id
+                    status = "interrupted" if getattr(msg, "terminal_reason", None) else msg.subtype
+                    await self.term.result(status, getattr(msg, "total_cost_usd", None))
+        finally:
+            await ag.close_all()
+
+    async def _system(self, msg):
+        data = msg.data if isinstance(msg.data, dict) else {}
+        if msg.subtype == "init":
+            names = data.get("agents")
+            if isinstance(names, list):
+                self.init_agents = [str(n) for n in names]
+            return
+        tid = data.get("tool_use_id")
+        if not tid:
+            return
+        ag = self.agents
+        if msg.subtype == "task_started":
+            ag.bind(tid, data.get("task_id"))
+        elif msg.subtype == "task_progress":
+            usage = data.get("usage") or {}
+            await ag.step(tid, steps=usage.get("tool_uses"))
+        elif msg.subtype == "task_notification":
+            status = {"completed": "done", "failed": "failed", "stopped": "stopped"}.get(
+                data.get("status"), "done")
+            await ag.end(tid, status, " ".join(str(data.get("summary") or "").split()))
 
 
 class DemoSession:
@@ -1475,6 +1635,15 @@ class Channel:
 
     async def tool(self, name, summary):
         await self.tag("U", f"{name} {summary}")
+
+    async def agent_start(self, k, typ, task):
+        await self.tool("Agent", f"{typ}: {clip(task, 120)}")
+
+    async def agent_step(self, k, steps, tool, summary):
+        pass
+
+    async def agent_end(self, k, typ, status, steps, summary):
+        await self.tool("Agent", f"{typ} {status}: {clip(summary, 120)}")
 
     async def tool_error(self, msg):
         await self.tag("E", clip(msg, 200))
