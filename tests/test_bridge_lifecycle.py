@@ -61,7 +61,7 @@ class Base(unittest.TestCase):
 
 class EvictionTest(Base):
     def test_new_call_ends_bridge_stuck_on_ack(self):
-        old = self.client(auto_ack=False)
+        old = self.client("--window", "12", "--models", "opus", auto_ack=False)
         old.hello()
         old.open(1, "alpha")
         old.wait_line("1>")
@@ -167,7 +167,7 @@ class HeartbeatTest(Base):
         c.close()
 
     def test_pong_while_waiting_for_ack(self):
-        c = self.client(auto_ack=False)
+        c = self.client("--window", "12", "--models", "opus", auto_ack=False)
         c.hello()
         c.open(1, "alpha")
         c.wait_line("1>")

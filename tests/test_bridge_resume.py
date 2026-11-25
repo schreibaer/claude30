@@ -80,11 +80,12 @@ class TokenTest(Base):
         ok = [l for l in c.text() if l.startswith("#OK")][0]
         self.assertIn(" resume", ok)
         self.assertIn(" ping", ok)
+        self.assertIn(" models", ok)
         start = len(c.lines)
         c.open(1, "alpha")
         c.wait_line("1>", start=start)
         tags = [l for l in c.text()[start:] if l[:1] == "1"]
-        self.assertEqual([t[:2] for t in tags], ["1O", "1Y", "1>"])
+        self.assertEqual([t[:2] for t in tags], ["1O", "1Y", "1M", "1>"])
         c.close()
 
     def test_resume_continues_turn_count_in_new_call(self):
