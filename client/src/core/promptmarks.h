@@ -18,6 +18,8 @@ void pm_add(PromptMarks *m, long off);
 /* The first cut bytes left the transcript: shift, and forget the prompts
    that went with them. */
 void pm_cut(PromptMarks *m, long cut);
+/* A line at off changed its length by delta: prompts after it move. */
+void pm_shift(PromptMarks *m, long off, long delta);
 /* The last prompt before pos, or -1. */
 long pm_prev(const PromptMarks *m, long pos);
 /* The first prompt after pos, or -1. */

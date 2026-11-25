@@ -459,6 +459,17 @@ class Terminal:
         else:
             await self.out_line(clip(f"  [{name}] {summary}", self.cols - 1))
 
+    # Subagents: ZTerm, the v1 app and the old v2 apps get one line when a
+    # subagent starts and one when it ends, and nothing between.
+    async def agent_start(self, k, typ, task):
+        await self.tool("Agent", f"{typ}: {clip(task, 120)}")
+
+    async def agent_step(self, k, steps, tool, summary):
+        pass
+
+    async def agent_end(self, k, typ, status, steps, summary):
+        await self.tool("Agent", f"{typ} {status}: {clip(summary, 120)}")
+
     async def tool_error(self, msg):
         if self.mode == "app":
             await self.tag("E", clip(msg, 200))
@@ -590,6 +601,193 @@ SYSTEM_APPEND = (
 )
 
 
+AGENT_DIRS = (("project", None), ("user", "~/.claude/agents"))
+AGENT_FILES_MAX = 50
+
+
+def read_agent_file(path):
+    """(name, description) from an agent file's frontmatter, or None when it
+    cannot be read. Only the first 4 KB are read."""
+    try:
+        with open(path, "rb") as f:
+            head = f.read(4096).decode("utf-8")
+    except (OSError, UnicodeDecodeError):
+        return None
+    lines = head.splitlines()
+    if not lines or lines[0].strip() != "---":
+        return None
+    meta = {}
+    for line in lines[1:]:
+        if line.strip() == "---":
+            break
+        m = re.match(r"^(name|description):\s*(.*)$", line)
+        if m:
+            meta[m.group(1)] = m.group(2).strip().strip("\"'")
+    else:
+        return None
+    stem = os.path.splitext(os.path.basename(path))[0]
+    return (meta.get("name") or stem, meta.get("description") or "")
+
+
+def agents_lines(cwd, init_names):
+    """The /agents listing: each agent once, with where it is defined."""
+    found = {}
+    for where, d in AGENT_DIRS:
+        d = os.path.join(cwd, ".claude", "agents") if d is None else os.path.expanduser(d)
+        try:
+            root = os.path.realpath(d)
+            names = sorted(n for n in os.listdir(d) if n.endswith(".md"))[:AGENT_FILES_MAX]
+        except OSError:
+            continue
+        for fn in names:
+            path = os.path.join(d, fn)
+            real = os.path.realpath(path)
+            if not (real == root or real.startswith(root + os.sep)) or not os.path.isfile(real):
+                continue                       # a link that leaves the folder
+            got = read_agent_file(path)
+            name, desc = got if got else (os.path.splitext(fn)[0],
+                                          "(unreadable)")
+            found.setdefault(name, (where, desc or "(no description)"))
+    out = [f"{n} ({w}): {clip(d, 100)}" for n, (w, d) in found.items()]
+    if init_names:
+        out += [f"{n} (built in)" for n in init_names if n not in found]
+    else:
+        out.append("Built-in agents are listed after the first reply.")
+    out.append("New or changed agent files apply after /new.")
+    return [clip(l, 120) for l in out]
+
+
+class AgentTracker:
+    """Subagents Claude has started in this conversation. The main
+    conversation's Agent tool call starts one; everything the subagent then
+    says or runs carries its parent_tool_use_id and is counted here but never
+    sent to the SE/30, which gets a start, throttled progress and an end."""
+
+    STEP_EVERY = 5.0      # seconds between progress lines for one subagent
+    MAX_OPEN = 99
+
+    def __init__(self, term, clock=time.monotonic):
+        self.term = term
+        self.clock = clock
+        self.running = {}       # tool_use_id -> dict
+        self.ended = set()      # tool_use_ids already ended this turn
+        self.background = {}    # tool_use_id -> dict, launched in the background
+        self.interrupted = False
+
+    def _free_slot(self):
+        used = {a["k"] for a in self.running.values()}
+        return next((k for k in range(1, self.MAX_OPEN + 1) if k not in used), None)
+
+    async def start(self, tool_use_id, inp):
+        k = self._free_slot()
+        if k is None or tool_use_id in self.running:
+            return
+        typ = re.sub(r"\s+", "-", str(inp.get("subagent_type") or "general-purpose").strip())
+        task = " ".join(str(inp.get("description") or inp.get("prompt") or "").split())
+        self.running[tool_use_id] = {"k": k, "type": typ, "task": task, "steps": 0,
+                                     "tool": "", "summary": "", "sent": (0, ""),
+                                     "last": self.clock(), "task_id": None,
+                                     "bg": bool(inp.get("run_in_background"))}
+        await self.term.agent_start(k, typ, task)
+
+    def owns(self, tool_use_id):
+        return (tool_use_id in self.running or tool_use_id in self.ended
+                or tool_use_id in self.background)
+
+    def bind(self, tool_use_id, task_id):
+        a = self.running.get(tool_use_id) or self.background.get(tool_use_id)
+        if a and task_id:
+            a["task_id"] = task_id
+
+    async def step(self, tool_use_id, name=None, summary="", steps=None, force=False):
+        """One more tool the subagent used (or the CLI's own count and tool)."""
+        b = self.background.get(tool_use_id)
+        if b:
+            # Counted for its end line; its line is not live while it runs.
+            if name is not None:
+                b["steps"] = max(b["steps"] + (1 if steps is None else 0), steps or 0)
+            elif steps is not None:
+                b["steps"] = max(b["steps"], steps)
+            return
+        a = self.running.get(tool_use_id)
+        if not a:
+            return
+        if name is not None:
+            a["steps"] = max(a["steps"] + (1 if steps is None else 0), steps or 0)
+            a["tool"], a["summary"] = name, summary
+        elif steps is not None:
+            a["steps"] = max(a["steps"], steps)
+        now = self.clock()
+        if (a["steps"], a["tool"]) == a["sent"] or (not force and now - a["last"] < self.STEP_EVERY):
+            return
+        a["sent"] = (a["steps"], a["tool"])
+        a["last"] = now
+        await self.term.agent_step(a["k"], a["steps"], a["tool"] or "-", a["summary"])
+
+    async def end(self, tool_use_id, status, summary=""):
+        b = self.background.pop(tool_use_id, None)
+        if b:
+            # A background subagent ended, maybe turns later: its own line
+            # went with the turn that started it, so it gets a new one.
+            k = self._free_slot()
+            if k is None:
+                return
+            await self.term.agent_start(k, b["type"], b["task"])
+            await self.term.agent_end(k, b["type"], status, b["steps"], summary or b["task"])
+            return
+        a = self.running.pop(tool_use_id, None)
+        if not a:
+            return
+        self.ended.add(tool_use_id)
+        await self.term.agent_end(a["k"], a["type"], status, a["steps"], summary or a["task"])
+
+    async def end_result(self, tool_use_id, content, is_error):
+        """The Agent tool's own result, when the CLI sent no notification."""
+        a = self.running.get(tool_use_id)
+        if a and a["bg"] and not is_error:
+            # Only the launch was confirmed. Close its line now, since the
+            # turn may end long before it does; its result comes as a
+            # notification, between turns or in a later one.
+            del self.running[tool_use_id]
+            self.background[tool_use_id] = a
+            await self.term.agent_end(a["k"], a["type"], "background", a["steps"],
+                                      "runs on, its result follows")
+            return
+        status = "failed" if is_error else "done"
+        if is_error and self.interrupted:
+            status = "stopped"
+        await self.end(tool_use_id, status, first_line(content))
+
+    async def close_all(self):
+        for tid in list(self.running):
+            await self.end(tid, "stopped")
+
+    def label_for(self, agent_id):
+        """What to put in front of a permission request: nothing for the main
+        conversation, the subagent's type when it can be told, else "subagent"."""
+        if not agent_id:
+            return ""
+        for a in list(self.running.values()) + list(self.background.values()):
+            if a["task_id"] == agent_id:
+                return a["type"]
+        if len(self.running) == 1:
+            return next(iter(self.running.values()))["type"]
+        return "subagent"
+
+
+def result_text(content):
+    if isinstance(content, list):
+        content = " ".join(x.get("text", "") for x in content if isinstance(x, dict))
+    return str(content or "")
+
+
+def first_line(content):
+    for line in result_text(content).splitlines():
+        if line.strip():
+            return line.strip()
+    return ""
+
+
 def new_conversation(cfg):
     """tty and v1: the next session starts a fresh conversation."""
     cfg.claude_id = None
@@ -599,6 +797,7 @@ def new_conversation(cfg):
 
 
 CHANGE = object()   # wakes a Channel's prompt loop to apply a settings change
+WAKE = object()     # ... or to show what Claude sent between turns
 
 
 class SessionConfig:
@@ -631,6 +830,8 @@ class ClaudeSession:
         # input queue and each would discard the other's answer, leaving the
         # turn stuck. Ask one at a time.
         self._perm_lock = asyncio.Lock()
+        self.agents = AgentTracker(term)
+        self.init_agents = []     # agent names from the CLI's init message
 
     async def start(self):
         from claude_agent_sdk import ClaudeAgentOptions, ClaudeSDKClient
@@ -654,14 +855,23 @@ class ClaudeSession:
                 opts.session_id = self.cfg.claude_id
         self.client = ClaudeSDKClient(options=opts)
         await self.client.connect()
+        self._msgs = asyncio.Queue()
+        self._in_turn = False
+        self._pump = asyncio.ensure_future(self._pump_messages())
         self.term.on_interrupt = self.interrupt
 
     async def stop(self):
+        pump, self._pump = getattr(self, "_pump", None), None
+        if pump:
+            pump.cancel()
+            with contextlib.suppress(asyncio.CancelledError, Exception):
+                await pump
         if self.client:
             client, self.client = self.client, None
             await client.disconnect()
 
     async def interrupt(self):
+        self.agents.interrupted = True
         if self.client:
             await self.client.interrupt()
 
@@ -679,6 +889,9 @@ class ClaudeSession:
             if key in self.always:
                 return PermissionResultAllow(updated_input=input_data)
             summary, detail = describe_tool(tool_name, input_data, self.cfg.cwd)
+            label = self.agents.label_for(getattr(context, "agent_id", None))
+            if label:
+                summary = f"({label}) {summary}"
             pid = self.next_pid
             self.next_pid += 1
             ans = await self.term.ask_permission(pid, tool_name, summary, detail)
@@ -688,36 +901,146 @@ class ClaudeSession:
             return PermissionResultAllow(updated_input=input_data)
         return PermissionResultDeny(message="The user denied this action.", interrupt=False)
 
+    async def _pump_messages(self):
+        """Reads everything Claude sends, in turns and between them: a
+        background subagent ends between turns, and Claude then starts a
+        turn of its own to report it."""
+        try:
+            async for msg in self.client.receive_messages():
+                self._msgs.put_nowait(msg)
+                if not self._in_turn:
+                    self._wake()
+        except Exception as e:  # noqa: BLE001
+            self._msgs.put_nowait(e)
+        else:
+            self._msgs.put_nowait(EOFError("Claude stopped"))
+
+    def _wake(self):
+        """Tells a v2 channel that output arrived between turns. tty and v1
+        show it before the next turn instead."""
+        wake = getattr(self.term, "wake", None)
+        if wake:
+            wake()
+
+    async def _next(self):
+        msg = await self._msgs.get()
+        if isinstance(msg, BaseException):
+            raise msg
+        return msg
+
     async def turn(self, prompt):
-        from claude_agent_sdk import (AssistantMessage, ResultMessage, TextBlock,
-                                      ToolUseBlock, UserMessage)
+        ag = self.agents
+        if not self._msgs.empty():
+            await self.follow()
+        ag.interrupted = False
+        ag.ended.clear()
+        self._in_turn = True
+        try:
+            await self.client.query(prompt)
+            while not await self._handle(await self._next()):
+                pass
+        finally:
+            await ag.close_all()
+            self._in_turn = False
+            if not self._msgs.empty():
+                self._wake()
+
+    async def follow(self):
+        """Shows what arrived between turns. Background subagents' progress
+        and ends are applied as they come; when Claude starts a turn by
+        itself, it runs to its result. Returns whether there was a turn."""
+        from claude_agent_sdk import AssistantMessage, ResultMessage, UserMessage
+        ag = self.agents
+        turned = False
+        self._in_turn = True
+        try:
+            while turned or not self._msgs.empty():
+                msg = await self._next()
+                if not turned and (isinstance(msg, ResultMessage) or (
+                        isinstance(msg, (AssistantMessage, UserMessage))
+                        and not getattr(msg, "parent_tool_use_id", None))):
+                    turned = True
+                    ag.interrupted = False
+                    ag.ended.clear()
+                if await self._handle(msg):
+                    break
+        finally:
+            if turned:
+                await ag.close_all()
+            self._in_turn = False
+            if not self._msgs.empty():
+                self._wake()
+        return turned
+
+    async def _handle(self, msg):
+        """One message from Claude. Returns True at the end of a turn."""
+        from claude_agent_sdk import (AssistantMessage, ResultMessage, SystemMessage,
+                                      TextBlock, ToolUseBlock, UserMessage)
         try:
             from claude_agent_sdk import ToolResultBlock
         except ImportError:
             ToolResultBlock = None
-        await self.client.query(prompt)
-        async for msg in self.client.receive_response():
-            if isinstance(msg, AssistantMessage):
-                for block in msg.content:
-                    if isinstance(block, TextBlock) and block.text.strip():
-                        await self.term.text(block.text)
-                    elif isinstance(block, ToolUseBlock):
+        ag = self.agents
+        if isinstance(msg, AssistantMessage):
+            parent = getattr(msg, "parent_tool_use_id", None)
+            for block in msg.content:
+                if parent:
+                    # A subagent's own work: counted, never sent.
+                    if isinstance(block, ToolUseBlock):
+                        s, _ = describe_tool(block.name, block.input or {}, self.cfg.cwd)
+                        await ag.step(parent, block.name, s)
+                elif isinstance(block, TextBlock) and block.text.strip():
+                    await self.term.text(block.text)
+                elif isinstance(block, ToolUseBlock):
+                    if block.name in ("Agent", "Task"):
+                        await ag.start(block.id, block.input or {})
+                    else:
                         s, _ = describe_tool(block.name, block.input or {}, self.cfg.cwd)
                         await self.term.tool(block.name, s)
-            elif isinstance(msg, UserMessage) and ToolResultBlock:
-                content = msg.content if isinstance(msg.content, list) else []
-                for block in content:
-                    if isinstance(block, ToolResultBlock) and block.is_error:
-                        c = block.content
-                        if isinstance(c, list):
-                            c = " ".join(x.get("text", "") for x in c if isinstance(x, dict))
-                        first = (str(c or "error").strip().splitlines() or ["error"])[0]
-                        await self.term.tool_error(first)
-            elif isinstance(msg, ResultMessage):
-                if getattr(msg, "session_id", None):
-                    self.cfg.claude_id = msg.session_id
-                status = "interrupted" if getattr(msg, "terminal_reason", None) else msg.subtype
-                await self.term.result(status, getattr(msg, "total_cost_usd", None))
+        elif isinstance(msg, UserMessage) and ToolResultBlock:
+            if getattr(msg, "parent_tool_use_id", None):
+                return False
+            content = msg.content if isinstance(msg.content, list) else []
+            for block in content:
+                if not isinstance(block, ToolResultBlock):
+                    continue
+                if ag.owns(block.tool_use_id):
+                    await ag.end_result(block.tool_use_id, block.content, bool(block.is_error))
+                elif block.is_error:
+                    first = first_line(block.content) or "error"
+                    await self.term.tool_error(first)
+        elif isinstance(msg, SystemMessage):
+            await self._system(msg)
+        elif isinstance(msg, ResultMessage):
+            await ag.close_all()
+            if getattr(msg, "session_id", None):
+                self.cfg.claude_id = msg.session_id
+            reason = getattr(msg, "terminal_reason", None) or ""
+            status = "interrupted" if reason.startswith("aborted") else msg.subtype
+            await self.term.result(status, getattr(msg, "total_cost_usd", None))
+            return True
+        return False
+
+    async def _system(self, msg):
+        data = msg.data if isinstance(msg.data, dict) else {}
+        if msg.subtype == "init":
+            names = data.get("agents")
+            if isinstance(names, list):
+                self.init_agents = [str(n) for n in names]
+            return
+        tid = data.get("tool_use_id")
+        if not tid:
+            return
+        ag = self.agents
+        if msg.subtype == "task_started":
+            ag.bind(tid, data.get("task_id"))
+        elif msg.subtype == "task_progress":
+            usage = data.get("usage") or {}
+            await ag.step(tid, steps=usage.get("tool_uses"))
+        elif msg.subtype == "task_notification":
+            status = {"completed": "done", "failed": "failed", "stopped": "stopped"}.get(
+                data.get("status"), "done")
+            await ag.end(tid, status, " ".join(str(data.get("summary") or "").split()))
 
 
 class DemoSession:
@@ -728,6 +1051,10 @@ class DemoSession:
         self.cfg = cfg
         self._stop = False
         self._child = None
+        self.init_agents = ["Explore", "general-purpose", "Plan"]
+        self.agents = AgentTracker(term)
+        self._bg = None           # the background subagent's timer
+        self._bg_done = False     # ... which ended between turns
 
     async def start(self):
         # Test hook: a slow start with a child process that, like the real
@@ -740,6 +1067,9 @@ class DemoSession:
         self.term.on_interrupt = self.interrupt
 
     async def stop(self):
+        if self._bg:
+            self._bg.cancel()
+            self._bg = None
         if self._child and self._child.returncode is None:
             self._child.kill()
             await self._child.wait()
@@ -748,12 +1078,86 @@ class DemoSession:
     async def interrupt(self):
         self._stop = True
 
+    async def _background_turn(self):
+        """A fake background subagent that ends about 1.5 s after the turn."""
+        t = self.term
+        ag = self.agents
+        await t.text("Starting a subagent in the background.")
+        await ag.start("b1", {"subagent_type": "Explore", "description": "Survey the tests",
+                              "run_in_background": True})
+        await ag.end_result("b1", "Async agent launched successfully.", False)
+        await t.text("It runs on; ask me anything meanwhile.")
+        await t.result("success", 0.0)
+        self._bg = asyncio.ensure_future(self._background_runs())
+
+    async def _background_runs(self):
+        await asyncio.sleep(1.5)
+        for name in ("Glob", "Grep", "Read"):
+            await self.agents.step("b1", name, "tests")
+        self._bg_done = True
+        wake = getattr(self.term, "wake", None)
+        if wake:
+            wake()
+
+    async def follow(self):
+        """Like Claude after a background subagent ends: its end, then a turn."""
+        if not self._bg_done:
+            return False
+        self._bg_done = False
+        await self.agents.end("b1", "done", "Found 12 test files")
+        await self.term.text("The background subagent is done: there are 12 test files.")
+        await self.term.result("success", 0.0)
+        return True
+
+    async def _agents_turn(self):
+        """Two overlapping fake subagents, one of which asks permission."""
+        t = self.term
+        ag = AgentTracker(t)
+        ag.STEP_EVERY = 0.2
+        await t.text("Starting two subagents.")
+        await ag.start("d1", {"subagent_type": "Explore", "description": "Find where the parser is tested"})
+        await ag.start("d2", {"subagent_type": "general-purpose", "description": "Check the docs for the parser"})
+        ag.bind("d2", "demo-2")
+        script = [("d1", "Grep", "def parse"), ("d2", "Read", "docs/parser.md"),
+                  ("d1", "Read", "tests/test_parser.py"), ("d2", "Glob", "docs/*.md"),
+                  ("d1", "Grep", "parse(")]
+        for tid, name, summ in script[:3]:
+            if self._stop:
+                break
+            await asyncio.sleep(0.3)
+            await ag.step(tid, name, summ)
+        if not self._stop:
+            summary, detail = describe_tool("Bash", {"command": "git log -5"}, self.cfg.cwd)
+            label = ag.label_for("demo-2")
+            ans = await t.ask_permission(1, "Bash", f"({label}) {summary}", detail)
+            await t.tool("Bash", f"git log -5 ({'allowed' if ans in 'ya' else 'denied'})")
+        for tid, name, summ in script[3:]:
+            if self._stop:
+                break
+            await asyncio.sleep(0.3)
+            await ag.step(tid, name, summ)
+        if self._stop:
+            await ag.close_all()
+            await t.result("interrupted", 0.0)
+            return
+        await ag.end("d2", "done", "The parser is documented in docs/parser.md")
+        await ag.end("d1", "done", "Tests are in tests/test_parser.py")
+        await t.text("Both subagents are done.")
+        await t.result("success", 0.0)
+
+
     async def set_model(self, model):
         pass   # the demo reads cfg.model each turn
 
     async def turn(self, prompt):
         self._stop = False
         t = self.term
+        if self._bg_done:
+            await self.follow()
+        if "agents" in prompt.lower().split():
+            return await self._agents_turn()
+        if "background" in prompt.lower().split():
+            return await self._background_turn()
         where = os.path.basename(self.cfg.cwd.rstrip("/")) or self.cfg.cwd
         edits = "auto" if self.cfg.accept_edits else "ask"
         turn = f"turn {self.cfg.turns}, " if self.cfg.turns else ""
@@ -855,6 +1259,7 @@ def wire_settings(model, effort):
 HELP = """Commands:
   /new         start a fresh conversation
   /edits on    auto-accept file edits (off asks each time)
+  /agents      list the subagents this project offers
   /model NAME  the model for the next turn (alone: show choices)
   /effort LVL  low, medium, high, xhigh or max (alone: show choices)
   /help        this text
@@ -1527,6 +1932,7 @@ class Channel:
         self.cfg.effort = self.pick_effort
         self.pending = None
         self.prompts = asyncio.Queue()
+        self._wake_queued = False
         self.answers = asyncio.Queue()
         self.on_interrupt = None
         self.busy = False
@@ -1564,6 +1970,25 @@ class Channel:
 
     async def tool(self, name, summary):
         await self.tag("U", f"{name} {summary}")
+
+    # Subagents. An app that sent !AGENTS gets J+ (started), J~ (progress)
+    # and J- (ended) to draw one live line each; everyone else gets the
+    # plain start and end lines.
+    async def agent_start(self, k, typ, task):
+        if self.v2.agents_optin:
+            await self.tag("J+", f"{k} {typ} {clip(task, 120)}")
+        else:
+            await self.tool("Agent", f"{typ}: {clip(task, 120)}")
+
+    async def agent_step(self, k, steps, tool, summary):
+        if self.v2.agents_optin:
+            await self.tag("J~", f"{k} {steps} {tool} {clip(summary, 120)}")
+
+    async def agent_end(self, k, typ, status, steps, summary):
+        if self.v2.agents_optin:
+            await self.tag("J-", f"{k} {status} {steps} {clip(summary, 120)}")
+        else:
+            await self.tool("Agent", f"{typ} {status}: {clip(summary, 120)}")
 
     async def tool_error(self, msg):
         await self.tag("E", clip(msg, 200))
@@ -1749,6 +2174,11 @@ class Channel:
             line = await self.prompts.get()
             if line is None:
                 raise EOFError
+            if line is WAKE:
+                self._wake_queued = False
+                if parts:
+                    continue     # mid-prompt: its turn shows it first
+                return WAKE
             if line is CHANGE:
                 if parts:
                     # Mid-prompt: don't drop the lines already read. The
@@ -1792,6 +2222,9 @@ class Channel:
                     # ends with its own >, so no fresh one now.
                     announce = self.prompts.empty()
                     continue
+                if prompt is WAKE:
+                    announce = await self._follow()
+                    continue
                 if not prompt:
                     continue
                 cmd = prompt.lower().split()
@@ -1800,6 +2233,10 @@ class Channel:
                     return
                 if cmd[0] == "/help":
                     for line in HELP.split("\n"):
+                        await self.notice(line)
+                    continue
+                if cmd[0] == "/agents":
+                    for line in agents_lines(self.cfg.cwd, getattr(self.session, "init_agents", [])):
                         await self.notice(line)
                     continue
                 if cmd[0] == "/new":
@@ -1850,6 +2287,39 @@ class Channel:
         except EOFError:
             pass
 
+    def wake(self):
+        """Called by the session when Claude sent something between turns."""
+        if not self._wake_queued:
+            self._wake_queued = True
+            self.prompts.put_nowait(WAKE)
+
+    async def _follow(self):
+        """Shows what Claude sent between turns, such as the turn it starts
+        by itself when a background subagent ends. The SE/30 did not ask for
+        that turn, so it ends with > only when no prompt of its own is
+        waiting (that prompt's turn ends with its own >). Returns whether to
+        send > now."""
+        follow = getattr(self.session, "follow", None)
+        if not follow:
+            return False
+        self.busy = True
+        self.idle.clear()
+        self._in_fence = False
+        try:
+            turned = await follow()
+        except EOFError:
+            raise
+        except Exception as e:  # noqa: BLE001
+            await self.notice(f"Error: {e}")
+            turned = False
+        finally:
+            self.busy = False
+            self.idle.set()
+        if turned and not self.term.eof and not self.closing:
+            self.cfg.resume = True
+            self._save(turn_running=False)
+        return turned and self.prompts.empty()
+
     async def shutdown(self):
         """Deny any open request, stop a running turn, stop the session."""
         self.closing = True
@@ -1883,6 +2353,7 @@ class V2:
         self.channels = {}
         self.presets = {}   # sid -> (model, effort) for a tab not open yet
         self.store = ResumeStore(args.state_dir)
+        self.agents_optin = False   # the app sent !AGENTS: it draws subagent lines
 
     def forget(self, ch):
         if self.channels.get(ch.sid) is ch:
@@ -1960,7 +2431,7 @@ class V2:
 
     async def run(self):
         try:
-            await self.term.send_line(f"#OK se30bridge 2 files={self.args.files} resume ping models".encode(),
+            await self.term.send_line(f"#OK se30bridge 2 files={self.args.files} resume ping models agents".encode(),
                                       counted=False)
             await self.send_models()
             await self.send_list()
@@ -1968,6 +2439,9 @@ class V2:
                 line = await self.term.lines.get()
                 if line is None or line == "!QUIT":
                     break
+                if line == "!AGENTS":
+                    self.agents_optin = True
+                    continue
                 if line == "!LIST":
                     await self.send_list()
                 elif line[:1] in ("1", "2", "3", "4", "5", "6") and line:
@@ -2043,6 +2517,10 @@ async def main_async(args):
                 break
             if cmd[0] == "/help":
                 for line in HELP.split("\n"):
+                    await term.notice(line)
+                continue
+            if cmd[0] == "/agents":
+                for line in agents_lines(cfg.cwd, getattr(session, "init_agents", [])):
                     await term.notice(line)
                 continue
             if cmd[0] == "/new":

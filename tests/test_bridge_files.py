@@ -390,7 +390,7 @@ class ReadOnlyModeTest(FilesBase):
     def test_ro_refuses_saves(self):
         self.write("a.txt", "one\n")
         c = self.connect()
-        self.assertIn("#OK se30bridge 2 files=ro resume ping models", c.text())
+        self.assertIn("#OK se30bridge 2 files=ro resume ping models agents", c.text())
         h, lines, z = self.get(c, "a.txt")
         self.assertEqual(h[4], "r:ro")
         self.assertEqual(self.save(c, "a.txt", h[3], b"two").split(" ", 2)[2], "read-only")
@@ -404,7 +404,7 @@ class OffModeTest(FilesBase):
     def test_off_refuses_everything(self):
         self.write("a.txt", "one\n")
         c = self.connect()
-        self.assertIn("#OK se30bridge 2 files=off resume ping models", c.text())
+        self.assertIn("#OK se30bridge 2 files=off resume ping models agents", c.text())
         self.assertEqual(self.listing(c), "files off")
         self.assertEqual(self.get(c, "a.txt"), "files off")
         c.close()

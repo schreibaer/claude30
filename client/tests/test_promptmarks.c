@@ -59,8 +59,22 @@ static void test_full(void)
     CHECK_EQ_LONG(m.off[PM_MAX - 1], (PM_MAX + 9) * 10);
 }
 
+static void test_shift(void)
+{
+    PromptMarks m;
+    pm_init(&m);
+    pm_add(&m, 10);
+    pm_add(&m, 200);
+    pm_shift(&m, 50, 7);
+    CHECK_EQ_LONG(m.off[0], 10);
+    CHECK_EQ_LONG(m.off[1], 207);
+    pm_shift(&m, 50, -20);
+    CHECK_EQ_LONG(m.off[1], 187);
+}
+
 int main(void)
 {
+    test_shift();
     test_find();
     test_cut();
     test_full();

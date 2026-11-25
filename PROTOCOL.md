@@ -128,6 +128,7 @@ Both sides ignore a session line whose tag they do not know, and a line for a se
 | `!LIST` | Send the project list again |
 | `!QUIT` | End the call. The bridge stops every session and exits. |
 | `!PING` | Heartbeat (see Resume and heartbeat) |
+| `!AGENTS` | Send subagent progress as `J` lines (see Subagents). Only a client that saw the `agents` word sends it. |
 
 ### Session lines, bridge → client
 
@@ -140,6 +141,7 @@ Every v1 bridge→client tag works per session with the digit in front: `<n>T`, 
 | `<n>X closed` | The answer to the client's `<n>X`: the session is stopped and its number is free again. |
 | `<n>Y <token> <how>` | Which conversation the session runs: `new`, `resumed` or `cut` (see Resume and heartbeat) |
 | `<n>M <model> <effort>` | The model and effort the session runs with, or will from its next turn (see Model and effort) |
+| `<n>J+ <k> <type> <task>`, `<n>J~ <k> <steps> <tool> <summary>`, `<n>J- <k> <status> <steps> <summary>` | A subagent started, moved on, ended (see Subagents). Only sent to a client that sent `!AGENTS`. |
 
 `<n>>` means only "ready for a new prompt". Unlike v1, the bridge sends no `>` for continuation lines.
 
@@ -279,6 +281,22 @@ B: 2M sonnet max
 B: 2R success $0.04
 B: 2>
 ```
+
+## Subagents
+
+The capability word `agents` in `#OK` (`#OK se30bridge 2 files=rw resume ping models agents`) means the bridge can report Claude's subagents (the Agent tool) as lines a client rewrites in place. A client that wants them answers with `!AGENTS` once, after the project list. Without `!AGENTS`, and for ZTerm and v1, the bridge sends ordinary lines instead: `<n>U Agent <type>: <task>` when a subagent starts and `<n>U Agent <type> <status>: <summary>` when it ends (tty mode prints them as `  [Agent] ...`). A subagent's own prose and tool lines are never sent; only its start, its progress and its end are.
+
+A client sends `!AGENTS` and the bridge then sends, per session:
+
+| Line | Meaning |
+|---|---|
+| `<n>J+ <k> <type> <task>` | A subagent started. `<k>` is the bridge's number for it (1 to 99, reused after it ends); `<type>` is the agent type (`Explore`, `general-purpose`, or a project agent's name); `<task>` is its short description. |
+| `<n>J~ <k> <steps> <tool> <summary>` | Progress: how many tools it has used and the last one (`-` if none). Sent at most every 5 seconds and only when something changed. |
+| `<n>J- <k> <status> <steps> <summary>` | It ended. `<status>` is `done`, `failed`, `stopped`, or `background` (see below); `<summary>` is the first line of its result, possibly empty. |
+
+When a turn ends, the bridge closes any subagent still open with `J-` and `stopped`. A subagent Claude starts in the background ends its line at once with `background` (its result is still to come), so it never holds a turn open. When it finishes, possibly turns later, the bridge sends a fresh `J+` and its `J-` with the result, and Claude usually reports on it in a turn of its own. That turn comes while the session is ready: its lines arrive unasked and end with `<n>R` and `<n>>`. If the client sent a prompt meanwhile, the bridge leaves out that `>` and the prompt's turn ends with its own. tty mode and v1 show such output before the next turn instead. A client also treats `<n>>` and a lost link as the end of every open subagent of that session. A permission request raised inside a subagent starts its `<n>?` summary with `(<type>)`. Unknown tags are ignored by both sides, so version 2 is unchanged.
+
+`/agents` (typed as a prompt) lists the subagents the session's project offers: the built-in ones, `.claude/agents/*.md` in the project and `~/.claude/agents/*.md`. Creating one is done by asking Claude, or by editing the file with Open Project File.
 
 ## Files
 

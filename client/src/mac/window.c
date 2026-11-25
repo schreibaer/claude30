@@ -62,7 +62,8 @@ static const StyleDef kStyles[RS_COUNT] = {
     { 3, underline },             /* turn result */
     { 3, bold | italic },         /* interrupted */
     { 3, bold },                  /* line noise */
-    { 3, bold | underline }       /* new conversation */
+    { 3, bold | underline },      /* new conversation */
+    { 3, italic }                 /* a subagent's line */
 };
 
 static void measure_fonts(void)
@@ -831,10 +832,9 @@ void window_show_tab(Tab *t)
 
 static StScrpHandle gScrap;   /* one-style scrap reused for every insert */
 
-static void insert_run(TEHandle te, const char *text, long len, RunStyle style)
+static void insert_at(TEHandle te, long n, const char *text, long len, RunStyle style)
 {
     ScrpSTElement *e;
-    short n = (*te)->teLength;
     if (!gScrap) {
         gScrap = (StScrpHandle)NewHandleClear(sizeof(StScrpRec));
         if (!gScrap)
@@ -850,6 +850,11 @@ static void insert_run(TEHandle te, const char *text, long len, RunStyle style)
     e->scrpSize = FONT_SIZE;
     TESetSelect(n, n, te);
     TEStyleInsert((Ptr)text, len, gScrap, te);
+}
+
+static void insert_run(TEHandle te, const char *text, long len, RunStyle style)
+{
+    insert_at(te, (*te)->teLength, text, len, style);
 }
 
 /* While the log cannot be written, text stays in the window until it would
@@ -894,6 +899,7 @@ static void trim(Tab *t, long cut, long incoming)
     TESetSelect(0, cut, te);
     TEDelete(te);
     pm_cut(&t->marks, cut);
+    al_cut(&t->agents, cut);
     if (hCut > scrolled)
         hCut = scrolled;
     OffsetRect(&(*te)->destRect, 0, (short)hCut);
@@ -936,6 +942,19 @@ void window_append(Tab *t)
                 k++;
             pm_add(&t->marks, (*te)->teLength + k);
         }
+        if (b->runs[i].style == RS_AGENT && t->agent_pending >= 0) {
+            /* A subagent's line: remember where it sits so it can be rewritten. */
+            const char *p = b->text + b->runs[i].start;
+            long k = 0;
+            AgentSlot *s = &t->agents.s[t->agent_pending];
+            while (k < b->runs[i].len && p[k] == '\r')
+                k++;
+            s->drawn = 1;
+            s->gone = 0;
+            s->off = (*te)->teLength + k;
+            s->len = b->runs[i].len - k;
+            t->agent_pending = -1;
+        }
         insert_run(te, b->text + b->runs[i].start, b->runs[i].len, b->runs[i].style);
     }
     trim_for(t, 0);
@@ -949,6 +968,105 @@ void window_append(Tab *t)
         window_draw_tabs();
     }
     batch_clear(b);
+}
+
+/* ---- subagent lines ----------------------------------------------------- */
+
+static long measure_px(const char *s, long n)
+{
+    return TextWidth((Ptr)s, 0, (short)n);
+}
+
+/* Cuts a composed line to one screen line of the transcript. */
+static long fit_agent_line(char *s, long len)
+{
+    GrafPtr save;
+    short font, size;
+    Style face;
+    long w = gTransView.right - gTransView.left - 4;
+    GetPort(&save);
+    SetPort(gWin);
+    font = gWin->txFont;
+    face = gWin->txFace;
+    size = gWin->txSize;
+    TextFont(kStyles[RS_AGENT].font);
+    TextFace(kStyles[RS_AGENT].face);
+    TextSize(FONT_SIZE);
+    len = al_fit(s, len, w, measure_px);
+    TextFont(font);
+    TextFace(face);
+    TextSize(size);
+    SetPort(save);
+    return len;
+}
+
+/* Draws slot's line at the end of the transcript as a new line. */
+static void agent_new_line(Tab *t, int slot, const char *buf)
+{
+    batch_marker(&t->batch, RS_AGENT, buf);
+    t->agent_pending = slot;
+    window_append(t);
+    t->agent_pending = -1;
+}
+
+void window_agent_new(Tab *t, int slot, const char *text)
+{
+    char buf[AL_TEXT + 4];
+    long len = (long)strlen(text);
+    memcpy(buf, text, len + 1);
+    len = fit_agent_line(buf, len);
+    buf[len] = 0;
+    agent_new_line(t, slot, buf);
+}
+
+/* Replaces slot's line in place. The edit runs with the clip empty, so the
+   window does not flicker; the view is redrawn once. */
+void window_agent_update(Tab *t, int slot, const char *text)
+{
+    char buf[AL_TEXT + 4];
+    long len = (long)strlen(text), off, oldlen, delta, st, en;
+    AgentSlot *s = &t->agents.s[slot];
+    TEHandle te = t->trans;
+    Rect empty = { 0, 0, 0, 0 };
+    RgnHandle saveClip;
+    memcpy(buf, text, len + 1);
+    len = fit_agent_line(buf, len);
+    buf[len] = 0;
+
+    window_append(t);                    /* earlier text first: offsets must be current */
+    SetPort(gWin);
+    trim_for(t, len);
+    if (!s->drawn || s->gone) {          /* its line was trimmed away: say it again below */
+        agent_new_line(t, slot, buf);
+        return;
+    }
+    off = s->off;
+    oldlen = s->len;
+    delta = len - oldlen;
+    st = (*te)->selStart;
+    en = (*te)->selEnd;
+    saveClip = NewRgn();
+    GetClip(saveClip);
+    ClipRect(&empty);
+    TESetSelect(off, off + oldlen, te);
+    TEDelete(te);
+    insert_at(te, off, buf, len, RS_AGENT);
+    if (st > off)
+        st = st >= off + oldlen ? st + delta : off + len;
+    if (en > off)
+        en = en >= off + oldlen ? en + delta : off + len;
+    TESetSelect(st, en, te);
+    SetClip(saveClip);
+    DisposeRgn(saveClip);
+    s->len = len;
+    al_shift(&t->agents, off, delta);
+    pm_shift(&t->marks, off, delta);
+    if (te == gTrans)
+        InvalRect(&gTransView);
+    else if (!t->fresh) {
+        t->fresh = true;
+        window_draw_tabs();
+    }
 }
 
 /* ---- input -------------------------------------------------------------- */

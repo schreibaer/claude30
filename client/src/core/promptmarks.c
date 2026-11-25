@@ -28,6 +28,14 @@ void pm_cut(PromptMarks *m, long cut)
     m->n = k;
 }
 
+void pm_shift(PromptMarks *m, long off, long delta)
+{
+    int i;
+    for (i = 0; i < m->n; i++)
+        if (m->off[i] > off)
+            m->off[i] += delta;
+}
+
 long pm_prev(const PromptMarks *m, long pos)
 {
     int i;

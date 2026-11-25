@@ -69,6 +69,15 @@ static void reset_turn(Session *s)
     s->stopped = 0;
 }
 
+/* A turn ended or was abandoned with subagent lines still open: they are over. */
+static void close_agent_lines(Proto *p, int sid)
+{
+    Session *s = &p->sess[sid];
+    if (s->agents_open > 0)
+        emit(p, sid, EV_AGENT_END, "* stopped", 9);
+    s->agents_open = 0;
+}
+
 static void reset_sessions(Proto *p)
 {
     int i;
@@ -91,6 +100,7 @@ static void reset_link(Proto *p)
     p->ping_out = 0;
     p->resume_cap = 0;
     p->ping_cap = 0;
+    p->agents_cap = 0;
     p->models_cap = 0;
     p->nmodels = 0;
     p->def_model[0] = 0;
@@ -306,6 +316,7 @@ static void read_ok(Proto *p, const char *line, long n)
     p->files = FILES_OFF;
     p->resume_cap = 0;
     p->ping_cap = 0;
+    p->agents_cap = 0;
     p->models_cap = 0;
     while (i < n) {
         long w;
@@ -322,6 +333,8 @@ static void read_ok(Proto *p, const char *line, long n)
             p->resume_cap = 1;
         else if (equals(line + w, i - w, "ping"))
             p->ping_cap = 1;
+        else if (equals(line + w, i - w, "agents"))
+            p->agents_cap = 1;
         else if (equals(line + w, i - w, "models"))
             p->models_cap = 1;
     }
@@ -395,6 +408,8 @@ static int link_line(Proto *p, const char *line, long n)
         if (p->state == ST_HANDSHAKE) {
             p->timer = 0;
             set_state(p, ST_ONLINE);
+            if (p->agents_cap)
+                sends(p, "!AGENTS\r");   /* draw subagents as live lines */
             emit(p, 0, EV_CONNECTED, "", 0);
         } else {
             emit(p, 0, EV_PROJECTS, "", 0);
@@ -468,6 +483,7 @@ static void abandon_turn(Proto *p, int sid)
         emit(p, sid, EV_PERM_ABANDONED, "", 0);
     if (s->in_code)
         emit(p, sid, EV_CODE_END, "", 0);
+    close_agent_lines(p, sid);
     reset_turn(s);
 }
 
@@ -520,6 +536,7 @@ static void turn_end(Proto *p, int sid)
         return;
     if (s->in_code)
         emit(p, sid, EV_CODE_END, "", 0);
+    close_agent_lines(p, sid);
     if (s->stopped)
         emit(p, sid, EV_INTERRUPTED, "", 0);
     reset_turn(s);
@@ -640,6 +657,15 @@ static void session_line(Proto *p, int sid, const char *line, long n)
             memcpy(text + hn + 1, pay, k);
             emit(p, sid, EV_RESUMED, text, hn + 1 + k);
         }
+    } else if (TAG("J+")) {
+        s->agents_open++;
+        emit(p, sid, EV_AGENT_START, pay, plen);
+    } else if (TAG("J~")) {
+        emit(p, sid, EV_AGENT_STEP, pay, plen);
+    } else if (TAG("J-")) {
+        if (s->agents_open > 0)
+            s->agents_open--;
+        emit(p, sid, EV_AGENT_END, pay, plen);
     } else if (TAG("M")) {
         emit(p, sid, EV_MODEL, pay, plen);
     } else if (TAG("O")) {

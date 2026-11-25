@@ -855,6 +855,77 @@ static void test_demo_session(void)
     free(fx);
 }
 
+static void test_agent_lines(void)
+{
+    /* The word turns on !AGENTS, sent once after the project list. */
+    reset();
+    proto_connect(&P, "ATDTbridge", now);
+    feed("AT\r\nOK\r\n");
+    feed("CONNECT 57600\r\n");
+    feed("> \r\n> #HELLO SE30 2\r\n#OK se30bridge 2 files=rw resume ping agents\r\n"
+         "P[\r\nP alpha\r\nP]\r\n");
+    CHECK(P.agents_cap);
+    CHECK_EQ_LONG(count_sent("!AGENTS\r"), 1);
+    clear_rec();
+    open_ready(1, "alpha");
+    CHECK(proto_send_prompt(&P, 1, "go", 2));
+    clear_rec();
+
+    /* The three lines arrive as events with the payload unchanged. */
+    feed("1J+ 1 Explore Find tests\r\n1J~ 1 3 Grep foo\r\n1J- 1 done 3 found it\r\n");
+    CHECK_EQ_LONG(count_sid(EV_AGENT_START, 1), 1);
+    CHECK_EQ_LONG(count_sid(EV_AGENT_STEP, 1), 1);
+    CHECK_EQ_LONG(count_sid(EV_AGENT_END, 1), 1);
+    CHECK(strcmp(R.text[find(EV_AGENT_START)], "1 Explore Find tests") == 0);
+    CHECK(strcmp(R.text[find(EV_AGENT_STEP)], "1 3 Grep foo") == 0);
+    CHECK(strcmp(R.text[find(EV_AGENT_END)], "1 done 3 found it") == 0);
+    CHECK_EQ_LONG(P.sess[1].agents_open, 0);
+
+    /* A turn that ends with a line still open closes it, once. */
+    clear_rec();
+    feed("1J+ 1 Explore Find tests\r\n1J+ 2 Plan Make a plan\r\n1J- 2 done 1 ok\r\n");
+    CHECK_EQ_LONG(P.sess[1].agents_open, 1);
+    clear_rec();
+    feed("1R success $0.01\r\n1>\r\n");
+    CHECK_EQ_LONG(count(EV_AGENT_END), 1);
+    CHECK(strcmp(R.text[find(EV_AGENT_END)], "* stopped") == 0);
+    CHECK(find(EV_AGENT_END) < find(EV_READY));
+    CHECK_EQ_LONG(P.sess[1].agents_open, 0);
+
+    /* A turn with no subagents sends no wildcard. */
+    CHECK(proto_send_prompt(&P, 1, "again", 5));
+    clear_rec();
+    feed("1T hi\r\n1R success $0.01\r\n1>\r\n");
+    CHECK_EQ_LONG(count(EV_AGENT_END), 0);
+
+    /* A J line for a session that is not open is counted as dropped. */
+    clear_rec();
+    P.dropped = 0;
+    feed("4J+ 1 Explore x\r\n");
+    CHECK_EQ_LONG(count(EV_AGENT_START), 0);
+    CHECK_EQ_LONG(P.dropped, 1);
+
+    /* An unknown future tag is still ignored. */
+    clear_rec();
+    P.dropped = 0;
+    feed("1J? what\r\n");
+    CHECK_EQ_LONG(P.dropped, 0);
+    CHECK_EQ_LONG(R.n, 0);
+
+    /* A lost link closes open lines. */
+    CHECK(proto_send_prompt(&P, 1, "third", 5));
+    feed("1J+ 1 Explore Find tests\r\n");
+    clear_rec();
+    feed("NO CARRIER\r\n");
+    CHECK_EQ_LONG(count(EV_AGENT_END), 1);
+
+    /* After a redial the opt-in is sent again; without the word it never is. */
+    reset();
+    connect_online();
+    CHECK(!P.agents_cap);
+    CHECK_EQ_LONG(count_sent("!AGENTS"), 0);
+}
+
 int main(void)
 {
     test_dial_and_handshake();
@@ -871,6 +942,7 @@ int main(void)
     test_silence();
     test_capabilities_and_resume_open();
     test_heartbeat_and_dead_link();
+    test_agent_lines();
     test_models();
     test_demo_session();
     proto_free(&P);
