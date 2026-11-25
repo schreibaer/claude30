@@ -239,7 +239,7 @@ B: #PONG
 
 ## Model and effort (`models`)
 
-The capability word `models` (`#OK se30bridge 2 files=rw resume ping models`) lets each session run with its own Claude model and effort. A client that sees no `models` never sends `<n>M`, and a bridge that lacks it ignores the line like any unknown session tag, so version 2 is unchanged for every older client and bridge.
+The capability word `models` (`#OK se30bridge 2 files=rw resume ping models`) lets each session run with its own Claude model and effort. A client that sees no `models` never sends `<n>M`, and a bridge that lacks it ignores the line like any unknown session tag. The bridge sends the model list below to every version 2 client, because `#HELLO` carries no capabilities: an older client counts those lines as stray link-level lines, which costs it at most one spare `!ACK` (the bridge's window then stays one line wider for the rest of the call) and changes nothing else. Version 2 is otherwise unchanged for every older client and bridge.
 
 The bridge sends its model list after `#OK` and before the project list, so the client has no model names built in:
 

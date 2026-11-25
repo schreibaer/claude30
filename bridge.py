@@ -1673,8 +1673,10 @@ class Channel:
         await self.session.start()
 
     async def _settings_command(self, words):
-        m, e, lines, changed = setting_command(
-            self.v2.args, words, self.pick_model, self.pick_effort)
+        # Start from a change still waiting to be applied, so a typed
+        # command does not undo one the app made during the turn.
+        cur_m, cur_e = self.pending or (self.pick_model, self.pick_effort)
+        m, e, lines, changed = setting_command(self.v2.args, words, cur_m, cur_e)
         for line in lines:
             await self.notice(line)
         if changed:
@@ -1911,6 +1913,9 @@ class V2:
         await ch.tag("X", "closed")
 
     async def open(self, sid, name, token=None):
+        # A preset belongs to this open only, even when it is refused, so
+        # it never carries over to a later tab on the same number.
+        preset = self.presets.pop(sid, None)
         if sid in self.channels:
             return await self.term.send_line(f"{sid}X already open".encode())
         if len(self.channels) >= self.args.max_sessions:
@@ -1918,7 +1923,7 @@ class V2:
         path = dict(list_projects(self.args)).get(name)
         if path is None:
             return await self.term.send_line(f"{sid}X not available".encode())
-        ch = Channel(self, sid, name, path, token, self.presets.pop(sid, None))
+        ch = Channel(self, sid, name, path, token, preset)
         self.channels[sid] = ch
         ch.files.start()
         ch.task = asyncio.ensure_future(ch.run())
@@ -1997,6 +2002,19 @@ async def start_default(term, session):
     return True
 
 
+async def resume_session(args, term, cfg, session):
+    """tty and v1: starts Claude again on the same conversation (after a
+    model or effort change). Returns the new session; raises if it fails."""
+    try:
+        await session.stop()
+    except Exception:  # noqa: BLE001
+        pass
+    cfg.resume = bool(cfg.turns and cfg.claude_id)
+    session = make_session(args, term, cfg)
+    await session.start()
+    return session
+
+
 async def main_async(args):
     link = Link(args.baud)
     await link.open()
@@ -2063,13 +2081,28 @@ async def main_async(args):
                     cfg.effort = e
                     # Between turns: the same conversation carries on, with
                     # its grants, under the new effort (a restart) or model.
-                    if e != old_effort:
-                        await session.stop()
-                        cfg.resume = bool(cfg.turns and cfg.claude_id)
-                        session = make_session(args, term, cfg)
-                        await session.start()
-                    else:
-                        await session.set_model(cfg.model)
+                    try:
+                        restart = e != old_effort
+                        if not restart:
+                            try:
+                                await session.set_model(cfg.model)
+                            except Exception:  # noqa: BLE001
+                                restart = True
+                        if restart:
+                            session = await resume_session(args, term, cfg, session)
+                    except Exception as ex:  # noqa: BLE001
+                        first = (str(ex).strip().splitlines() or ["error"])[0]
+                        await term.notice(f"Could not change model or effort: {first}")
+                        # Back to the old settings on the same conversation.
+                        picks[:] = [old_model, old_effort]
+                        cfg.model = old_model or args.model
+                        cfg.effort = old_effort
+                        try:
+                            session = await resume_session(args, term, cfg, session)
+                        except Exception:  # noqa: BLE001
+                            await term.notice("Claude could not be started again. Bye.")
+                            break
+                        continue
                     await term.notice(f"{'Model' if cmd[0] == '/model' else 'Effort'} set.")
                 continue
             if cmd[0] == "/edits" and len(cmd) == 2:

@@ -17,6 +17,8 @@ import unittest
 sys.path.insert(0, os.path.dirname(__file__))
 from v2client import Client  # noqa: E402
 
+FAILING = os.path.join(os.path.dirname(os.path.abspath(__file__)), "failing_bridge.py")
+
 
 class Base(unittest.TestCase):
     def setUp(self):
@@ -196,11 +198,113 @@ class ChangeTest(Base):
         self.ready(c, 2, "beta")
         self.assertIn("model haiku", self.ask(c, 1))
         self.assertNotIn("model", self.ask(c, 2))
+        start = len(c.lines)
         c.send("2M sonnet low")
-        c.wait_line("2M sonnet low")
-        time.sleep(0.3)
+        c.wait_line("2M sonnet low", start=start)
+        c.wait_line("2>", start=start + 1)
         self.assertIn("effort low", self.ask(c, 2))
         self.assertNotIn("effort", self.ask(c, 1))
+        c.close()
+
+
+    def test_change_between_continuation_lines_keeps_them(self):
+        c = self.client()
+        self.ready(c, 1)
+        start = len(c.lines)
+        c.send("1P part one\\")
+        c.send("1M haiku -")
+        c.wait_line("1M haiku -", start=start)
+        c.send("1P part two")
+        said = self.said(c, 1, start)
+        self.assertIn("part one", said)
+        self.assertIn("part two", said)
+        self.assertIn("model haiku", said)
+        c.close()
+
+    def test_typed_command_keeps_a_change_made_during_the_turn(self):
+        c = self.client()
+        self.ready(c, 1)
+        start = len(c.lines)
+        c.send("1P long task")
+        c.wait_for(lambda l: l.startswith("1? "), 20, start)
+        c.send("1M haiku -")
+        i = c.wait_line("1M haiku -", start=start)
+        c.send(f"1A {c.text()[c.wait_for(lambda l: l.startswith('1? '), 5, start)].split()[1]} y")
+        c.wait_line("1>", 20, i)
+        c.send("1P /effort high")
+        c.wait_line("1M haiku high", start=i + 1)
+        c.wait_for(lambda l: l == "1I Effort set.", 10, i)
+        said = self.ask(c, 1)
+        self.assertIn("model haiku", said)
+        self.assertIn("effort high", said)
+        c.close()
+
+    def test_refused_open_drops_its_preset(self):
+        c = self.client("--max-sessions", "1")
+        self.ready(c, 1)
+        start = len(c.lines)
+        c.send("2M haiku high")
+        c.open(2, "beta")
+        c.wait_line("2X too many tabs", start=start)
+        c.send("1X")
+        c.wait_for(lambda l: l.startswith("1X"), 10, start)
+        self.ready(c, 2, "beta")
+        said = self.ask(c, 2)
+        self.assertNotIn("model", said)
+        self.assertNotIn("effort", said)
+        c.close()
+
+
+class FailureTest(Base):
+    def failing(self, mode, *args):
+        c = Client("--state-dir", self.state, "--demo", "--projects", self.root, *args,
+                   script=FAILING, env={"SE30_FAIL": mode})
+        self.addCleanup(c.reap)
+        c.hello()
+        return c
+
+    def test_model_change_falls_back_to_a_restart(self):
+        c = self.failing("set_model")
+        self.ready(c, 1)
+        c.turn(1, "one")
+        start = len(c.lines)
+        c.send("1M haiku -")
+        c.wait_line("1M haiku -", start=start)
+        c.wait_line("1>", start=start + 1)
+        self.assertFalse([l for l in c.text()[start:] if l[:2] in ("1E", "1X")])
+        said = self.ask(c, 1, "two")
+        self.assertIn("model haiku", said)
+        self.assertIn("turn 2", said)
+        c.close()
+
+    def test_failed_restart_reports_and_closes_the_tab(self):
+        c = self.failing("restart")
+        self.ready(c, 1)
+        start = len(c.lines)
+        c.send("1M - high")
+        c.wait_for(lambda l: l.startswith("1E Could not change model or effort"), 10, start)
+        c.wait_for(lambda l: l.startswith("1X"), 10, start)
+        c.close()
+
+    def test_tty_model_change_falls_back_to_a_restart(self):
+        c = Client("--demo", "--rows", "1000", "--state-dir", self.state,
+                   script=FAILING, env={"SE30_FAIL": "set_model"})
+        self.addCleanup(c.reap)
+        c.wait_for(lambda l: "Ready." in l or "Type /help" in l)
+        c.send("/model haiku")
+        c.wait_for(lambda l: l == "Model set.", 10)
+        c.close()
+
+    def test_tty_failed_change_keeps_the_old_settings(self):
+        c = Client("--demo", "--rows", "1000", "--state-dir", self.state,
+                   script=FAILING, env={"SE30_FAIL": "restart"})
+        self.addCleanup(c.reap)
+        c.wait_for(lambda l: "Ready." in l or "Type /help" in l)
+        c.send("/effort high")
+        c.wait_for(lambda l: l.startswith("Could not change model or effort"), 10)
+        c.send("/effort")
+        c.wait_for(lambda l: l.startswith("Effort: default"), 10)
+        self.assertNotIn(b"Traceback", c.stderr_now())
         c.close()
 
 
