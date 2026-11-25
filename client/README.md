@@ -58,7 +58,9 @@ The build makes two release files:
 7. **Session > Disconnect** (Cmd-D) ends every conversation and hangs up. Quit also disconnects first.
 8. **File > Full Screen** (Cmd-F) makes the window cover the whole screen and hides the menu bar. Menus still work by their Command keys, and Cmd-F again brings the menu bar back. Quitting or switching to another application also leaves full screen. If the app crashes while in full screen, restart the Mac to get the menu bar back. Full Screen is off while a file window is open.
 
-If the link drops, an alert offers **Redial**. A redial reopens every tab in the same project with a fresh conversation, and each transcript marks it "New conversation".
+If the link drops, the status line says "Link lost. Redialing in 0:05 (try 1 of 3). Cmd-D cancels." and the app redials by itself after 5, 20 and 60 seconds. Only if all three fail does an alert offer **Redial**. It also notices a link that died without telling the modem: after 90 seconds of silence and an unanswered heartbeat it hangs up and redials.
+
+Each tab keeps its conversation's resume token in the preferences, so every tab reopens in its project and **continues the same conversation**, after a drop, a Redial, a Disconnect or relaunching the app. The transcript gets one line: "Reconnected. The conversation continues.", or "Reconnected. The last reply was cut off when the link dropped." (Claude is told too, and you can ask it to say that again), or, when the bridge could not resume it, "New conversation" with a note. To start over, type `/new` or close the tab. Resuming needs a bridge that supports it; against an older one, a reconnect starts fresh conversations as before.
 
 ### Tabs
 
@@ -129,11 +131,9 @@ Record the results here:
 |---|---|---|---|---|
 | | 57,600 | 60 | | |
 
-## A stuck bridge on the host
+## When Wi-Fi drops
 
-If the link drops at an unlucky moment, `bridge.py` can stay running on the host. That moment is while the bridge waits for the client's `!ACK`. The bridge never notices the closed connection while it waits, and fixing that needs a bridge change.
-
-Disconnecting from the app avoids this, because it stops the turn first. If it happens anyway, find and stop the process on the host:
+The bridge on the host Mac ends by itself: the next call ends a bridge that never noticed its link was gone, and a bridge that stops hearing the app's heartbeat ends after three minutes. You should not need to kill anything. If `pgrep -fl bridge.py` still shows an old bridge after the app has reconnected, or the app is older than this behavior, stop it by hand:
 
 ```sh
 pgrep -fl bridge.py

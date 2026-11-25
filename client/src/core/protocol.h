@@ -64,6 +64,7 @@ typedef enum {
     EV_LOST,         /* id 0: the carrier dropped during a call */
     EV_CLOSED,       /* id 0: a disconnect the user asked for has finished */
     EV_SILENCE,      /* id 0: no input for the warning time during a turn */
+    EV_RESUMED,      /* a session's conversation: text is "<new|resumed|cut> <token>" */
     /* Files (files.h). During these, proto_xfer() names the transfer. */
     EV_LIST_BEGIN,   /* text is the folder's path */
     EV_LIST_ENTRY,   /* text is "d|f <size> <name>": see files_parse_entry */
@@ -144,6 +145,8 @@ struct Proto {
     int at_retry;                /* AT got no answer once; hung up and retried */
     int got_ok;                  /* handshake: #OK seen, waiting for P] */
     int files;                   /* FILES_OFF, FILES_RO or FILES_RW */
+    int resume_cap;              /* the bridge resumes conversations (<n>Y) */
+    int ping_cap;                /* the bridge answers !PING and times out silent apps */
 
     unsigned pending_acks;       /* W lines received but not yet acknowledged */
     int noise;                   /* serial errors since the last intact W */
@@ -151,6 +154,13 @@ struct Proto {
     long dropped;                /* lines for no open session; only grows */
     int spare_ack_sent;
     int silence_warned;
+    unsigned long last_heard;    /* tick of the last byte of any kind, #PONG included */
+    unsigned long last_tx;       /* tick of the last line we sent */
+    unsigned long last_ping;     /* tick of the last !PING */
+    int ping_out;                /* a !PING has not been answered yet */
+    unsigned long prev_input;    /* last_input before the bytes being fed */
+    int feed_real;               /* the bytes being fed held more than #PONG */
+    int feed_pong;               /* ... and a #PONG */
 
     Session sess[MAX_SESS + 1];  /* index 1..6 */
 
@@ -182,6 +192,9 @@ struct Proto {
 #define T_ATH         (3 * TICKS_PER_SEC)
 #define T_SILENCE     (90 * TICKS_PER_SEC)
 #define T_FILE        (20 * TICKS_PER_SEC)
+#define T_PING        (30 * TICKS_PER_SEC)   /* heartbeat when nothing else was sent */
+#define T_PING_WAIT   (10 * TICKS_PER_SEC)   /* a !PING unanswered this long counts */
+#define T_DEAD        (90 * TICKS_PER_SEC)   /* nothing heard this long: the link is dead */
 
 void proto_init(Proto *p, ProtoEventFn ev, ProtoSendFn send, void *ctx);
 void proto_free(Proto *p);
@@ -197,6 +210,10 @@ void proto_tick(Proto *p, unsigned long now);
 /* Opens session sid (1..6) in a project from the list. Returns 0 if the
    link is not online or the id is in use. */
 int proto_open(Proto *p, int sid, const char *project);
+/* The same, continuing the conversation the resume token names (EV_RESUMED
+   reports which one started). A bridge without resume, or an empty token,
+   opens a new conversation. */
+int proto_open_resume(Proto *p, int sid, const char *project, const char *token);
 /* Closes a session: the bridge denies its open request, stops its turn and
    confirms. Its file transfers fail. */
 int proto_close(Proto *p, int sid);

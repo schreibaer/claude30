@@ -33,8 +33,21 @@ static long gDamagedSeen;        /* gProto.lb.damaged already reported */
 static Boolean gLinkSendNext;
 static Boolean gLinkSession;    /* this call is a link test, until it ends */
 static Boolean gTabsChanged;     /* redraw the strip at the end of the pass */
+static Boolean gTokensChanged;   /* a resume token changed: save the prefs */
 
-enum { kAlertNone, kAlertLost, kAlertFailed, kAlertNote };
+enum { kAlertNone, kAlertFailed, kAlertNote };
+
+/* After a lost link the app redials by itself, after these many seconds,
+   before it falls back to the Redial alert. */
+#define REDIAL_TRIES 3
+static const short kRedialDelay[REDIAL_TRIES] = { 5, 20, 60 };
+
+static struct {
+    Boolean active;              /* a lost link is being redialed */
+    short attempt;               /* 0-based; the one waiting or dialing */
+    unsigned long due;           /* tick at which it dials */
+    Boolean dialing;             /* the attempt has started */
+} gRedial;
 
 /* ---- helpers ------------------------------------------------------------- */
 
@@ -82,11 +95,14 @@ static void divider(Tab *t)
 
 static void remember_tabs(void)
 {
-    const char *names[MAX_TABS];
+    const char *names[MAX_TABS], *tokens[MAX_TABS];
     short i, n = tabs_count();
-    for (i = 0; i < n; i++)
+    for (i = 0; i < n; i++) {
         names[i] = tabs_at(i)->project;
-    prefs_set_tabs(names, n);
+        tokens[i] = tabs_at(i)->token;
+    }
+    prefs_set_tabs(names, tokens, n);
+    gTokensChanged = false;
 }
 
 static void queue_alert(short kind, const char *msg)
@@ -117,10 +133,59 @@ static void open_tab(Tab *t)
         error_line(t, s);
         return;
     }
-    if (!proto_open(&gProto, t->sid, t->project)) {
+    /* A tab with a resume token asks the bridge to continue that conversation. */
+    t->token_sent = gProto.resume_cap && t->token[0];
+    if (!proto_open_resume(&gProto, t->sid, t->project, t->token)) {
         t->unavailable = true;
+        t->token_sent = false;
         error_line(t, "The tab could not be opened on the bridge.");
     }
+}
+
+/* ---- redialing a lost link -------------------------------------------------- */
+
+static void redial_schedule(short attempt)
+{
+    gRedial.active = true;
+    gRedial.dialing = false;
+    gRedial.attempt = attempt;
+    gRedial.due = TickCount() + (unsigned long)kRedialDelay[attempt] * TICKS_PER_SEC;
+}
+
+/* An attempt failed: try again later, or give the person the Redial alert. */
+static void redial_failed(const char *why, long n)
+{
+    char msg[160];
+    if (gRedial.attempt + 1 < REDIAL_TRIES) {
+        redial_schedule((short)(gRedial.attempt + 1));
+        return;
+    }
+    gRedial.active = false;
+    snprintf(msg, sizeof(msg), "The connection to the bridge was lost and could not be "
+             "restored. %.*s", (int)(n > 100 ? 100 : n), why);
+    queue_alert(kAlertFailed, msg);
+}
+
+static Boolean open_port(void);
+
+static void redial_now(void)
+{
+    char dial[64];
+    gRedial.dialing = true;
+    if (!open_port()) {
+        char why[160];
+        copy_text(why, sizeof(why), gAlertMsg, (long)strlen(gAlertMsg));
+        gAlert = kAlertNone;
+        redial_failed(why, (long)strlen(why));
+        return;
+    }
+    prefs_dial_cstr(dial, sizeof(dial));
+    proto_connect(&gProto, dial, TickCount());
+}
+
+Boolean session_redial_pending(void)
+{
+    return gRedial.active;
 }
 
 /* ---- link test events ----------------------------------------------------- */
@@ -178,6 +243,7 @@ static void link_event(EventKind k, const char *t, long n)
     switch (k) {
     case EV_CONNECTED:
         gNoiseSeen = false;
+        gRedial.active = false;
         if (tabs_count() == 0)
             gWantPicker = true;
         for (i = 0; i < tabs_count(); i++)
@@ -194,7 +260,7 @@ static void link_event(EventKind k, const char *t, long n)
         }
         filewin_online(0, false);
         gTabsChanged = true;
-        queue_alert(kAlertLost, "The connection to the bridge was lost.");
+        redial_schedule(0);      /* the tabs reopen and resume when it connects */
         break;
     case EV_CLOSED:
         for (i = 0; i < tabs_count(); i++)
@@ -203,6 +269,10 @@ static void link_event(EventKind k, const char *t, long n)
         gTabsChanged = true;
         break;
     case EV_DIAL_FAILED:
+        if (gRedial.active) {
+            redial_failed(t, n);
+            break;
+        }
         gAlert = kAlertFailed;
         copy_text(gAlertMsg, sizeof(gAlertMsg), t, n);
         break;
@@ -232,7 +302,8 @@ static void tab_event(Tab *t, EventKind k, const char *s, long n)
         break;
     case EV_OPENED:
         log_new_session(&t->log, t->project, (short)(tabs_index(t) + 1));
-        if (t->opened_once || !window_transcript_empty(t) || t->batch.nruns)
+        /* A tab that asked to resume waits for the Y line to say what it got. */
+        if (!t->token_sent && (t->opened_once || !window_transcript_empty(t) || t->batch.nruns))
             divider(t);
         t->opened_once = true;
         t->reopened = true;
@@ -240,6 +311,35 @@ static void tab_event(Tab *t, EventKind k, const char *s, long n)
         t->last_tool[0] = 0;
         t->log_trouble = false;
         break;
+    case EV_RESUMED: {
+        /* "<new|resumed|cut> <token>": which conversation the session runs. */
+        const char *sp = memchr(s, ' ', n);
+        char how[16], token[17];
+        long tn;
+        if (!sp)
+            break;
+        tn = n - (sp + 1 - s);
+        copy_text(how, sizeof(how), s, sp - s);
+        copy_text(token, sizeof(token), sp + 1, tn > 16 ? 16 : tn);
+        if (strcmp(t->token, token) != 0) {
+            memcpy(t->token, token, sizeof(token));
+            gTokensChanged = true;
+        }
+        if (t->token_sent) {         /* a reopen: say how the conversation went */
+            t->token_sent = false;
+            if (strcmp(how, "resumed") == 0)
+                batch_marker(&t->batch, RS_DIVIDER, "Reconnected. The conversation continues.");
+            else if (strcmp(how, "cut") == 0)
+                batch_marker(&t->batch, RS_DIVIDER,
+                             "Reconnected. The last reply was cut off when the link dropped.");
+            else {
+                if (!window_transcript_empty(t) || t->batch.nruns)
+                    divider(t);
+                note(t, "That conversation could not be resumed; this is a new one.");
+            }
+        }
+        break;
+    }
     case EV_READY:
         if (t->reopened) {           /* the first > after opening */
             t->reopened = false;
@@ -249,6 +349,7 @@ static void tab_event(Tab *t, EventKind k, const char *s, long n)
         }
         break;
     case EV_OPEN_FAILED:
+        t->token_sent = false;
         if (t->from_picker) {
             snprintf(msg, sizeof(msg), "%s could not be opened: %.*s", t->project, (int)n, s);
             queue_alert(kAlertNote, msg);
@@ -377,10 +478,21 @@ static void update_status(void)
     }
     switch (gProto.state) {
     case ST_IDLE:
-        strcpy(s, "Not connected");
+        if (gRedial.active) {
+            long left = ((long)(gRedial.due - TickCount()) + TICKS_PER_SEC - 1) / TICKS_PER_SEC;
+            if (left < 0)
+                left = 0;
+            snprintf(s, sizeof(s), "Link lost. Redialing in %ld:%02ld (try %d of %d). Cmd-D cancels.",
+                     left / 60, left % 60, gRedial.attempt + 1, REDIAL_TRIES);
+        } else {
+            strcpy(s, "Not connected");
+        }
         break;
     case ST_DIALING:
-        strcpy(s, "Dialing\xC9");
+        if (gRedial.active)
+            snprintf(s, sizeof(s), "Redialing\xC9 (try %d of %d)", gRedial.attempt + 1, REDIAL_TRIES);
+        else
+            strcpy(s, "Dialing\xC9");
         break;
     case ST_HANDSHAKE:
         strcpy(s, "Connected; waiting for the bridge\xC9");
@@ -430,6 +542,7 @@ void session_init(void)
         t = tabs_add(name, (short)(i + 1));
         if (!t)
             continue;
+        copy_text(t->token, sizeof(t->token), gPrefs.tokens[i], (long)strlen(gPrefs.tokens[i]));
         if (!window_tab_init(t)) {
             tabs_remove(t);
             continue;
@@ -498,6 +611,7 @@ void session_connect(void)
     char dial[64];
     if (gProto.state != ST_IDLE)
         return;
+    gRedial.active = false;      /* a manual Connect takes over from the countdown */
     if (!open_port())
         return;
     prefs_dial_cstr(dial, sizeof(dial));
@@ -507,6 +621,7 @@ void session_connect(void)
 
 void session_disconnect(void)
 {
+    gRedial.active = false;      /* also cancels a countdown or an attempt */
     proto_disconnect(&gProto, TickCount());
     update_status();
 }
@@ -589,6 +704,9 @@ void session_pump(void)
     }
     proto_tick(&gProto, TickCount());
     proto_files_step(&gProto);
+    if (gRedial.active && !gRedial.dialing && gProto.state == ST_IDLE && !gLink.active
+            && TickCount() >= gRedial.due)
+        redial_now();
 
     if (gLink.active) {
         if (gLinkSendNext && proto_sess_state(&gProto, 1) == SS_READY) {
@@ -608,6 +726,8 @@ void session_pump(void)
         }
     }
     proto_drawn(&gProto);              /* everything received is drawn now */
+    if (gTokensChanged)
+        remember_tabs();               /* outside the core's callback: it writes the prefs */
 
     if (gProto.state == ST_IDLE && serial_is_open()) {
         serial_close();

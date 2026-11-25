@@ -24,16 +24,22 @@ import argparse
 import asyncio
 import contextlib
 import difflib
+import errno
+import fcntl
 import fnmatch
 import hashlib
+import json
 import os
 import re
+import secrets
+import signal
 import stat
 import sys
 import tempfile
 import textwrap
 import time
 import unicodedata
+import uuid
 import zlib
 
 # --------------------------------------------------------------------------
@@ -210,6 +216,9 @@ class Terminal:
         self._in_fence = False
         self._wlock = asyncio.Lock()
         self.typed = asyncio.Event()      # tty mode: the first key arrived
+        self.idle_timeout = args.idle_timeout
+        self.last_rx = time.monotonic()   # when the last byte arrived
+        self._watchdog = None             # armed by the first !PING
 
     @property
     def charset(self):
@@ -222,13 +231,23 @@ class Terminal:
         try:
             while True:
                 data = await self.link.read()
+                self.last_rx = time.monotonic()
                 for b in data:
                     await self._route(b)
         except EOFError:
-            self.eof = True
-            self.acks.release()           # a writer waiting for !ACK gives up
-            await self.keys.put(None)
-            await self.lines.put(None)
+            self.lose_link()
+
+    def lose_link(self):
+        """The call is over: end of input, a signal, or the app went silent.
+        Nothing more is sent, a writer waiting for !ACK gives up, and every
+        reader sees the end, so the normal shutdown runs."""
+        if self.eof:
+            return
+        self.eof = True
+        self.link.closed = True
+        self.acks.release()
+        self.keys.put_nowait(None)
+        self.lines.put_nowait(None)
 
     async def _route(self, b):
         if self.mode == "tty":
@@ -251,11 +270,34 @@ class Terminal:
         self._app_buf = b""
         if line == "!ACK":
             self.acks.release()
+        elif line == "!PING" and self.mode == "app2":
+            self._pong()
         elif line == "!STOP" and self.mode == "app":
             if self.busy and self.on_interrupt:
                 asyncio.ensure_future(self.on_interrupt())
         else:
             await self.lines.put(line)
+
+    def _pong(self):
+        """Answers a heartbeat at once: one whole line, outside the window
+        and its lock, so it gets through while a writer waits for !ACK.
+        The first one arms the idle watchdog; apps that never ping are never
+        timed out."""
+        async def send():
+            with contextlib.suppress(EOFError):
+                await self.link.send(b"#PONG\r\n")
+        asyncio.ensure_future(send())
+        if self._watchdog is None and self.idle_timeout:
+            self._watchdog = asyncio.ensure_future(self._watch())
+
+    async def _watch(self):
+        while not self.eof:
+            left = self.last_rx + self.idle_timeout - time.monotonic()
+            if left <= 0:
+                log(f"nothing from the app for {self.idle_timeout:g} s; ending the call")
+                self.lose_link()
+                return
+            await asyncio.sleep(left)
 
     async def read_key(self):
         k = await self.keys.get()
@@ -556,6 +598,12 @@ class SessionConfig:
         self.cwd = cwd
         self.accept_edits = accept_edits
         self.model = model
+        # v2 only: the Claude conversation this session runs, and whether
+        # to continue it (resume) or start it under that id.
+        self.claude_id = None
+        self.resume = False
+        self.always = set()   # "Tool" or "Bash:<exact command>"
+        self.turns = 0
 
 
 class ClaudeSession:
@@ -563,7 +611,7 @@ class ClaudeSession:
         self.term = term      # a Terminal (tty, v1) or a Channel (v2)
         self.cfg = cfg
         self.client = None
-        self.always = set()   # "Tool" or "Bash:<exact command>"
+        self.always = cfg.always
         self.next_pid = 1
         # The SDK runs each can_use_tool request as its own task, so two tool
         # calls can ask at once. Both prompts would read answers from the same
@@ -584,6 +632,11 @@ class ClaudeSession:
         )
         if self.cfg.model:
             opts.model = self.cfg.model
+        if self.cfg.claude_id:
+            if self.cfg.resume:
+                opts.resume = self.cfg.claude_id
+            else:
+                opts.session_id = self.cfg.claude_id
         self.client = ClaudeSDKClient(options=opts)
         await self.client.connect()
         self.term.on_interrupt = self.interrupt
@@ -641,6 +694,8 @@ class ClaudeSession:
                         first = (str(c or "error").strip().splitlines() or ["error"])[0]
                         await self.term.tool_error(first)
             elif isinstance(msg, ResultMessage):
+                if getattr(msg, "session_id", None):
+                    self.cfg.claude_id = msg.session_id
                 status = "interrupted" if getattr(msg, "terminal_reason", None) else msg.subtype
                 await self.term.result(status, getattr(msg, "total_cost_usd", None))
 
@@ -655,10 +710,12 @@ class DemoSession:
         self._child = None
 
     async def start(self):
-        # Test hook: a slow start with a child process, like the real CLI's.
+        # Test hook: a slow start with a child process that, like the real
+        # CLI, reads its stdin until the bridge goes away.
         delay = float(os.environ.get("SE30_DEMO_START_DELAY", "0") or 0)
         if delay:
-            self._child = await asyncio.create_subprocess_exec("sleep", str(delay + 30))
+            self._child = await asyncio.create_subprocess_exec(
+                "cat", stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.DEVNULL)
             await asyncio.sleep(delay)
         self.term.on_interrupt = self.interrupt
 
@@ -676,8 +733,9 @@ class DemoSession:
         t = self.term
         where = os.path.basename(self.cfg.cwd.rstrip("/")) or self.cfg.cwd
         edits = "auto" if self.cfg.accept_edits else "ask"
+        turn = f"turn {self.cfg.turns}, " if self.cfg.turns else ""
         await t.text(f"You said: “{prompt}” — demo mode in {where}, edits {edits}, "
-                     "no tokens spent.")
+                     f"{turn}no tokens spent.")
         await t.tool("Read", "src/parser.py")
         await asyncio.sleep(0.5)
         await t.text(
@@ -701,7 +759,12 @@ class DemoSession:
             "old_string": "def parse(s):\n    return s.split()\n",
             "new_string": "def parse(s):\n    return [t for t in s.split() if t]\n",
         }, self.cfg.cwd)
-        ans = await t.ask_permission(1, "Edit", summary, detail)
+        if "Edit" in self.cfg.always:
+            ans = "y"
+        else:
+            ans = await t.ask_permission(1, "Edit", summary, detail)
+            if ans == "a":
+                self.cfg.always.add("Edit")
         await t.tool("Edit", summary + (" (allowed)" if ans in "ya" else " (denied)"))
         await t.result("success", 0.0)
 
@@ -725,6 +788,56 @@ While Claude works: ctrl-C stops it. At --More--: space, return or q."""
 
 def log(msg):
     print(f"se30bridge: {msg}", file=sys.stderr, flush=True)
+
+
+# --------------------------------------------------------------------------
+# One call at a time
+# --------------------------------------------------------------------------
+
+def _wait_for_lock(fd, seconds):
+    end = time.monotonic() + seconds
+    while True:
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            return True
+        except OSError as e:
+            if e.errno not in (errno.EAGAIN, errno.EACCES):
+                raise
+        if time.monotonic() >= end:
+            return False
+        time.sleep(0.05)
+
+
+def take_call_lock(state_dir):
+    """The WiFi232 holds one call at a time, so a new call means the previous
+    one is dead, even if its bridge never noticed (a Wi-Fi drop leaves the TCP
+    connection half open). Takes the lock in the state folder, ending the
+    bridge that holds it: SIGTERM first, so it stops its sessions, then
+    SIGKILL. Only the holder of the lock is ever signalled, so a stale pid in
+    the file is never touched. Returns the open lock file, kept for the life
+    of the process."""
+    os.makedirs(state_dir, mode=0o700, exist_ok=True)
+    fd = os.open(os.path.join(state_dir, "call.lock"), os.O_RDWR | os.O_CREAT, 0o600)
+    # The old bridge may wait 5 s for its turn to stop and 5 s more while the
+    # CLI writes out the conversation.
+    wait = float(os.environ.get("SE30_EVICT_WAIT", "12") or 12)
+    if not _wait_for_lock(fd, 0):
+        pid = 0
+        with contextlib.suppress(ValueError, OSError):
+            pid = int(os.pread(fd, 32, 0).decode().strip() or 0)
+        log(f"ending the previous call (bridge pid {pid or 'unknown'})")
+        for sig, seconds in ((signal.SIGTERM, wait), (signal.SIGKILL, 5)):
+            if pid > 0 and pid != os.getpid():
+                with contextlib.suppress(ProcessLookupError, PermissionError):
+                    os.kill(pid, sig)
+            if _wait_for_lock(fd, seconds):
+                break
+        else:
+            log("the previous bridge would not stop; giving up on this call")
+            raise SystemExit(1)
+    os.ftruncate(fd, 0)
+    os.pwrite(fd, str(os.getpid()).encode(), 0)
+    return fd
 
 
 def project_name_ok(name):
@@ -1262,14 +1375,63 @@ def write_atomic(real, data):
 
 V2_FILE_TAGS = ("L", "G", "F", "S[", "S", "S]", "S.")
 
+RESUME_TOKEN = re.compile(r"[0-9a-f]{16}")
+RESUME_MAX_AGE = 30 * 86400      # Claude Code's default transcript retention
+CUT_NOTE = ("[The link to the SE/30 dropped during your previous turn, which was "
+            "stopped there. The person did not see the end of it.]")
+
+
+class ResumeStore:
+    """sessions.json in the state folder: one record per conversation a v2
+    session runs, under an opaque token the app keeps. The bridge resumes
+    only conversations it started, only in the project they started in.
+    Only the holder of the call lock writes it."""
+
+    def __init__(self, state_dir):
+        self.path = os.path.join(state_dir, "sessions.json")
+        self.recs = {}
+        try:
+            with open(self.path, encoding="utf-8") as f:
+                recs = json.load(f)
+        except (OSError, ValueError):
+            recs = {}
+        cutoff = time.time() - RESUME_MAX_AGE
+        if isinstance(recs, dict):
+            self.recs = {t: r for t, r in recs.items()
+                         if isinstance(r, dict) and r.get("used", 0) >= cutoff}
+
+    def get(self, token, project):
+        rec = self.recs.get(token) if RESUME_TOKEN.fullmatch(token or "") else None
+        return rec if rec and rec.get("project") == project else None
+
+    def put(self, token, rec):
+        rec["used"] = time.time()
+        self.recs[token] = rec
+        self.save()
+
+    def delete(self, token):
+        if self.recs.pop(token, None) is not None:
+            self.save()
+
+    def save(self):
+        try:
+            os.makedirs(os.path.dirname(self.path), mode=0o700, exist_ok=True)
+            os.close(os.open(self.path, os.O_WRONLY | os.O_CREAT, 0o600))
+            write_atomic(self.path, json.dumps(self.recs, indent=1).encode())
+        except OSError as e:
+            log(f"could not save resume records: {e}")
+
 
 class Channel:
     """One v2 session: a conversation in one project. It has the same output
     methods as Terminal, with every line prefixed by the session digit."""
 
-    def __init__(self, v2, sid, name, path):
+    def __init__(self, v2, sid, name, path, token=None):
         args = v2.args
         self.v2 = v2
+        self.want_token = token   # the conversation the app asked to resume
+        self.token = None
+        self.cut = False          # the resumed conversation's last turn was cut off
         self.term = v2.term
         self.sid = sid
         self.name = name
@@ -1351,6 +1513,8 @@ class Channel:
         """A fresh conversation. Returns False (and says why) when it could
         not start; the session is then closed, which frees its slot."""
         await self.session.stop()
+        self.v2.store.delete(self.token)
+        self._new_conversation()
         self.session = make_session(self.v2.args, self, self.cfg)
         try:
             await self.session.start()
@@ -1359,7 +1523,64 @@ class Channel:
             await self.tool_error(f"Could not start a new conversation: {first}")
             asyncio.ensure_future(self.v2.close(self.sid))
             return False
+        await self.tag("Y", f"{self.token} new")
         return True
+
+    # ---- resume records ----------------------------------------------------
+
+    def _new_conversation(self):
+        self.token = secrets.token_hex(8)
+        self.cfg.claude_id = str(uuid.uuid4())
+        self.cfg.resume = False
+        self.cfg.always = set()
+        self.cfg.turns = 0
+        self.cut = False
+        self._save(turn_running=False)
+
+    def _save(self, turn_running):
+        self.v2.store.put(self.token, {
+            "project": self.name, "claude_id": self.cfg.claude_id,
+            "accept_edits": self.cfg.accept_edits, "always": sorted(self.cfg.always),
+            "turns": self.cfg.turns, "turn_running": turn_running})
+
+    def _take_record(self):
+        """Sets up the conversation the app asked for. Returns "resumed",
+        "cut", or None when there is nothing to resume."""
+        rec = self.v2.store.get(self.want_token, self.name)
+        if not rec:
+            return None
+        self.token = self.want_token
+        self.cfg.claude_id = rec.get("claude_id") or str(uuid.uuid4())
+        self.cfg.accept_edits = bool(rec.get("accept_edits"))
+        self.cfg.always = set(rec.get("always") or [])
+        self.cfg.turns = int(rec.get("turns") or 0)
+        # A conversation that never ran a turn has nothing saved to resume:
+        # it starts under the same id instead.
+        self.cfg.resume = self.cfg.turns > 0
+        self.cut = bool(rec.get("turn_running"))
+        return "cut" if self.cut else "resumed"
+
+    async def _start(self):
+        """Starts the conversation; resumes the one the app asked for when
+        it can, else a new one. Returns how it started, or raises."""
+        how = self._take_record() if self.want_token else None
+        if how is None:
+            self._new_conversation()
+            how = "new"
+        self.session = make_session(self.v2.args, self, self.cfg)
+        try:
+            await self.session.start()
+        except Exception as e:  # noqa: BLE001
+            if how == "new":
+                raise
+            first = (str(e).strip().splitlines() or ["error"])[0]
+            log(f"session {self.sid}: could not resume ({first}); starting a new conversation")
+            self.v2.store.delete(self.token)
+            self._new_conversation()
+            how = "new"
+            self.session = make_session(self.v2.args, self, self.cfg)
+            await self.session.start()
+        return how
 
     async def _read_prompt(self):
         await self.tag(">")
@@ -1375,17 +1596,19 @@ class Channel:
             return "\n".join(parts).strip()
 
     async def run(self):
-        self.session = make_session(self.v2.args, self, self.cfg)
         try:
-            await self.session.start()
+            how = await self._start()
         except Exception as e:  # noqa: BLE001
             first = (str(e).strip().splitlines() or ["error"])[0]
             await self.files.stop()
             self.v2.forget(self)
+            if self.token:
+                self.v2.store.delete(self.token)
             await self.tag("X", clip(f"could not start: {first}", 200))
             return
-        await self.tag("O", self.name)
         try:
+            await self.tag("O", self.name)
+            await self.tag("Y", f"{self.token} {how}")
             while True:
                 prompt = await self._read_prompt()
                 if not prompt:
@@ -1415,9 +1638,15 @@ class Channel:
                               f"last turn: {', '.join(self.edited)}. Re-read them before "
                               "you edit them.]\n" + prompt)
                     self.edited = []
+                if self.cut:
+                    prompt = CUT_NOTE + "\n" + prompt
                 self.busy = True
                 self.idle.clear()
                 self._in_fence = False
+                self.cfg.turns += 1
+                # Marked running until it ends with the link up, so a turn
+                # stopped by a drop (or a killed bridge) reads as cut off.
+                self._save(turn_running=True)
                 try:
                     await self.session.turn(prompt)
                 except EOFError:
@@ -1427,6 +1656,10 @@ class Channel:
                 finally:
                     self.busy = False
                     self.idle.set()
+                if not self.term.eof and not self.closing:
+                    self.cut = False
+                    self.cfg.resume = True
+                    self._save(turn_running=False)
         except EOFError:
             pass
 
@@ -1447,6 +1680,11 @@ class Channel:
         if self.session:
             with contextlib.suppress(Exception):
                 await self.session.stop()
+        rec = self.v2.store.recs.get(self.token) if self.token else None
+        if rec is not None:
+            # Keep grants given during the last turn for the next call.
+            rec["always"] = sorted(self.cfg.always)
+            self.v2.store.put(self.token, rec)
 
 
 class V2:
@@ -1456,6 +1694,7 @@ class V2:
         self.term = term
         self.args = args
         self.channels = {}
+        self.store = ResumeStore(args.state_dir)
 
     def forget(self, ch):
         if self.channels.get(ch.sid) is ch:
@@ -1473,9 +1712,10 @@ class V2:
             return
         await ch.shutdown()
         self.forget(ch)
+        self.store.delete(ch.token)
         await ch.tag("X", "closed")
 
-    async def open(self, sid, name):
+    async def open(self, sid, name, token=None):
         if sid in self.channels:
             return await self.term.send_line(f"{sid}X already open".encode())
         if len(self.channels) >= self.args.max_sessions:
@@ -1483,7 +1723,7 @@ class V2:
         path = dict(list_projects(self.args)).get(name)
         if path is None:
             return await self.term.send_line(f"{sid}X not available".encode())
-        ch = Channel(self, sid, name, path)
+        ch = Channel(self, sid, name, path, token)
         self.channels[sid] = ch
         ch.files.start()
         ch.task = asyncio.ensure_future(ch.run())
@@ -1493,6 +1733,9 @@ class V2:
         tag, payload = (rest, "") if sp < 0 else (rest[:sp], rest[sp + 1:])
         if tag == "O":
             return await self.open(sid, payload)
+        if tag == "Y":
+            token, _, name = payload.partition(" ")
+            return await self.open(sid, name, token)
         if tag == "X":
             if sid in self.channels:
                 asyncio.ensure_future(self.close(sid))
@@ -1514,7 +1757,7 @@ class V2:
 
     async def run(self):
         try:
-            await self.term.send_line(f"#OK se30bridge 2 files={self.args.files}".encode(),
+            await self.term.send_line(f"#OK se30bridge 2 files={self.args.files} resume ping".encode(),
                                       counted=False)
             await self.send_list()
             while True:
@@ -1554,6 +1797,9 @@ async def main_async(args):
     link = Link(args.baud)
     await link.open()
     term = Terminal(link, args)
+    loop = asyncio.get_running_loop()
+    for sig in (signal.SIGTERM, signal.SIGHUP):
+        loop.add_signal_handler(sig, term.lose_link)
     asyncio.ensure_future(term.dispatch())
 
     cfg = SessionConfig(args.cwd or os.getcwd(), args.accept_edits, args.model)
@@ -1655,10 +1901,18 @@ def main():
     p.add_argument("--accept-edits", action="store_true",
                    help="auto-approve file edits")
     p.add_argument("--model", default=None)
+    p.add_argument("--idle-timeout", type=float, default=180,
+                   help="end the call when an app that sends heartbeats has been "
+                        "silent this many seconds (0 = never)")
+    p.add_argument("--state-dir", default="~/.se30bridge",
+                   help="where the bridge keeps its call lock and resume records "
+                        "(one call at a time per folder)")
     args = p.parse_args()
+    args.state_dir = os.path.abspath(os.path.expanduser(args.state_dir))
     if args.cwd:
         args.cwd = os.path.abspath(os.path.expanduser(args.cwd))
     args.projects = [os.path.abspath(os.path.expanduser(d)) for d in args.projects or []]
+    args.call_lock = take_call_lock(args.state_dir)
     try:
         asyncio.run(main_async(args))
     except (KeyboardInterrupt, SystemExit):

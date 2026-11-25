@@ -157,7 +157,7 @@ static void adjust_menus(void)
     enable(gFile, file_item(kQuitItem), true);
 
     enable(gSession, kConnectItem, s == ST_IDLE);
-    enable(gSession, kDisconnectItem, s != ST_IDLE && s != ST_HANGUP);
+    enable(gSession, kDisconnectItem, (s != ST_IDLE && s != ST_HANGUP) || session_redial_pending());
     enable(gSession, kStopItem, t && session_tab_busy(t));
     enable(gSession, kPrevPromptItem, t != NULL && front == window_ptr());
     enable(gSession, kNextPromptItem, t != NULL && front == window_ptr());
@@ -206,6 +206,10 @@ static void quit_app(void)
 
 static void disconnect(void)
 {
+    if (session_redial_pending()) {  /* nothing to save over a link that is down */
+        session_disconnect();
+        return;
+    }
     if (!filewin_settle(0, false))   /* saves run before hanging up */
         return;
     session_disconnect();

@@ -26,6 +26,10 @@ typedef struct {
     int readies;
     char result[64];
     char opened[64];
+    char how[16], token[24];   /* from EV_RESUMED: "<how> <token>" */
+    char said[512];            /* the first paragraph of the latest turn */
+    int said_open;             /* ... still being continued */
+    int kill_after_text;       /* SIGKILL the bridge after this many T lines */
 } SessRec;
 
 typedef struct {
@@ -111,7 +115,41 @@ static void on_event(void *ctx, int sid, EventKind k, const char *t, long n)
             proto_stop(&P, sid);
         if (r->disconnect_after_text && r->texts == r->disconnect_after_text)
             proto_disconnect(&P, ticks());
+        if (r->kill_after_text && r->texts == r->kill_after_text)
+            kill(S.pid, SIGKILL);
+        if (n >= 8 && memcmp(t, "You said", 8) == 0) {
+            r->said_open = 1;
+            copy_text(r->said, sizeof(r->said), t, n);
+        } else if (r->said_open) {
+            /* the prompt had a line break: its echo spans paragraphs */
+            size_t have = strlen(r->said);
+            if (have + n + 1 < sizeof(r->said)) {
+                r->said[have] = ' ';
+                memcpy(r->said + have + 1, t, n);
+                r->said[have + 1 + n] = 0;
+            }
+        }
         break;
+    case EV_TOOL:
+        r->said_open = 0;
+        break;
+    case EV_TEXT_CONT:
+        if (r->said_open) {
+            size_t have = strlen(r->said);
+            if (have + n < sizeof(r->said)) {
+                memcpy(r->said + have, t, n);
+                r->said[have + n] = 0;
+            }
+        }
+        break;
+    case EV_RESUMED: {
+        const char *sp = memchr(t, ' ', n);
+        if (sid >= 1 && sp) {
+            copy_text(r->how, sizeof(r->how), t, sp - t);
+            copy_text(r->token, sizeof(r->token), sp + 1, n - (sp + 1 - t));
+        }
+        break;
+    }
     case EV_CODE:
         if (n > r->longest_code)
             r->longest_code = n;
@@ -286,8 +324,11 @@ static void finish_with_disconnect(void)
 }
 
 static char projects_root[] = "/tmp/se30testXXXXXX";
+/* A hidden folder inside the projects root: not offered as a project, and
+   no other test's bridge shares it. */
+static char state_dir[sizeof(projects_root) + 8];
 static char *demo_argv[] = { "python3", "-u", BRIDGE_PY, "--demo", "--baud", "0",
-                             "--projects", projects_root, NULL };
+                             "--projects", projects_root, "--state-dir", state_dir, NULL };
 static char *stress_argv[] = { "python3", "-u", STRESS_PY, "--baud", "0", NULL };
 
 static void make_projects(void)
@@ -295,6 +336,7 @@ static void make_projects(void)
     char path[64];
     if (!mkdtemp(projects_root))
         exit(2);
+    snprintf(state_dir, sizeof(state_dir), "%s/.state", projects_root);
     snprintf(path, sizeof(path), "%s/alpha", projects_root);
     mkdir(path, 0700);
     snprintf(path, sizeof(path), "%s/beta", projects_root);
@@ -308,6 +350,11 @@ static void remove_projects(void)
     rmdir(path);
     snprintf(path, sizeof(path), "%s/beta", projects_root);
     rmdir(path);
+    snprintf(path, sizeof(path), "%s/call.lock", state_dir);
+    unlink(path);
+    snprintf(path, sizeof(path), "%s/sessions.json", state_dir);
+    unlink(path);
+    rmdir(state_dir);
     rmdir(projects_root);
 }
 
@@ -336,6 +383,58 @@ static void test_demo_two_sessions(void)
     CHECK_EQ_LONG(S.s[2].counts[EV_SESSION_CLOSED], 1);
     CHECK_EQ_LONG(proto_sess_state(&P, 2), SS_NONE);
     CHECK_EQ_LONG(S.s[1].counts[EV_READY], 3);   /* open and two turns */
+    finish_with_disconnect();
+}
+
+
+/* A drop in the middle of a turn, then a new bridge and the same
+   conversations: session 1 continues, session 2 reports its reply cut off. */
+static void test_drop_and_resume(void)
+{
+    char tok1[24], tok2[24];
+    start(demo_argv);
+    connect_two("alpha", "beta");
+    CHECK(strcmp(S.s[1].how, "new") == 0);
+    CHECK(strlen(S.s[1].token) == 16);
+    CHECK(strcmp(S.s[1].token, S.s[2].token) != 0);
+    strcpy(tok1, S.s[1].token);
+    strcpy(tok2, S.s[2].token);
+    CHECK(proto_send_prompt(&P, 1, "one", 3));
+    CHECK(proto_send_prompt(&P, 2, "one", 3));
+    CHECK(run(both_done, 20));
+    CHECK_EQ_LONG(S.s[1].counts[EV_PERM_ASK], 1);
+
+    /* Session 2's next turn is cut off by the bridge dying (SIGKILL: no
+       cleanup, as when a Wi-Fi drop leaves the process to be evicted). */
+    S.s[2].kill_after_text = S.s[2].texts + 2;
+    CHECK(proto_send_prompt(&P, 2, "two", 3));
+    CHECK(run(is_idle, 20));
+    CHECK_EQ_LONG(S.link[EV_LOST], 1);
+    CHECK(child_exited());
+    close(S.to_child);
+    close(S.from_child);
+
+    /* A new call, the same state folder. */
+    start(demo_argv);
+    proto_connect(&P, "ATDTbridge", ticks());
+    CHECK(run(is_online, 20));
+    CHECK(P.resume_cap && P.ping_cap);
+    CHECK(proto_open_resume(&P, 1, "alpha", tok1));
+    CHECK(proto_open_resume(&P, 2, "beta", tok2));
+    CHECK(run(both_ready, 20));
+    CHECK(strcmp(S.s[1].how, "resumed") == 0);
+    CHECK(strcmp(S.s[1].token, tok1) == 0);
+    CHECK(strcmp(S.s[2].how, "cut") == 0);
+    CHECK(strcmp(S.s[2].token, tok2) == 0);
+    S.s[1].readies = S.s[2].readies = 0;
+    CHECK(proto_send_prompt(&P, 1, "three", 5));
+    CHECK(proto_send_prompt(&P, 2, "three", 5));
+    CHECK(run(both_done, 20));
+    CHECK(strstr(S.s[1].said, "turn 2") != NULL);
+    CHECK(strstr(S.s[1].said, "dropped") == NULL);
+    CHECK(strstr(S.s[2].said, "turn 3") != NULL);
+    CHECK(strstr(S.s[2].said, "dropped") != NULL);   /* Claude was told */
+    CHECK_EQ_LONG(P.dropped, 0);
     finish_with_disconnect();
 }
 
@@ -524,6 +623,7 @@ int main(void)
     signal(SIGPIPE, SIG_IGN);
     make_projects();
     test_demo_two_sessions();
+    test_drop_and_resume();
     test_demo_stop_one();
     test_stress_cases();
     test_disconnect_mid_turn();

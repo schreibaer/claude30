@@ -51,11 +51,13 @@ class FakeLink:
 def make_session():
     _stub_sdk()
     args = types.SimpleNamespace(cols=80, rows=24, charset="macroman", window=0,
-                                 cwd="/tmp/project", accept_edits=False, model=None)
+                                 cwd="/tmp/project", accept_edits=False, model=None,
+                                 idle_timeout=0)
     link = FakeLink()
     term = bridge.Terminal(link, args)
     term.mode = "app"
-    return bridge.ClaudeSession(term, args), term, link
+    cfg = bridge.SessionConfig(args.cwd)
+    return bridge.ClaudeSession(term, cfg), term, link
 
 
 class ConcurrentPermissionTest(unittest.TestCase):
@@ -99,7 +101,8 @@ class ChannelPermissionTest(unittest.TestCase):
         async def run():
             _stub_sdk()
             args = types.SimpleNamespace(cols=80, rows=24, charset="macroman", window=0,
-                                         accept_edits=False, model=None, files="off")
+                                         accept_edits=False, model=None, files="off", state_dir="/nonexistent",
+                                         idle_timeout=0)
             link = FakeLink()
             term = bridge.Terminal(link, args)
             term.mode = "app2"

@@ -32,6 +32,8 @@ typedef struct Tab {
     Boolean unavailable;         /* the bridge refused or ended it */
     Boolean from_picker;         /* made by New Tab: a refused open removes it */
     Boolean refused;             /* ... and it was refused: remove it */
+    char token[17];              /* resume token of its conversation ("" = none) */
+    Boolean token_sent;          /* opened asking to resume: its <n>Y says how it went */
     Boolean opened_once;         /* a conversation ran in it this launch */
     Boolean reopened;            /* opened; waiting for its first > */
     Boolean log_trouble;         /* its log could not be written */

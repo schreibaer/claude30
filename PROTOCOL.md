@@ -117,6 +117,7 @@ Both sides ignore a session line whose tag they do not know, and a line for a se
 | `P[`, `P <name>`, `P]` | The project list: one line per project the client may open, in display order. Sent after `#OK` and again after each `!LIST`. |
 | `W` | Flow-control window boundary, as in v1 |
 | `I <message>` | Information about the link, not about one session |
+| `#PONG` | Answer to `!PING` (see Resume and heartbeat) |
 
 ### Link-level, client → bridge
 
@@ -125,6 +126,7 @@ Both sides ignore a session line whose tag they do not know, and a line for a se
 | `!ACK` | Acknowledge a `W`, as in v1 |
 | `!LIST` | Send the project list again |
 | `!QUIT` | End the call. The bridge stops every session and exits. |
+| `!PING` | Heartbeat (see Resume and heartbeat) |
 
 ### Session lines, bridge → client
 
@@ -135,6 +137,7 @@ Every v1 bridge→client tag works per session with the digit in front: `<n>T`, 
 | `<n>O <name>` | Session `<n>` is open in project `<name>`. `<n>>` follows when it is ready for a prompt. |
 | `<n>X <reason>` | Session `<n>` could not be opened (`not available`, `too many tabs`, `already open`, `could not start: ...`), or it ended. |
 | `<n>X closed` | The answer to the client's `<n>X`: the session is stopped and its number is free again. |
+| `<n>Y <token> <how>` | Which conversation the session runs: `new`, `resumed` or `cut` (see Resume and heartbeat) |
 
 `<n>>` means only "ready for a new prompt". Unlike v1, the bridge sends no `>` for continuation lines.
 
@@ -143,6 +146,7 @@ Every v1 bridge→client tag works per session with the digit in front: `<n>T`, 
 | Line | Meaning |
 |---|---|
 | `<n>O <name>` | Open session `<n>` in the project named `<name>`, exactly as the list spelled it. The client picks `<n>`. The bridge never builds a path from client text: a name that is not in a freshly built list is refused with `<n>X not available`. |
+| `<n>Y <token> <name>` | Open session `<n>` and resume the conversation `<token>` (see Resume and heartbeat) |
 | `<n>X` | Close session `<n>`. The bridge denies any open permission request, stops a running turn, stops the session and answers `<n>X closed`. No `!STOP` is needed first. |
 | `<n>P <line>` | One line of a prompt. A line ending in `\` continues on the next `<n>P` line; the bridge joins the lines with line breaks. Commands such as `/new`, `/edits on` and `/help` work and affect only this session. |
 | `<n>A <id> y` / `n` / `a` | Answer permission request `<id>` of session `<n>` |
@@ -183,6 +187,50 @@ C: 2A 1 y
 B: 2R success $0.0420
 B: 2>
 C: !QUIT
+```
+
+## Resume and heartbeat
+
+Two capability words in `#OK` (`#OK se30bridge 2 files=rw resume ping`) add recovery from a dropped link. A client that sees neither never sends the lines below, and a bridge that lacks them ignores them (a bridge ignores link-level lines it does not know, and each side ignores unknown session tags), so version 2 is unchanged for every older client and bridge.
+
+### One call at a time
+
+The WiFi232 holds one call at a time, so a new call proves the previous one is dead, even if its bridge never noticed (a Wi-Fi drop leaves the TCP connection half open, and a bridge waiting for `!ACK` never reads again). Before it says anything, a new bridge takes a lock in its state folder (`--state-dir`, default `~/.se30bridge`). If another bridge holds it, the new one sends it SIGTERM, then SIGKILL after 12 seconds. The old bridge treats the signal like the end of the connection: it denies open permission requests, stops running turns and stops its Claude processes. This needs no protocol lines.
+
+### Heartbeat (`ping`)
+
+| Line | Meaning |
+|---|---|
+| `!PING` (client → bridge) | The client is alive. Sent when it has sent nothing for 30 seconds. |
+| `#PONG` (bridge → client) | The answer, sent at once. It is outside the flow-control window: it is not counted and does not wait for `!ACK`. |
+
+The first `!PING` arms an idle watchdog in the bridge: when it has received nothing for `--idle-timeout` seconds (default 180), it ends the call as above. A client that never pings is never timed out. A client treats the link as dead when it has heard nothing for 90 seconds and a `!PING` sent at least 10 seconds earlier has gone unanswered. `#PONG` shows the link is up; it says nothing about Claude, so it does not reset a client's "no output" timer.
+
+### Resume tokens (`resume`)
+
+Each conversation a session runs has a resume token: 16 lowercase hex digits the bridge makes up. The bridge keeps, per token, the project, the Claude conversation, the "Always" grants, the auto-accept-edits setting and whether a turn was running (`sessions.json` in the state folder, mode 0600, entries unused for 30 days dropped). A token is only valid for the project it was issued in.
+
+| Line | Meaning |
+|---|---|
+| `<n>Y <token> <how>` (bridge → client) | Sent after `<n>O` and before the first `<n>>`, and again after `/new` or `/edits`. `<how>` is `new`, `resumed`, or `cut`: resumed, and its last turn was stopped by the link dropping. The client keeps the token. |
+| `<n>Y <token> <name>` (client → bridge) | Open session `<n>` in project `<name>` and continue the conversation `<token>`. Answered like `<n>O` (same refusals), then `<n>Y`. |
+
+A token the bridge does not know, or that belongs to another project, opens a fresh conversation, and the answering `<n>Y` carries a new token and `new`. A resumed conversation that was cut off gets one bracketed sentence at the start of its next prompt, telling Claude the person did not see the end of its last turn. `<n>X` and `/quit` forget the token. A bridge that does not advertise `resume` is sent `<n>O` instead.
+
+```
+C: #HELLO SE30 2
+B: #OK se30bridge 2 files=rw resume ping
+B: P[ ... P]
+C: 1Y 4101ea904ab6760d claude30
+C: 2Y 9c2f08d5e1a47b03 website
+B: 1O claude30
+B: 1Y 4101ea904ab6760d resumed
+B: 1>
+B: 2O website
+B: 2Y 9c2f08d5e1a47b03 cut
+B: 2>
+C: !PING
+B: #PONG
 ```
 
 ## Files

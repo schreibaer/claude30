@@ -20,8 +20,10 @@ static const char kNoisySave[] = "The link is too noisy to save this file.";
 
 static void sendn(Proto *p, const char *s, long n)
 {
-    if (n > 0)
+    if (n > 0) {
+        p->last_tx = p->now;
         p->send(p->ctx, s, n);
+    }
 }
 
 static void sends(Proto *p, const char *s)

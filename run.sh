@@ -17,5 +17,14 @@ LAUNCH="$DIR/.launch.sh"
 } > "$LAUNCH"
 chmod +x "$LAUNCH"
 
+# TCP keepalive closes a connection the WiFi232 left half open when its Wi-Fi
+# dropped, so a ZTerm call's bridge sees the end. The app's own heartbeat and
+# "a new call ends the previous one" cover Claude30 without it. The default
+# keepalive idle time is two hours, so shorten it where this socat can.
+KEEP="keepalive"
+if socat -hhh 2>/dev/null | grep -q keepidle; then
+  KEEP="$KEEP,keepidle=60,keepintvl=20,keepcnt=3"
+fi
+
 echo "se30bridge listening on port $PORT for $WIFI232_IP  (ctrl-C to stop)"
-exec socat TCP-LISTEN:"$PORT",reuseaddr,fork,range="$WIFI232_IP"/32 EXEC:"$LAUNCH"
+exec socat TCP-LISTEN:"$PORT",reuseaddr,fork,"$KEEP",range="$WIFI232_IP"/32 EXEC:"$LAUNCH"
