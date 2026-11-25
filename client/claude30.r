@@ -87,6 +87,7 @@ resource 'MENU' (kSessionMenu) {
 		"-", noIcon, noKey, noMark, plain;
 		"Previous Prompt (Cmd-Up)", noIcon, noKey, noMark, plain;
 		"Next Prompt (Cmd-Down)", noIcon, noKey, noMark, plain;
+		"Open or Close Fold", noIcon, "J", noMark, plain;
 		"-", noIcon, noKey, noMark, plain;
 		"New Tab\0xC9", noIcon, "T", noMark, plain;
 		"Close Tab", noIcon, noKey, noMark, plain;

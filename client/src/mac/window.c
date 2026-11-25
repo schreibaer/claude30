@@ -857,6 +857,106 @@ static void insert_run(TEHandle te, const char *text, long len, RunStyle style)
     insert_at(te, (*te)->teLength, text, len, style);
 }
 
+/* ---- folds -------------------------------------------------------------- */
+
+static short line_of(TEHandle te, long off);
+
+static void fold_read_cb(void *ctx, long off, long len, char *out)
+{
+    TEHandle te = ((Tab *)ctx)->trans;
+    memcpy(out, *(*te)->hText + off, len);
+}
+
+/* Replaces transcript text [off, off+oldlen) with text. The edit runs with an
+   empty clip and the view stays on the same text, so a fold opening or
+   closing above the view does not move what is on screen. */
+static void fold_replace_cb(void *ctx, long off, long oldlen, const char *text,
+                            long tlen, int kind)
+{
+    Tab *t = (Tab *)ctx;
+    TEHandle te = t->trans;
+    Rect empty = { 0, 0, 0, 0 };
+    RgnHandle saveClip = NewRgn();
+    long delta = tlen - oldlen, st = (*te)->selStart, en = (*te)->selEnd;
+    long before = text_height(te), after;
+    Boolean above = line_of(te, off) < scrolled_px(te) / gLineH;
+
+    GetClip(saveClip);
+    ClipRect(&empty);
+    if (oldlen > 0) {
+        TESetSelect(off, off + oldlen, te);
+        TEDelete(te);
+    }
+    insert_at(te, off, text, tlen, kind == FK_CODE ? RS_CODE : RS_TOOL);
+    if (st > off)
+        st = st >= off + oldlen ? st + delta : off + tlen;
+    if (en > off)
+        en = en >= off + oldlen ? en + delta : off + tlen;
+    TESetSelect(st, en, te);
+    after = text_height(te);
+    if (above) {
+        long d = before - after;       /* lines above the view changed: keep the view on its text */
+        OffsetRect(&(*te)->destRect, 0, (short)d);
+    }
+    SetClip(saveClip);
+    DisposeRgn(saveClip);
+    pm_shift(&t->marks, off + oldlen - 1, delta);
+    al_shift(&t->agents, off + oldlen - 1, delta);
+    if (te == gTrans)
+        InvalRect(&gTransView);
+}
+
+/* The width of s in the font of a fold's lines. */
+static long fold_measure_cb(void *ctx, int kind, const char *s, long n)
+{
+    GrafPtr save;
+    short font, size;
+    Style face;
+    RunStyle rs = kind == FK_CODE ? RS_CODE : RS_TOOL;
+    long w;
+    (void)ctx;
+    GetPort(&save);
+    SetPort(gWin);
+    font = gWin->txFont;
+    face = gWin->txFace;
+    size = gWin->txSize;
+    TextFont(kStyles[rs].font);
+    TextFace(kStyles[rs].face);
+    TextSize(FONT_SIZE);
+    w = TextWidth((Ptr)s, 0, (short)n);
+    TextFont(font);
+    TextFace(face);
+    TextSize(size);
+    SetPort(save);
+    return w;
+}
+
+static void fold_ops(Tab *t, FoldOps *o)
+{
+    o->ctx = t;
+    o->width = gTransView.right - gTransView.left - 4;
+    o->read = fold_read_cb;
+    o->replace = fold_replace_cb;
+    o->measure = fold_measure_cb;
+}
+
+static int fold_log_range(void *ctx, long off, long len)
+{
+    Tab *t = (Tab *)ctx;
+    TEHandle te = t->trans;
+    OSErr err;
+    char state = HGetState((*te)->hText);
+    HLock((*te)->hText);
+    err = log_append(&t->log, *(*te)->hText + off, len);
+    HSetState((*te)->hText, state);
+    return err;
+}
+
+static int fold_log_bytes(void *ctx, const char *text, long len)
+{
+    return log_append(&((Tab *)ctx)->log, text, len);
+}
+
 /* While the log cannot be written, text stays in the window until it would
    pass this size; only then is old text removed without a copy. */
 #define TE_HARD_LIMIT 31000L
@@ -871,17 +971,19 @@ static void trim(Tab *t, long cut, long incoming)
     long hCut = 0, scrolled;
     Rect empty = { 0, 0, 0, 0 };
     RgnHandle saveClip = NewRgn();
-    char state;
 
     while (line < nLines && (*te)->lineStarts[line] < cut)
         line++;
     if (line > 0)
         hCut = TEGetHeight(line, 1, te);
 
-    state = HGetState((*te)->hText);
-    HLock((*te)->hText);
-    err = log_append(&t->log, *(*te)->hText, cut);
-    HSetState((*te)->hText, state);
+    {
+        FoldLog fl;
+        fl.ctx = t;
+        fl.range = fold_log_range;
+        fl.bytes = fold_log_bytes;
+        err = fold_log(&t->folds, cut, &fl);
+    }
     if (err) {
         t->log_err = err;
         if ((*te)->teLength + incoming < TE_HARD_LIMIT
@@ -900,6 +1002,7 @@ static void trim(Tab *t, long cut, long incoming)
     TEDelete(te);
     pm_cut(&t->marks, cut);
     al_cut(&t->agents, cut);
+    fold_cut(&t->folds, cut);
     if (hCut > scrolled)
         hCut = scrolled;
     OffsetRect(&(*te)->destRect, 0, (short)hCut);
@@ -927,9 +1030,12 @@ void window_append(Tab *t)
     Boolean follow;
     Batch *b = &t->batch;
     TEHandle te = t->trans;
+    FoldOps fops;
+    long base;
     if (b->nruns == 0)
         return;
     SetPort(gWin);
+    fold_ops(t, &fops);
     follow = at_bottom(te);
     quiet_begin(te);
     for (i = 0; i < b->nruns; i++) {
@@ -955,7 +1061,10 @@ void window_append(Tab *t)
             s->len = b->runs[i].len - k;
             t->agent_pending = -1;
         }
+        base = (*te)->teLength;
         insert_run(te, b->text + b->runs[i].start, b->runs[i].len, b->runs[i].style);
+        fold_append(&t->folds, &fops, b->runs[i].style, b->text + b->runs[i].start,
+                    b->runs[i].len, base);
     }
     trim_for(t, 0);
     if (follow)
@@ -1061,6 +1170,7 @@ void window_agent_update(Tab *t, int slot, const char *text)
     s->len = len;
     al_shift(&t->agents, off, delta);
     pm_shift(&t->marks, off, delta);
+    fold_shift(&t->folds, off, delta);
     if (te == gTrans)
         InvalRect(&gTransView);
     else if (!t->fresh) {
@@ -1117,6 +1227,101 @@ void window_erase_input(void)
     window_clear_input();
 }
 
+/* ---- opening and closing folds ------------------------------------------ */
+
+static void fold_note(Tab *t, int r)
+{
+    SysBeep(1);
+    if (r == FT_BUSY)
+        window_set_status("That block is still arriving.");
+    else if (r == FT_TOO_BIG)
+        window_set_status("That fold is too large to open again.");
+    else if (r == FT_MEMORY)
+        window_set_status("Not enough memory to open that fold.");
+}
+
+/* Opens or closes fold idx of the front tab and keeps the view sensible. */
+static void fold_flip(Tab *t, int idx)
+{
+    TEHandle te = t->trans;
+    FoldOps fops;
+    long id, off, len;
+    int r;
+    short top, nlines;
+
+    SetPort(gWin);
+    id = t->folds.f[idx].id;
+    if (!t->folds.f[idx].open) {
+        /* Room first: opening adds the body, and trimming may drop this fold. */
+        trim_for(t, t->folds.f[idx].body_len + 64);
+        idx = fold_by_id(&t->folds, id);
+        if (idx < 0) {
+            SysBeep(1);
+            return;
+        }
+    }
+    fold_ops(t, &fops);
+    off = t->folds.f[idx].off;
+    r = fold_toggle(&t->folds, &fops, idx);
+    if (r != FT_OPENED && r != FT_CLOSED) {
+        fold_note(t, r);
+        return;
+    }
+    idx = fold_by_id(&t->folds, id);
+    scroll_to_px(te, scrolled_px(te));          /* clamp */
+    if (r == FT_OPENED && idx >= 0) {
+        /* Show the whole body, or at least the marker at the top. */
+        len = t->folds.f[idx].len + t->folds.f[idx].open_len;
+        top = line_of(te, off);
+        nlines = line_of(te, off + len) - top + 1;
+        if (top * (long)gLineH < scrolled_px(te)
+                || (top + nlines) * (long)gLineH > scrolled_px(te) + (gTransView.bottom - gTransView.top)) {
+            long px = (top + nlines) * (long)gLineH - (gTransView.bottom - gTransView.top);
+            if (px > top * (long)gLineH || px < 0)
+                px = top * (long)gLineH;
+            if (top * (long)gLineH < scrolled_px(te))
+                px = top * (long)gLineH;
+            scroll_to_px(te, px);
+        }
+    }
+    sync_scrollbar();
+    InvalRect(&gTransView);
+}
+
+Boolean window_fold_available(void)
+{
+    return gTab && gTab->folds.n > 0;
+}
+
+/* Cmd-J: the fold at the insertion point, else the last one on screen. */
+void window_toggle_fold_key(void)
+{
+    Tab *t = gTab;
+    TEHandle te;
+    long px, first, last;
+    int idx;
+    if (!t || t->folds.n == 0) {
+        SysBeep(1);
+        return;
+    }
+    te = t->trans;
+    idx = fold_containing(&t->folds, (*te)->selStart);
+    if (idx < 0) {
+        px = scrolled_px(te);
+        first = (*te)->lineStarts[px / gLineH < (*te)->nLines ? px / gLineH : (*te)->nLines - 1];
+        {
+            long ln = (px + (gTransView.bottom - gTransView.top)) / gLineH + 1;
+            last = ln >= (*te)->nLines ? (*te)->teLength : (*te)->lineStarts[ln];
+        }
+        idx = fold_last_in(&t->folds, first, last);
+    }
+    if (idx < 0) {
+        SysBeep(1);
+        return;
+    }
+    fold_flip(t, idx);
+}
+
 short window_click(EventRecord *ev, Tab **tab)
 {
     Point p = ev->where;
@@ -1158,6 +1363,13 @@ short window_click(EventRecord *ev, Tab **tab)
         return kClickNone;
     if (PtInRect(p, &gTransView)) {
         set_focus(gTrans);
+        if (!shift && gTab && gTab->folds.n > 0) {
+            int fi = fold_marker_at(&gTab->folds, TEGetOffset(p, gTrans));
+            if (fi >= 0) {
+                fold_flip(gTab, fi);
+                return kClickNone;
+            }
+        }
         TEClick(p, shift, gTrans);
     } else if (PtInRect(p, &gInputView)) {
         set_focus(gInput);

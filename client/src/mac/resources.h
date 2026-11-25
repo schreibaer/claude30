@@ -40,10 +40,11 @@
 #define kStopItem       3
 #define kPrevPromptItem 5
 #define kNextPromptItem 6
-#define kNewTabItem     8
-#define kCloseTabItem   9
-#define kModelItem      11
-#define kLinkTestItem   13
+#define kFoldItem       7
+#define kNewTabItem     9
+#define kCloseTabItem   10
+#define kModelItem      12
+#define kLinkTestItem   14
 
 /* Window */
 #define kMainWindow     128

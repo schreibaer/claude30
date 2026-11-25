@@ -10,6 +10,7 @@
 #include <MacTypes.h>
 #include <TextEdit.h>
 #include "agentline.h"
+#include "fold.h"
 #include "batch.h"
 #include "log.h"
 #include "permdlg.h"
@@ -45,6 +46,7 @@ typedef struct Tab {
     char last_tool[64];
     PromptMarks marks;           /* where its prompts start in the transcript */
     AgentLines agents;           /* its subagents' lines */
+    FoldSet folds;               /* its folded code blocks and tool runs */
     int agent_pending;           /* slot whose line the next append draws, or -1 */
 } Tab;
 

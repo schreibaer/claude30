@@ -552,6 +552,13 @@ static void test_stress_cases(void)
         CHECK_MEM(head, n, "Edit parser.py: +12 -3 lines in 2 places");
     }
 
+    /* The fold case: three code blocks arrive whole and the turn ends. */
+    memset(&S.s[1], 0, sizeof(S.s[1]));
+    stress_turn(1, "fold");
+    CHECK(run(s1_done, 30));
+    CHECK_EQ_LONG(S.s[1].counts[EV_CODE_END], 3);
+    CHECK_EQ_LONG(S.s[1].counts[EV_RESULT], 1);
+
     stress_turn(1, "long");
     CHECK(run(s1_done, 30));
     CHECK(S.s[1].longest_text > 4000);
