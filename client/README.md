@@ -71,6 +71,16 @@ Each tab keeps its conversation's resume token in the preferences, so every tab 
 - Each tab keeps its own transcript, input and log file. Switching tabs leaves the input and the scroll position as you left them.
 - The open tabs are remembered. Connect reopens them, in the same order. If a project is gone from the host, its tab says it is not available and takes no prompts until you close it.
 
+### Model and effort
+
+Each tab has its own Claude model and effort, so a quick question can run on a cheap model in one tab while hard work runs on a strong model at high effort in another.
+
+- **Session > Model and Effort…** opens a dialog for the front tab: the models the bridge offers in a list (the first row, "Bridge default", names the model the bridge was started with, if any) and six effort buttons (bridge default, Low, Medium, High, Extra high, Max). It is dimmed unless you are online, the tab is open and the bridge offers models (`bridge.py --models`).
+- Typing `/model` or `/effort` in a tab does the same: alone it lists the choices, with a name it changes them (`/model sonnet`, `/effort high`).
+- The conversation, its "always" permissions and its resume token stay. A change made while Claude is working takes effect when that turn ends, and the transcript says so.
+- When either is set, the status line ends with it in brackets, for example `[sonnet, high]`. The tab remembers both across a redial and relaunching, and a tab reopened after a drop uses them from its first turn. If the bridge no longer offers a remembered model, the tab falls back to the bridge default and the transcript says so.
+- New tabs start at the bridge default. An older bridge (without `models`) leaves the menu item dimmed.
+
 ### Project files
 
 **File > Open Project File…** (Cmd-O) browses the front tab's project, folders first. Double-click a folder to go into it, and **Up** (or Cmd-up arrow) to go back. Typing selects by name. The list hides `.git`, secrets such as `.env` and keys, and anything the project's git ignore rules exclude.
@@ -101,6 +111,8 @@ You never need the scroll bar; **Edit > Settings…** has a **Hide scroll bar** 
 Prompts that have already moved to the log file can't be reached this way.
 
 With the scroll bar hidden, a thin strip at the window's right edge takes its place: its black marker shows which part of the transcript is on screen. The right end of the status line says **Top**, **End**, or how far down you are, such as **42%**. Both count only the text still in the window, not what has moved to the log file.
+
+At the right end of the status line a tiny compact Mac shows how the link is doing. Its screen shows a heart that beats whenever something arrives from the host (a quick pulse while a reply streams, a slow one when idle, from the host's heartbeat every 30 seconds). If a heartbeat has gone unanswered for 5 seconds the heart turns hollow, well before the 90 seconds after which the link is declared lost. While the link is dialing or waiting for the bridge the screen shows the wristwatch, while a lost link waits to be redialed a Sad Mac, and when you are not connected the screen is blank.
 
 While Claude works in the front tab, the Claude mascot paces the empty input box between a word that changes every few seconds ("Warming up the 68030…", or the tool Claude is running) and a tiny compact Mac whose screen flips between a Happy Mac and the wristwatch. When Claude waits for your permission it stands still with its arms up. Once you type ahead, it steps in place beside the Send button so it never covers your text.
 
@@ -183,6 +195,7 @@ Retro68 leaves the Finder's "has bundle" flag clear. A post-build step (`cmake/s
 - `src/core/` is portable C with no Toolbox calls. It holds:
   - the line assembler (lines of any length)
   - the protocol state machine: dialing, the version 2 handshake and project list, up to six sessions, flow control, permission requests, stop, close, disconnect and hangup timing
+  - the heartbeat light's picture logic and art (`heartbeat.c`)
   - file transfers (`files.c`): listings, piece reads and block saves with CRC-32 checks (`crc32.c`) and retries
   - the prompt encoder (backslash continuation lines with the session prefix)
   - the transcript batcher and trim plan
@@ -194,6 +207,7 @@ Retro68 leaves the Finder's "has bundle" flag clear. A post-build step (`cmake/s
   - `tabs.c`: the tab table, in strip order.
   - `window.c`: the tab strip, each tab's styled TextEdit transcript and input, the status line. Background tabs receive text with drawing clipped away.
   - `picker.c`: the project list (List Manager).
+  - `modeldlg.c`: Session > Model and Effort… (List Manager list and radio buttons).
   - `opendlg.c`: Open Project File (List Manager).
   - `filewin.c`: file windows, paging, saving and conflicts.
   - `permdlg.c`: permission dialog with a QuickDraw line list, one pending request per tab.
