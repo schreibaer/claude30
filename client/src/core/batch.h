@@ -46,7 +46,12 @@ typedef struct {
     int need_break;     /* the transcript is not empty: next block starts a line */
     long line_len;      /* bytes since the last line break */
     int oom;            /* memory ran out; some text was dropped */
+    long code_line;     /* the last line number given in the current code block */
 } Batch;
+
+/* Code lines carry their line number in the block, right-aligned in 3
+   columns and followed by a space ("  1 def parse(text):", " 12   return x").
+   A block of 1,000 lines or more widens to fit. */
 
 void batch_init(Batch *b);
 void batch_free(Batch *b);

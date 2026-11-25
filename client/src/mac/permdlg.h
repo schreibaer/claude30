@@ -6,8 +6,12 @@
    discarded, and the buttons ignore clicks for 0.75 s after it opens.
    Each tab collects its own request in a PermReq, so a request arriving in
    one tab never changes the dialog open for another.
+   A bold headline above the header sums the request up (permsum.h). It is
+   a second user item that draws text and takes no clicks; nothing about how
+   the dialog is answered depends on it.
    Toolbox: Dialog Manager (GetNewDialog, ModalDialog with a filter,
-   SetDialogItem user item), Control Manager, QuickDraw, Memory Manager,
+   SetDialogItem user item), Control Manager, QuickDraw (TextFont, TextFace,
+   TextSize, TextWidth, DrawText), Memory Manager (HLock, HGetState),
    Event Manager (FlushEvents). */
 #ifndef PERMDLG_H
 #define PERMDLG_H

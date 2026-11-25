@@ -29,7 +29,7 @@ static void test_runs(void)
     t = run_text(&b, 1, &n);
     CHECK_MEM(t, n, "\r\xA5 Read a.c");
     t = run_text(&b, 2, &n);
-    CHECK_MEM(t, n, "\r  int x;");
+    CHECK_MEM(t, n, "\r  1 int x;");
 
     /* + joins prose with a space and code with nothing. */
     batch_clear(&b);
@@ -40,7 +40,29 @@ static void test_runs(void)
     t = run_text(&b, 0, &n);
     CHECK_MEM(t, n, "\rone two");
     t = run_text(&b, 1, &n);
-    CHECK_MEM(t, n, "\r  abcd");
+    CHECK_MEM(t, n, "\r  2 abcd");
+
+    /* Code lines are numbered from 1 in each block; the number widens past
+       999, and a new block starts again at 1. */
+    batch_clear(&b);
+    batch_event(&b, EV_CODE_END, "", 0);
+    batch_event(&b, EV_CODE_BEGIN, "", 0);
+    {
+        int i;
+        for (i = 0; i < 1000; i++)
+            batch_event(&b, EV_CODE, "x", 1);
+    }
+    t = run_text(&b, 0, &n);
+    CHECK(n > 20);
+    CHECK_MEM(t, 6, "\r  1 x");
+    CHECK_MEM(t + 6, 6, "\r  2 x");
+    CHECK_MEM(t + n - 13, 13, "\r999 x\r1000 x");
+    batch_event(&b, EV_CODE_END, "", 0);
+    batch_event(&b, EV_CODE_BEGIN, "", 0);
+    batch_event(&b, EV_CODE, "", 0);
+    batch_event(&b, EV_CODE, "  indented", 10);
+    t = run_text(&b, 0, &n);
+    CHECK_MEM(t + n - 20, 20, "\r  1 \r  2   indented");
 
     /* A sent prompt comes before Claude's output for that turn. */
     batch_clear(&b);

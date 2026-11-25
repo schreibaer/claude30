@@ -161,6 +161,7 @@ static void adjust_menus(void)
     enable(gSession, kStopItem, t && session_tab_busy(t));
     enable(gSession, kPrevPromptItem, t != NULL && front == window_ptr());
     enable(gSession, kNextPromptItem, t != NULL && front == window_ptr());
+    enable(gSession, kFoldItem, front == window_ptr() && window_fold_available());
     enable(gSession, kNewTabItem, online && tabs_count() < MAX_TABS);
     enable(gSession, kCloseTabItem, t != NULL);
     enable(gSession, kModelItem, session_model_available());
@@ -301,6 +302,7 @@ static void do_menu(long choice)
         case kStopItem:       session_stop(); break;
         case kPrevPromptItem: window_jump_prompt(-1); break;
         case kNextPromptItem: window_jump_prompt(1); break;
+        case kFoldItem:       window_toggle_fold_key(); break;
         case kNewTabItem:     session_new_tab(); break;
         case kCloseTabItem:   session_close_tab(tabs_front()); break;
         case kModelItem:      session_model_dialog(); break;

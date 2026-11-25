@@ -1,4 +1,5 @@
 #include "permdlg.h"
+#include "permsum.h"
 #include "modem.h"
 #include "resources.h"
 #include "window.h"
@@ -16,11 +17,15 @@
 #define LIST_SIZE    9
 #define MARK_WIDTH   2           /* "  " or the continuation mark */
 #define ARM_TICKS    45          /* clicks on the buttons are ignored for 0.75 s */
+#define GENEVA       3
+#define HEAD_SIZE    12
+#define TITLE_SIZE   10
 
 typedef struct {
     long off;                    /* offset into the request body */
     short len;
     Boolean cont;                /* continuation of the line above */
+    Boolean hdr;                 /* off is into the request's header, not its body */
 } Row;
 
 static PermReq *gReq;            /* the request the open dialog shows */
@@ -32,6 +37,11 @@ static DialogPtr gDlg;
 static ControlHandle gBar;
 static Rect gList;
 static short gRowH, gRowAscent, gVisible;
+static Rect gHeadRect;           /* the bold headline above the header */
+static Rect gTitleRect;          /* the request's header: one plain line, cut to fit */
+static Boolean gTitleCut;        /* it did not fit: the list opens with the whole header */
+static char gHeadline[PERMSUM_MAX];
+static long gHeadlineLen;
 
 /* ---- collecting the request -------------------------------------------- */
 
@@ -99,6 +109,27 @@ static void build_rows(short cols)
     gNRows = 0;
     if (cols < 8)
         cols = 8;
+    /* A header cut to one line must still be readable: the list opens with
+       all of it, wrapped. */
+    if (gTitleCut) {
+        pos = 0;
+        end = gReq->title[0];
+        do {
+            long n = end - pos;
+            if (n > cols)
+                n = cols;
+            if (!grow(&gRows, (gNRows + 1) * sizeof(Row))) {
+                gReq->incomplete = true;
+                return;
+            }
+            r = &((Row *)*gRows)[gNRows++];
+            r->off = pos;
+            r->len = (short)n;
+            r->cont = pos != 0;
+            r->hdr = true;
+            pos += n;
+        } while (pos < end);
+    }
     for (i = 0; i < gReq->nlines; i++) {
         end = ((long *)*gReq->line_ends)[i];
         pos = start;
@@ -114,6 +145,7 @@ static void build_rows(short cols)
             r->off = pos;
             r->len = (short)n;
             r->cont = pos != start;
+            r->hdr = false;
             pos += n;
         } while (pos < end);
         start = end;
@@ -127,7 +159,7 @@ static pascal void draw_list(DialogPtr d, short item)
     long first, i;
     short y;
     Rect inner = gList;
-    char saveState;
+    char saveState = 0;
     (void)d;
     (void)item;
 
@@ -143,17 +175,73 @@ static pascal void draw_list(DialogPtr d, short item)
         MoveTo(inner.left + 4, y);
         DrawString("\p(no details)");
     }
-    if (gReq->body && gNRows > 0) {
-        saveState = HGetState(gReq->body);
-        HLock(gReq->body);
+    if (gNRows > 0) {
+        if (gReq->body) {
+            saveState = HGetState(gReq->body);
+            HLock(gReq->body);
+        }
         for (i = first; i < gNRows && i < first + gVisible; i++) {
             Row *r = &((Row *)*gRows)[i];
             MoveTo(inner.left + 3, y);
             DrawText(r->cont ? "\xC2 " : "  ", 0, MARK_WIDTH);
-            DrawText(*gReq->body + r->off, 0, r->len);
+            DrawText(r->hdr ? (Ptr)gReq->title + 1 : *gReq->body + r->off, 0, r->len);
             y += gRowH;
         }
-        HSetState(gReq->body, saveState);
+        if (gReq->body)
+            HSetState(gReq->body, saveState);
+    }
+    TextFont(0);
+    TextSize(0);
+}
+
+/* Bold headline, set in the dialog's port before it is measured or drawn. */
+static void headline_font(void)
+{
+    TextFont(GENEVA);
+    TextSize(HEAD_SIZE);
+    TextFace(bold);
+}
+
+static long measure_headline(const char *s, long n)
+{
+    return TextWidth((Ptr)s, 0, (short)n);
+}
+
+static pascal void draw_headline(DialogPtr d, short item)
+{
+    (void)d;
+    (void)item;
+    EraseRect(&gHeadRect);
+    headline_font();
+    MoveTo(gHeadRect.left + 1, gHeadRect.top + 13);
+    DrawText(gHeadline, 0, (short)gHeadlineLen);
+    TextFace(0);
+    TextFont(0);
+    TextSize(0);
+}
+
+/* The header the bridge sent ("Bash git status", "Edit src/parser.py"), on
+   one line in plain Geneva. A header too wide for the line ends in an
+   ellipsis; the full text is in the list below or in the headline. */
+static pascal void draw_title(DialogPtr d, short item)
+{
+    const char *s = (const char *)gReq->title + 1;
+    short n = gReq->title[0], w = gTitleRect.right - gTitleRect.left - 2;
+    (void)d;
+    (void)item;
+    EraseRect(&gTitleRect);
+    TextFont(GENEVA);
+    TextSize(TITLE_SIZE);
+    TextFace(0);
+    MoveTo(gTitleRect.left + 1, gTitleRect.top + 12);
+    if (TextWidth((Ptr)s, 0, n) <= w) {
+        DrawText((Ptr)s, 0, n);
+    } else {
+        short ell = CharWidth((char)0xC9);
+        while (n > 0 && TextWidth((Ptr)s, 0, n) + ell > w)
+            n--;
+        DrawText((Ptr)s, 0, n);
+        DrawChar((char)0xC9);
     }
     TextFont(0);
     TextSize(0);
@@ -198,18 +286,10 @@ static void flash(short item)
 /* Part of the request was lost: say so, and leave only Deny and Cmd-period. */
 static void show_incomplete(void)
 {
-    static const unsigned char note[] = "\p  [Part of this request could not be shown. Deny it.]";
+    /* The headline already reads "Incomplete request: deny it". */
     short type, i;
     Handle h;
     Rect r;
-    Str255 t;
-    short room = 255 - gReq->title[0];
-    short n = note[0] < room ? note[0] : room;
-    memcpy(t, gReq->title, gReq->title[0] + 1);
-    memcpy(t + 1 + t[0], note + 1, n);
-    t[0] = (unsigned char)(t[0] + n);
-    GetDialogItem(gDlg, kPermSummary, &type, &h, &r);
-    SetDialogItemText(h, t);
     for (i = 0; i < 2; i++) {
         GetDialogItem(gDlg, i == 0 ? kPermAllow : kPermAlways, &type, &h, &r);
         HiliteControl((ControlHandle)h, 255);
@@ -273,10 +353,10 @@ short permdlg_run(PermReq *q)
 {
     short hit = 0, type, cols, result;
     Handle h;
-    Rect r, barRect;
+    Rect barRect;
     FontInfo fi;
     ModalFilterUPP filterUPP;
-    UserItemUPP drawUPP;
+    UserItemUPP drawUPP, headUPP, titleUPP;
     GrafPtr save;
 
     if (q->close_requested)
@@ -295,8 +375,15 @@ short permdlg_run(PermReq *q)
     gRowH = fi.ascent + fi.descent + fi.leading;
     gRowAscent = fi.ascent;
 
-    GetDialogItem(gDlg, kPermSummary, &type, &h, &r);
-    SetDialogItemText(h, q->title);
+    GetDialogItem(gDlg, kPermSummary, &type, &h, &gTitleRect);
+    titleUPP = NewUserItemUPP(draw_title);
+    SetDialogItem(gDlg, kPermSummary, type, (Handle)titleUPP, &gTitleRect);
+    /* Does the header fit its one line? If not, the list will open with it. */
+    TextFont(GENEVA);
+    TextSize(TITLE_SIZE);
+    gTitleCut = TextWidth((Ptr)q->title + 1, 0, q->title[0]) > gTitleRect.right - gTitleRect.left - 2;
+    TextFont(MONACO);
+    TextSize(LIST_SIZE);
 
     GetDialogItem(gDlg, kPermList, &type, &h, &gList);
     drawUPP = NewUserItemUPP(draw_list);
@@ -314,6 +401,34 @@ short permdlg_run(PermReq *q)
     gBar = NewControl(gDlg, &barRect, "\p", true, 0, 0,
                       gNRows > gVisible ? (short)(gNRows - gVisible) : 0,
                       scrollBarProc, 0);
+
+    /* The headline comes from what was received: counts of a diff or file,
+       or a note to deny when part of the request was lost. */
+    GetDialogItem(gDlg, kPermHeadline, &type, &h, &gHeadRect);
+    headUPP = NewUserItemUPP(draw_headline);
+    SetDialogItem(gDlg, kPermHeadline, type, (Handle)headUPP, &gHeadRect);
+    headline_font();
+    /* Measuring can load a font and move memory, so the body stays locked. */
+    if (q->body && q->line_ends) {
+        char bodyState = HGetState(q->body), endsState = HGetState(q->line_ends);
+        HLock(q->body);
+        HLock(q->line_ends);
+        gHeadlineLen = permsum_build((const char *)q->title + 1, q->title[0],
+                                     *q->body, (const long *)*q->line_ends,
+                                     q->nlines, q->incomplete,
+                                     measure_headline, gHeadRect.right - gHeadRect.left - 4,
+                                     gHeadline, sizeof(gHeadline));
+        HSetState(q->body, bodyState);
+        HSetState(q->line_ends, endsState);
+    } else {
+        gHeadlineLen = permsum_build((const char *)q->title + 1, q->title[0],
+                                     NULL, NULL, 0, q->incomplete,
+                                     measure_headline, gHeadRect.right - gHeadRect.left - 4,
+                                     gHeadline, sizeof(gHeadline));
+    }
+    TextFace(0);
+    TextFont(0);
+    TextSize(0);
 
     if (q->incomplete)
         show_incomplete();
@@ -335,6 +450,8 @@ short permdlg_run(PermReq *q)
     DisposeDialog(gDlg);
     DisposeModalFilterUPP(filterUPP);
     DisposeUserItemUPP(drawUPP);
+    DisposeUserItemUPP(headUPP);
+    DisposeUserItemUPP(titleUPP);
     DisposeControlActionUPP(gBarUPP);
     gDlg = NULL;
     gReq = NULL;

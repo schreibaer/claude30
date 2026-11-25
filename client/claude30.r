@@ -79,7 +79,7 @@ resource 'MENU' (kEditMenu) {
 };
 
 resource 'MENU' (kSessionMenu) {
-	kSessionMenu, textMenuProc, 0x7FFFF5B7, enabled, "Session",
+	kSessionMenu, textMenuProc, 0x7FFFEB77, enabled, "Session",
 	{
 		"Connect", noIcon, "K", noMark, plain;
 		"Disconnect", noIcon, "D", noMark, plain;
@@ -87,6 +87,7 @@ resource 'MENU' (kSessionMenu) {
 		"-", noIcon, noKey, noMark, plain;
 		"Previous Prompt (Cmd-Up)", noIcon, noKey, noMark, plain;
 		"Next Prompt (Cmd-Down)", noIcon, noKey, noMark, plain;
+		"Open or Close Fold", noIcon, "J", noMark, plain;
 		"-", noIcon, noKey, noMark, plain;
 		"New Tab\0xC9", noIcon, "T", noMark, plain;
 		"Close Tab", noIcon, noKey, noMark, plain;
@@ -192,9 +193,10 @@ resource 'DITL' (kPermDialog) {
 		{ 278, 410, 298, 490 }, Button { enabled, "Allow" };
 		{ 278, 320, 298, 400 }, Button { enabled, "Deny" };
 		{ 278, 230, 298, 310 }, Button { enabled, "Always" };
-		{ 6, 10, 42, 490 }, StaticText { disabled, "" };
-		{ 46, 10, 270, 490 }, UserItem { disabled };
+		{ 24, 10, 40, 490 }, UserItem { disabled };
+		{ 44, 10, 270, 490 }, UserItem { disabled };
 		{ 280, 10, 298, 224 }, StaticText { disabled, "\0x11Y \0x11N \0x11A   \0x11. stops" };
+		{ 4, 10, 22, 490 }, UserItem { disabled };
 	}
 };
 

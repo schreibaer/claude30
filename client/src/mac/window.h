@@ -85,6 +85,12 @@ void window_jump_prompt(short dir);
    Home, End). True when ev was one and has been handled. */
 Boolean window_scroll_key(EventRecord *ev);
 
+/* Folds: a click on a fold's marker line opens or closes it (window_click);
+   Cmd-J does the same for the fold at the insertion point, else the last
+   fold on screen. The menu item is enabled while the front tab has a fold. */
+void window_toggle_fold_key(void);
+Boolean window_fold_available(void);
+
 /* Edit menu commands for the front tab. */
 void window_edit(short item);
 
