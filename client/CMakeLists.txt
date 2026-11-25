@@ -21,6 +21,7 @@ add_application(Claude30
     src/core/promptmarks.c
     src/core/agentline.c
     src/core/permsum.c
+    src/core/fold.c
     src/mac/main.c
     src/mac/serial.c
     src/mac/modem.c
