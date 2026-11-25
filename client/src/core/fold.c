@@ -80,7 +80,13 @@ static void code_tail(const char *body, long n, char *out)
         long e = i, s;
         while (e < n && body[e] != '\r')
             e++;
+        /* Past the line number batch.c puts in front ("  1 "), then the
+           code's own indent. */
         s = i;
+        while (s < e && body[s] == ' ')
+            s++;
+        while (s < e && body[s] >= '0' && body[s] <= '9')
+            s++;
         while (s < e && body[s] == ' ')
             s++;
         if (s < e) {

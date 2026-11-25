@@ -554,8 +554,36 @@ static void random_stream(unsigned long seed, long width)
     fold_free(&a.fs);
 }
 
+/* Numbered lines from batch.c: the marker shows the first line's code, not
+   its number, and a blank first line is skipped. */
+static void test_numbered_from_batch(void)
+{
+    Doc a;
+    Batch b;
+    int i;
+    doc_init(&a, 0);
+    batch_init(&b);
+    batch_event(&b, EV_TEXT, "hi", 2);
+    batch_event(&b, EV_CODE_BEGIN, "", 0);
+    batch_event(&b, EV_CODE, "", 0);
+    batch_event(&b, EV_CODE, "  def parse(text):", 18);
+    for (i = 0; i < 12; i++)
+        batch_event(&b, EV_CODE, "    pass", 8);
+    batch_event(&b, EV_CODE_END, "", 0);
+    for (i = 0; i < b.nruns; i++) {
+        char run[2000];
+        memcpy(run, b.text + b.runs[i].start, b.runs[i].len);
+        run[b.runs[i].len] = 0;
+        add(&a, 1, b.runs[i].style, run);
+    }
+    CHECK_DOC(&a, "hi\r[+] Code, 14 lines: def parse(text):");
+    batch_free(&b);
+    fold_free(&a.fs);
+}
+
 int main(void)
 {
+    test_numbered_from_batch();
     test_code();
     test_code_one_run_and_continuation();
     test_tools();

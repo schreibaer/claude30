@@ -199,6 +199,7 @@ Run these in the emulator, and the hardware rows on the SE/30. Tick each one.
 | ☐ | The `perm` case's dialog opens with the bold line `Write big.txt: +2000 lines` above the header, and the list still scrolls to the last line | Emulator |
 | ☐ | The `edit` case shows `Edit parser.py: +12 -3 lines in 2 places`, and `wide` shows `Bash: long command (3000 characters), read it below` | Emulator |
 | ☐ | The `fold` case: the 40-line and 13-line blocks each show one `[+] Code, N lines: ...` line, the 12-line block stays open, the 5 tool lines show `[+] 5 tools: Read 3, Grep, Bash` and the 2 stay plain | Emulator | Stress bridge |
+| ☐ | Code lines are numbered from 1 in each block, right-aligned (`  1`, ` 12`), and an opened fold shows the same numbers | Emulator | Stress bridge |
 | ☐ | Clicking a `[+]` line opens it in place and the line reads `[-]`; clicking again closes it. Cmd-J does the same with the caret in the block or the fold last on screen, and is dimmed when there is no fold | Emulator | Stress bridge |
 | ☐ | Opening a fold below the view scrolls to show it; opening one above the view leaves the visible text where it is | Emulator | Stress bridge |
 | ☐ | While a long block still arrives its marker's line count goes up, and `fold` in a tab scrolled up does not move the view | Emulator | Stress bridge |

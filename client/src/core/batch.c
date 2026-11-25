@@ -103,6 +103,23 @@ static void puts_(Batch *b, RunStyle s, const char *t)
     put(b, s, t, (long)strlen(t));
 }
 
+/* Writes v right-aligned in 3 columns and a space to out; returns the length. */
+static long line_number(char *out, long v)
+{
+    char d[12];
+    long n = 0, k = 0;
+    do {
+        d[n++] = (char)('0' + v % 10);
+        v /= 10;
+    } while (v > 0 && n < 11);
+    while (n + k < 3)
+        out[k++] = ' ';
+    while (n > 0)
+        out[k++] = d[--n];
+    out[k++] = ' ';
+    return k;
+}
+
 /* Starts a new block (paragraph, code line, marker) on its own line. */
 static void block(Batch *b, RunStyle s)
 {
@@ -122,11 +139,17 @@ void batch_event(Batch *b, EventKind kind, const char *t, long n)
         put(b, RS_PROSE, " ", 1);
         put(b, RS_PROSE, t, n);
         break;
-    case EV_CODE:
+    case EV_CODE_BEGIN:
+    case EV_CODE_END:
+        b->code_line = 0;
+        break;
+    case EV_CODE: {
+        char num[16];
         block(b, RS_CODE);
-        puts_(b, RS_CODE, "  ");
+        put(b, RS_CODE, num, line_number(num, ++b->code_line));
         put(b, RS_CODE, t, n);
         break;
+    }
     case EV_CODE_CONT:
         put(b, RS_CODE, t, n);
         break;

@@ -2,7 +2,7 @@
 
 Claude30 is a System 7 application for a stock Macintosh SE/30. It replaces ZTerm's tty mode with one Mac window:
 
-- The transcript stays readable. Prose wraps to the window and code shows in Monaco.
+- The transcript stays readable. Prose wraps to the window and code shows in Monaco, with each line numbered from 1 in its block (`  1 def parse(text):`). The numbers are part of the text, so they come along when you copy code from the transcript, and the log has them too.
 - Up to six tabs, each a Claude conversation in its own project on the host, all over one call.
 - Permission requests open a dialog that shows the whole diff, file or command.
 - You can browse a tab's project, read any text file and edit small ones, without spending a Claude turn.
