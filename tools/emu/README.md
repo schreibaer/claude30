@@ -99,6 +99,26 @@ Run these in the emulator, and the hardware rows on the SE/30. Tick each one.
 | ☐ | Mid-reply, switch off the access point for 30 seconds: the app reconnects on its own, both tabs continue, and `pgrep -fl bridge.py` on the host shows one bridge | **SE/30** | Real Claude, a long turn in each tab |
 | ☐ | Drop Wi-Fi, then switch the SE/30 off: within 4 minutes no bridge for that call is running | **SE/30** | `pgrep -fl bridge.py` |
 
+**Heartbeat light and per-tab model and effort**
+
+| | Check | Where | How |
+|---|---|---|---|
+| ☐ | Idle and online, the heart in the status line's right corner beats about every 30 seconds, when the bridge's `#PONG` arrives | Emulator | `run.sh --demo` |
+| ☐ | While output streams, the heart pulses fast (about twice a second) and never stays solid | Emulator | Stress bridge `stream` |
+| ☐ | The big heart, small heart and hollow heart can be told apart at 1:1 on the emulator screen | Emulator | Same |
+| ☐ | Pause the bridge without closing the connection (`kill -STOP`): after about 35 seconds (a ping, then 5 seconds) the heart turns hollow; `kill -CONT` brings the beat back | Emulator | `run.sh --demo` |
+| ☐ | Leave it paused: after about 90 seconds the screen shows the Sad Mac while the redial counts down, then the wristwatch while it dials | Emulator | Same |
+| ☐ | Disconnect (Cmd-D) leaves a blank screen; connecting shows the wristwatch until the handshake finishes | Emulator | `run.sh --demo` |
+| ☐ | A long status message ends before the icon and never covers it; the icon is intact in full screen, compact input and hidden scroll bar layouts, and after another window covers and uncovers it | Emulator | Long project name; File > Compact Input; Settings > Hide scroll bar |
+| ☐ | Session > Model and Effort… is dimmed while offline and against an older bridge, and enabled online with an open tab | Emulator | `run.sh --demo`, and a bridge from before this change |
+| ☐ | Pick sonnet and High in tab 1 and leave tab 2 at the bridge default: tab 1's demo replies name "model sonnet, effort high", tab 2's name neither, and the status line shows `[sonnet, high]` only in tab 1 | Emulator | `run.sh --demo --projects ...`, two tabs |
+| ☐ | Change the effort during a turn: the transcript says it takes effect when the turn ends, the turn finishes, and the next reply shows the new effort and keeps counting turns | Emulator | `run.sh --demo` |
+| ☐ | `/model haiku` and `/effort max` typed in a tab change the same settings; `/model` alone lists the choices | Emulator | `run.sh --demo` |
+| ☐ | Quit and relaunch, Connect: both tabs keep their model and effort. Drop the link and redial: the reopened tab uses them from its first turn | Emulator | Stop and restart tcpser |
+| ☐ | Restart the bridge with a shorter `--models` list that lacks a tab's model: that tab opens on the bridge default and the transcript says the model is not offered | Emulator | `run.sh --demo --models opus` |
+| ☐ | A version 5 `Claude30 Prefs` loads with every tab at the bridge default | Emulator | Prefs file from the previous build |
+| ☐ | With real Claude, change a tab's effort mid-conversation and confirm its next reply continues the conversation (effort is applied by restarting Claude on the same conversation) | **SE/30** | Real bridge |
+
 **Tabs and the project picker**
 
 | | Check | Where | How |

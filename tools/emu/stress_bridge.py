@@ -220,7 +220,7 @@ def main():
         args = argparse.Namespace(
             cwd=None, projects=[root], max_sessions=6, files=a.files, demo=True,
             baud=a.baud, cols=80, rows=24, charset="macroman", window=a.window,
-            accept_edits=False, model=None, idle_timeout=180,
+            accept_edits=False, model=None, models=["opus", "sonnet", "haiku"], idle_timeout=180,
             state_dir=os.path.join(root, ".state"))
         bridge.make_session = lambda args, out, cfg: StressSession(out, cfg)
         bridge.FileService = StressFiles

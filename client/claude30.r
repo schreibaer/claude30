@@ -79,7 +79,7 @@ resource 'MENU' (kEditMenu) {
 };
 
 resource 'MENU' (kSessionMenu) {
-	kSessionMenu, textMenuProc, 0x7FFFFDB7, enabled, "Session",
+	kSessionMenu, textMenuProc, 0x7FFFF5B7, enabled, "Session",
 	{
 		"Connect", noIcon, "K", noMark, plain;
 		"Disconnect", noIcon, "D", noMark, plain;
@@ -90,6 +90,8 @@ resource 'MENU' (kSessionMenu) {
 		"-", noIcon, noKey, noMark, plain;
 		"New Tab\0xC9", noIcon, "T", noMark, plain;
 		"Close Tab", noIcon, noKey, noMark, plain;
+		"-", noIcon, noKey, noMark, plain;
+		"Model and Effort\0xC9", noIcon, noKey, noMark, plain;
 		"-", noIcon, noKey, noMark, plain;
 		"Link Test\0xC9", noIcon, noKey, noMark, plain
 	}
@@ -313,6 +315,30 @@ resource 'DITL' (kPickerDialog) {
 		{ 208, 120, 228, 200 }, Button { enabled, "Cancel" };
 		{ 46, 12, 198, 288 }, UserItem { disabled };
 		{ 8, 12, 40, 288 }, StaticText { disabled, "Open a project in a new tab:" };
+	}
+};
+
+/* ---- model and effort ------------------------------------------------------ */
+
+resource 'DLOG' (kModelDialog) {
+	{ 50, 86, 290, 426 },
+	dBoxProc, invisible, noGoAway, 0,
+	kModelDialog, "", alertPositionMainScreen
+};
+
+resource 'DITL' (kModelDialog) {
+	{
+		{ 208, 254, 228, 330 }, Button { enabled, "OK" };
+		{ 208, 166, 228, 242 }, Button { enabled, "Cancel" };
+		{ 46, 12, 198, 170 }, UserItem { disabled };
+		{ 8, 12, 40, 330 }, StaticText { disabled, "Model and effort for this tab:" };
+		{ 46, 186, 62, 330 }, StaticText { disabled, "Effort:" };
+		{ 66, 186, 84, 330 }, RadioButton { enabled, "Bridge default" };
+		{ 86, 186, 104, 330 }, RadioButton { enabled, "Low" };
+		{ 106, 186, 124, 330 }, RadioButton { enabled, "Medium" };
+		{ 126, 186, 144, 330 }, RadioButton { enabled, "High" };
+		{ 146, 186, 164, 330 }, RadioButton { enabled, "Extra high" };
+		{ 166, 186, 184, 330 }, RadioButton { enabled, "Max" };
 	}
 };
 

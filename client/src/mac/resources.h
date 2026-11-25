@@ -42,7 +42,8 @@
 #define kNextPromptItem 6
 #define kNewTabItem     8
 #define kCloseTabItem   9
-#define kLinkTestItem   11
+#define kModelItem      11
+#define kLinkTestItem   13
 
 /* Window */
 #define kMainWindow     128
@@ -62,6 +63,7 @@
 #define kCantSaveAlert  140     /* 1 Don't Save, 2 Cancel */
 #define kConflictAlert  141     /* 1 Cancel, 2 Replace */
 #define kRevertAlert    142     /* 1 Revert, 2 Cancel */
+#define kModelDialog    143
 
 #define kRedialButton   1
 
@@ -101,5 +103,13 @@
 #define kOpenUp         5
 #define kOpenMessage    6
 #define kOpenWaiting    7
+
+#define kModelOK        1
+#define kModelCancel    2
+#define kModelList      3
+#define kModelTitle     4
+#define kModelEffortLabel 5
+#define kModelEffort0   6       /* six radio buttons: default, low, medium, high, xhigh, max */
+#define kModelEffort5   11
 
 #endif

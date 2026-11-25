@@ -17,6 +17,7 @@ add_application(Claude30
     src/core/files.c
     src/core/crc32.c
     src/core/mascot.c
+    src/core/heartbeat.c
     src/core/promptmarks.c
     src/mac/main.c
     src/mac/serial.c
@@ -28,6 +29,7 @@ add_application(Claude30
     src/mac/linktest.c
     src/mac/tabs.c
     src/mac/picker.c
+    src/mac/modeldlg.c
     src/mac/opendlg.c
     src/mac/filewin.c
     claude30.r

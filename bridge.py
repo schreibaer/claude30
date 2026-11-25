@@ -590,6 +590,17 @@ SYSTEM_APPEND = (
 )
 
 
+def new_conversation(cfg):
+    """tty and v1: the next session starts a fresh conversation."""
+    cfg.claude_id = None
+    cfg.resume = False
+    cfg.always = set()
+    cfg.turns = 0
+
+
+CHANGE = object()   # wakes a Channel's prompt loop to apply a settings change
+
+
 class SessionConfig:
     """What one conversation runs with. Each v2 session has its own, so a
     /edits in one tab never changes another."""
@@ -597,7 +608,9 @@ class SessionConfig:
     def __init__(self, cwd, accept_edits=False, model=None):
         self.cwd = cwd
         self.accept_edits = accept_edits
-        self.model = model
+        self.model = model            # what the session runs with
+        self.default_model = model    # what "bridge default" means
+        self.effort = None            # None: the CLI decides
         # v2 only: the Claude conversation this session runs, and whether
         # to continue it (resume) or start it under that id.
         self.claude_id = None
@@ -632,6 +645,8 @@ class ClaudeSession:
         )
         if self.cfg.model:
             opts.model = self.cfg.model
+        if self.cfg.effort:
+            opts.effort = self.cfg.effort
         if self.cfg.claude_id:
             if self.cfg.resume:
                 opts.resume = self.cfg.claude_id
@@ -649,6 +664,11 @@ class ClaudeSession:
     async def interrupt(self):
         if self.client:
             await self.client.interrupt()
+
+    async def set_model(self, model):
+        """Switches the model of the running conversation (None: default)."""
+        if self.client:
+            await self.client.set_model(model)
 
     async def _can_use_tool(self, tool_name, input_data, context):
         from claude_agent_sdk.types import PermissionResultAllow, PermissionResultDeny
@@ -728,14 +748,22 @@ class DemoSession:
     async def interrupt(self):
         self._stop = True
 
+    async def set_model(self, model):
+        pass   # the demo reads cfg.model each turn
+
     async def turn(self, prompt):
         self._stop = False
         t = self.term
         where = os.path.basename(self.cfg.cwd.rstrip("/")) or self.cfg.cwd
         edits = "auto" if self.cfg.accept_edits else "ask"
         turn = f"turn {self.cfg.turns}, " if self.cfg.turns else ""
+        picked = ""
+        if self.cfg.model != self.cfg.default_model:
+            picked += f"model {self.cfg.model}, "
+        if self.cfg.effort:
+            picked += f"effort {self.cfg.effort}, "
         await t.text(f"You said: “{prompt}” — demo mode in {where}, edits {edits}, "
-                     f"{turn}no tokens spent.")
+                     f"{picked}{turn}no tokens spent.")
         await t.tool("Read", "src/parser.py")
         await asyncio.sleep(0.5)
         await t.text(
@@ -773,9 +801,62 @@ def make_session(args, out, cfg):
     return (DemoSession if args.demo else ClaudeSession)(out, cfg)
 
 
+EFFORTS = ("low", "medium", "high", "xhigh", "max")
+MODEL_NAME = re.compile(r"^[A-Za-z0-9._\[\]-]{1,31}$")
+MAX_MODELS = 16
+
+
+def check_settings(args, model, effort):
+    """Checks a model and effort from the wire or a command ("-" or None
+    is the bridge default). Returns (model, effort, problems): a value
+    that is not offered falls back to the default and is reported."""
+    problems = []
+    if model in (None, "-", "default"):
+        model = None
+    elif model not in args.models:
+        problems.append(f"Unknown model {clip(model, 40)}; using the bridge default.")
+        model = None
+    if effort in (None, "-", "default"):
+        effort = None
+    elif effort not in EFFORTS:
+        problems.append(f"Unknown effort {clip(effort, 40)}; using the default.")
+        effort = None
+    return model, effort, problems
+
+
+def setting_command(args, words, model, effort):
+    """Parses /model or /effort (words, lower case) against the tab's
+    current picks. Returns (model, effort, lines, changed): the new picks,
+    what to tell the person, and whether to change anything."""
+    kind = words[0]
+    if kind == "/model":
+        what, choices, cur = "Model", list(args.models), model
+        default = args.model or "the CLI default"
+    else:
+        what, choices, cur = "Effort", list(EFFORTS), effort
+        default = "the CLI default"
+    if len(words) == 1:
+        shown = cur or f"default ({default})"
+        return model, effort, [f"{what}: {shown}.",
+                               f"Choices: {' '.join(choices)} or default."], False
+    val = words[1]
+    new_model, new_effort = (val, effort) if kind == "/model" else (model, val)
+    m, e, problems = check_settings(args, new_model, new_effort)
+    if problems:
+        return model, effort, [problems[0].split(";")[0] + ".",
+                               f"Choices: {' '.join(choices)} or default."], False
+    return m, e, [], True
+
+
+def wire_settings(model, effort):
+    return f"{model or '-'} {effort or '-'}"
+
+
 HELP = """Commands:
   /new         start a fresh conversation
   /edits on    auto-accept file edits (off asks each time)
+  /model NAME  the model for the next turn (alone: show choices)
+  /effort LVL  low, medium, high, xhigh or max (alone: show choices)
   /help        this text
   /quit        disconnect
 Type a prompt and press return. End a line with \\ to continue it.
@@ -1426,7 +1507,7 @@ class Channel:
     """One v2 session: a conversation in one project. It has the same output
     methods as Terminal, with every line prefixed by the session digit."""
 
-    def __init__(self, v2, sid, name, path, token=None):
+    def __init__(self, v2, sid, name, path, token=None, preset=None):
         args = v2.args
         self.v2 = v2
         self.want_token = token   # the conversation the app asked to resume
@@ -1437,6 +1518,14 @@ class Channel:
         self.name = name
         self.cols = self.term.cols
         self.cfg = SessionConfig(path, args.accept_edits, args.model)
+        # The tab's own model and effort (None: the bridge default). The
+        # client owns them and presets them before opening; a change made
+        # during a turn waits in `pending` for the turn to end.
+        self.pick_model, self.pick_effort, self.preset_problems = \
+            check_settings(args, *(preset or (None, None)))
+        self.cfg.model = self.pick_model or args.model
+        self.cfg.effort = self.pick_effort
+        self.pending = None
         self.prompts = asyncio.Queue()
         self.answers = asyncio.Queue()
         self.on_interrupt = None
@@ -1526,6 +1615,76 @@ class Channel:
         await self.tag("Y", f"{self.token} new")
         return True
 
+    # ---- model and effort --------------------------------------------------
+
+    async def send_settings(self, model, effort):
+        await self.tag("M", wire_settings(model, effort))
+
+    async def change(self, model, effort):
+        """A change from the app (or a typed command): confirmed at once,
+        applied between turns."""
+        m, e, problems = check_settings(self.v2.args, model, effort)
+        for p in problems:
+            await self.tool_error(p)
+        self.pending = (m, e)
+        if self.busy:
+            await self.notice("Model and effort change when this turn ends.")
+            await self.send_settings(m, e)
+        else:
+            # Confirmed when applied, together with the fresh >: an effort
+            # change restarts Claude, which can take a while, and a > that
+            # came long after the confirmation could end a turn the person
+            # started in between.
+            self.prompts.put_nowait(CHANGE)
+
+    async def _apply_pending(self):
+        """Applies a waiting change. False when the session could not be
+        restarted (it is then closed)."""
+        if not self.pending:
+            return True
+        model, effort = self.pending
+        self.pending = None
+        old_model, old_effort = self.pick_model, self.pick_effort
+        if (model, effort) == (old_model, old_effort):
+            return True
+        self.pick_model, self.pick_effort = model, effort
+        self.cfg.model = model or self.v2.args.model
+        self.cfg.effort = effort
+        try:
+            if effort != old_effort:
+                await self._resume_restart()
+            else:
+                try:
+                    await self.session.set_model(self.cfg.model)
+                except Exception:  # noqa: BLE001
+                    await self._resume_restart()
+        except Exception as e:  # noqa: BLE001
+            first = (str(e).strip().splitlines() or ["error"])[0]
+            await self.tool_error(f"Could not change model or effort: {first}")
+            asyncio.ensure_future(self.v2.close(self.sid))
+            return False
+        return True
+
+    async def _resume_restart(self):
+        """Starts the session's Claude again on the same conversation."""
+        await self.session.stop()
+        self.cfg.resume = self.cfg.turns > 0
+        self.session = make_session(self.v2.args, self, self.cfg)
+        await self.session.start()
+
+    async def _settings_command(self, words):
+        m, e, lines, changed = setting_command(
+            self.v2.args, words, self.pick_model, self.pick_effort)
+        for line in lines:
+            await self.notice(line)
+        if changed:
+            self.pending = (m, e)
+            await self.send_settings(m, e)
+            if not await self._apply_pending():
+                return False
+            await self.notice(f"{'Model' if words[0] == '/model' else 'Effort'} set.")
+        return True
+
     # ---- resume records ----------------------------------------------------
 
     def _new_conversation(self):
@@ -1582,13 +1741,22 @@ class Channel:
             await self.session.start()
         return how
 
-    async def _read_prompt(self):
-        await self.tag(">")
+    async def _read_prompt(self, announce=True):
+        if announce:
+            await self.tag(">")
         parts = []
         while True:
             line = await self.prompts.get()
             if line is None:
                 raise EOFError
+            if line is CHANGE:
+                if parts:
+                    # Mid-prompt: don't drop the lines already read. The
+                    # change applies before this prompt's turn; confirm it now.
+                    if self.pending:
+                        await self.send_settings(*self.pending)
+                    continue
+                return CHANGE
             if line.endswith("\\"):
                 parts.append(line[:-1])
                 continue
@@ -1609,8 +1777,21 @@ class Channel:
         try:
             await self.tag("O", self.name)
             await self.tag("Y", f"{self.token} {how}")
+            for p in self.preset_problems:
+                await self.tool_error(p)
+            await self.send_settings(self.pick_model, self.pick_effort)
+            announce = True
             while True:
-                prompt = await self._read_prompt()
+                prompt = await self._read_prompt(announce)
+                announce = True
+                if prompt is CHANGE:
+                    if not await self._apply_pending():
+                        return
+                    await self.send_settings(self.pick_model, self.pick_effort)
+                    # A prompt typed meanwhile is already queued: its turn
+                    # ends with its own >, so no fresh one now.
+                    announce = self.prompts.empty()
+                    continue
                 if not prompt:
                     continue
                 cmd = prompt.lower().split()
@@ -1633,6 +1814,12 @@ class Channel:
                     await self.notice(f"Auto-accept edits {'on' if self.cfg.accept_edits else 'off'}"
                                       " (new conversation).")
                     continue
+                if cmd[0] in ("/model", "/effort"):
+                    if not await self._settings_command(cmd):
+                        return
+                    continue
+                if not await self._apply_pending():
+                    return
                 if self.edited:
                     prompt = ("[The person edited these files from the SE/30 since your "
                               f"last turn: {', '.join(self.edited)}. Re-read them before "
@@ -1694,11 +1881,19 @@ class V2:
         self.term = term
         self.args = args
         self.channels = {}
+        self.presets = {}   # sid -> (model, effort) for a tab not open yet
         self.store = ResumeStore(args.state_dir)
 
     def forget(self, ch):
         if self.channels.get(ch.sid) is ch:
             del self.channels[ch.sid]
+
+    async def send_models(self):
+        await self.term.send_line(b"M[")
+        for name in self.args.models:
+            await self.term.send_line(f"M {name}".encode())
+        await self.term.send_line(
+            f"M] {wire_settings(self.args.model, None)}".encode())
 
     async def send_list(self):
         await self.term.send_line(b"P[")
@@ -1723,7 +1918,7 @@ class V2:
         path = dict(list_projects(self.args)).get(name)
         if path is None:
             return await self.term.send_line(f"{sid}X not available".encode())
-        ch = Channel(self, sid, name, path, token)
+        ch = Channel(self, sid, name, path, token, self.presets.pop(sid, None))
         self.channels[sid] = ch
         ch.files.start()
         ch.task = asyncio.ensure_future(ch.run())
@@ -1742,6 +1937,14 @@ class V2:
             else:
                 await self.term.send_line(f"{sid}X closed".encode())
             return
+        if tag == "M":
+            words = (payload.split() + ["-", "-"])[:2]
+            ch = self.channels.get(sid)
+            if ch is None:
+                self.presets[sid] = tuple(words)
+            elif not ch.closing:
+                await ch.change(*words)
+            return
         ch = self.channels.get(sid)
         if ch is None or ch.closing:
             return
@@ -1757,8 +1960,9 @@ class V2:
 
     async def run(self):
         try:
-            await self.term.send_line(f"#OK se30bridge 2 files={self.args.files} resume ping".encode(),
+            await self.term.send_line(f"#OK se30bridge 2 files={self.args.files} resume ping models".encode(),
                                       counted=False)
+            await self.send_models()
             await self.send_list()
             while True:
                 line = await self.term.lines.get()
@@ -1803,6 +2007,7 @@ async def main_async(args):
     asyncio.ensure_future(term.dispatch())
 
     cfg = SessionConfig(args.cwd or os.getcwd(), args.accept_edits, args.model)
+    picks = [None, None]   # /model and /effort picks; None is the default
     session = make_session(args, term, cfg)
     starting = None
     try:
@@ -1842,12 +2047,34 @@ async def main_async(args):
                 continue
             if cmd[0] == "/new":
                 await session.stop()
+                new_conversation(cfg)
                 session = make_session(args, term, cfg)
                 await session.start()
                 await term.notice("New conversation.")
                 continue
+            if cmd[0] in ("/model", "/effort"):
+                m, e, lines, changed = setting_command(args, cmd, picks[0], picks[1])
+                for line in lines:
+                    await term.notice(line)
+                if changed:
+                    old_model, old_effort = picks
+                    picks[:] = [m, e]
+                    cfg.model = m or args.model
+                    cfg.effort = e
+                    # Between turns: the same conversation carries on, with
+                    # its grants, under the new effort (a restart) or model.
+                    if e != old_effort:
+                        await session.stop()
+                        cfg.resume = bool(cfg.turns and cfg.claude_id)
+                        session = make_session(args, term, cfg)
+                        await session.start()
+                    else:
+                        await session.set_model(cfg.model)
+                    await term.notice(f"{'Model' if cmd[0] == '/model' else 'Effort'} set.")
+                continue
             if cmd[0] == "/edits" and len(cmd) == 2:
                 cfg.accept_edits = cmd[1] == "on"
+                new_conversation(cfg)
                 await session.stop()
                 session = make_session(args, term, cfg)
                 await session.start()
@@ -1859,6 +2086,7 @@ async def main_async(args):
             term._in_fence = False
             if term.mode == "tty":
                 await term.out_line("...")
+            cfg.turns += 1
             try:
                 await session.turn(prompt)
             except EOFError:
@@ -1867,6 +2095,7 @@ async def main_async(args):
                 await term.notice(f"Error: {e}")
             finally:
                 term.busy = False
+            cfg.resume = True
     except EOFError:
         pass
     finally:
@@ -1900,7 +2129,11 @@ def main():
                    help="app mode: lines per flow-control window (0 = off)")
     p.add_argument("--accept-edits", action="store_true",
                    help="auto-approve file edits")
-    p.add_argument("--model", default=None)
+    p.add_argument("--model", default=None,
+                   help="the model a tab runs when it has not picked one")
+    p.add_argument("--models", nargs="+", default=["opus", "sonnet", "haiku"],
+                   metavar="NAME",
+                   help="the models a tab can pick (up to 16; shown on the SE/30)")
     p.add_argument("--idle-timeout", type=float, default=180,
                    help="end the call when an app that sends heartbeats has been "
                         "silent this many seconds (0 = never)")
@@ -1908,6 +2141,12 @@ def main():
                    help="where the bridge keeps its call lock and resume records "
                         "(one call at a time per folder)")
     args = p.parse_args()
+    args.models = [m for item in args.models for m in item.split(",") if m]
+    if (not args.models or len(args.models) > MAX_MODELS
+            or not all(MODEL_NAME.match(m) and m != "-" for m in args.models)):
+        p.error(f"--models takes 1 to {MAX_MODELS} names of letters, digits, . _ - [ ]")
+    if args.model and not MODEL_NAME.match(args.model):
+        p.error("--model must be one name without spaces")
     args.state_dir = os.path.abspath(os.path.expanduser(args.state_dir))
     if args.cwd:
         args.cwd = os.path.abspath(os.path.expanduser(args.cwd))

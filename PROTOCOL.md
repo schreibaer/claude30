@@ -114,6 +114,7 @@ Both sides ignore a session line whose tag they do not know, and a line for a se
 | Line | Meaning |
 |---|---|
 | `#OK se30bridge 2 [words]` | v2 is active. `files=rw`, `files=ro` or `files=off` says what file access allows; no `files=` word means `off`. |
+| `M[`, `M <name>`, `M] <model> <effort>` | The models a session may pick, sent with the `models` capability (see Model and effort) |
 | `P[`, `P <name>`, `P]` | The project list: one line per project the client may open, in display order. Sent after `#OK` and again after each `!LIST`. |
 | `W` | Flow-control window boundary, as in v1 |
 | `I <message>` | Information about the link, not about one session |
@@ -138,6 +139,7 @@ Every v1 bridge→client tag works per session with the digit in front: `<n>T`, 
 | `<n>X <reason>` | Session `<n>` could not be opened (`not available`, `too many tabs`, `already open`, `could not start: ...`), or it ended. |
 | `<n>X closed` | The answer to the client's `<n>X`: the session is stopped and its number is free again. |
 | `<n>Y <token> <how>` | Which conversation the session runs: `new`, `resumed` or `cut` (see Resume and heartbeat) |
+| `<n>M <model> <effort>` | The model and effort the session runs with, or will from its next turn (see Model and effort) |
 
 `<n>>` means only "ready for a new prompt". Unlike v1, the bridge sends no `>` for continuation lines.
 
@@ -147,6 +149,7 @@ Every v1 bridge→client tag works per session with the digit in front: `<n>T`, 
 |---|---|
 | `<n>O <name>` | Open session `<n>` in the project named `<name>`, exactly as the list spelled it. The client picks `<n>`. The bridge never builds a path from client text: a name that is not in a freshly built list is refused with `<n>X not available`. |
 | `<n>Y <token> <name>` | Open session `<n>` and resume the conversation `<token>` (see Resume and heartbeat) |
+| `<n>M <model> <effort>` | Set the session's model and effort, whether or not it is open yet (see Model and effort) |
 | `<n>X` | Close session `<n>`. The bridge denies any open permission request, stops a running turn, stops the session and answers `<n>X closed`. No `!STOP` is needed first. |
 | `<n>P <line>` | One line of a prompt. A line ending in `\` continues on the next `<n>P` line; the bridge joins the lines with line breaks. Commands such as `/new`, `/edits on` and `/help` work and affect only this session. |
 | `<n>A <id> y` / `n` / `a` | Answer permission request `<id>` of session `<n>` |
@@ -219,7 +222,8 @@ A token the bridge does not know, or that belongs to another project, opens a fr
 
 ```
 C: #HELLO SE30 2
-B: #OK se30bridge 2 files=rw resume ping
+B: #OK se30bridge 2 files=rw resume ping models
+B: M[ ... M] - -
 B: P[ ... P]
 C: 1Y 4101ea904ab6760d claude30
 C: 2Y 9c2f08d5e1a47b03 website
@@ -231,6 +235,49 @@ B: 2Y 9c2f08d5e1a47b03 cut
 B: 2>
 C: !PING
 B: #PONG
+```
+
+## Model and effort (`models`)
+
+The capability word `models` (`#OK se30bridge 2 files=rw resume ping models`) lets each session run with its own Claude model and effort. A client that sees no `models` never sends `<n>M`, and a bridge that lacks it ignores the line like any unknown session tag, so version 2 is unchanged for every older client and bridge.
+
+The bridge sends its model list after `#OK` and before the project list, so the client has no model names built in:
+
+```
+M[
+M opus
+M sonnet
+M haiku
+M] - -
+```
+
+Each `M <name>` is one model the client may pick: a name of up to 31 letters, digits, `.`, `_`, `-`, `[` and `]`, never `-`. A list holds at most 16. The closing line names the bridge's own defaults, which a session gets when it picks none: the model the bridge was started with (`--model`), or `-` when the CLI decides, then the default effort, always `-` (the CLI decides). The client may show them as "Bridge default (opus)".
+
+`<n>M <model> <effort>` goes both ways. Each value is a name or `-`, the bridge default. Efforts are `low`, `medium`, `high`, `xhigh` and `max`.
+
+- **Preset.** The client sends `<n>M` for a session that is not open yet, and the bridge applies it to the next `<n>O` or `<n>Y` for that number, so Claude starts once, with the right settings. A preset lasts until that session opens or the call ends. After `<n>Y`, the bridge sends `<n>M` with the settings the session runs with, so a client learns of any correction before `<n>>`.
+- **Change.** The client sends `<n>M` for an open session. The bridge applies it between turns: a running turn, its permission requests and its interrupt are never disturbed. A change during a turn is confirmed at once, after an `<n>I` note, with an `<n>M` carrying the values that will apply; nothing more is sent when the turn ends. A change while the session is ready is applied first and then confirmed with `<n>M`, followed by a fresh `<n>>` (none when a prompt is already waiting, whose turn ends with its own). The client may send a prompt meanwhile; it runs after the change. A model change keeps the Claude process; an effort change starts it again on the same conversation, so the resume token, the "always" grants and the conversation stay, and no `<n>Y` follows.
+- **Corrections.** A model the bridge does not offer, or an unknown effort, is replaced by the default for that value; the bridge says why with `<n>E`, then confirms with `<n>M`.
+- **Typed commands.** `/model <name>` and `/effort <level>` do the same from a prompt, in every mode (`default` or `-` picks the bridge default); alone they show the current value and the choices. In v2 they answer with `<n>M`.
+
+The client owns each tab's settings and sends them again after a redial. The bridge does not keep them in its resume records.
+
+```
+B: #OK se30bridge 2 files=rw resume ping models
+B: M[ ... M] - -
+B: P[ ... P]
+C: 2M sonnet high
+C: 2Y 9c2f08d5e1a47b03 website
+B: 2O website
+B: 2Y 9c2f08d5e1a47b03 resumed
+B: 2M sonnet high
+B: 2>
+C: 2P long task
+C: 2M sonnet max
+B: 2I Model and effort change when this turn ends.
+B: 2M sonnet max
+B: 2R success $0.04
+B: 2>
 ```
 
 ## Files
