@@ -1,4 +1,5 @@
 #include "permsum.h"
+#include <ctype.h>
 #include <stdio.h>
 #include <string.h>
 
@@ -87,6 +88,9 @@ static long plain(const char *s, char *out, long cap)
     return n;
 }
 
+/* Added by the bridge to an Edit whose replace_all is set. */
+#define ALL_MARK " (all occurrences)"
+
 long permsum_build(const char *header, long hlen,
                    const char *body, const long *line_ends, long nlines,
                    int incomplete,
@@ -97,6 +101,7 @@ long permsum_build(const char *header, long hlen,
     const char *tool, *label = NULL, *target;
     long toollen, labellen = 0, tlen, i, start = 0;
     long added = 0, removed = 0, hunks = 0, p = 0;
+    int every = 0;
     int bash, file_tool;
 
     if (cap < 2)
@@ -125,9 +130,12 @@ long permsum_build(const char *header, long hlen,
     /* A subagent's type, "(general-purpose)": one word in parentheses. */
     if (p < hlen && h[p] == '(') {
         long q = p + 1;
-        while (q < hlen && h[q] != ')' && h[q] != ' ')
+        /* A real type is short and plain: letters, digits, "-", "_", ":".
+           Anything else is the start of a command such as "(a;b) && ls". */
+        while (q < hlen && q - p <= 20 && (isalnum((unsigned char)h[q]) || h[q] == '-'
+                                           || h[q] == '_' || h[q] == ':'))
             q++;
-        if (q < hlen && h[q] == ')' && (q + 1 == hlen || h[q + 1] == ' ')) {
+        if (q > p + 1 && q < hlen && h[q] == ')' && (q + 1 == hlen || h[q + 1] == ' ')) {
             label = h + p;
             labellen = q + 1 - p;
             p = q + 1;
@@ -166,7 +174,7 @@ long permsum_build(const char *header, long hlen,
 
     /* head: "Tool" or "Tool (type)" */
     snprintf(head, sizeof(head), "%.*s%s%.*s", (int)(toollen > 40 ? 40 : toollen), tool,
-             label ? " " : "", (int)(labellen > 20 ? 20 : labellen), label ? label : "");
+             label ? " " : "", (int)labellen, label ? label : "");
 
     if (bash) {
         const char *cmd = target;
@@ -200,6 +208,13 @@ long permsum_build(const char *header, long hlen,
 
     if (file_tool) {
         long k;
+        /* The bridge adds this when Edit replaces every match in the file:
+           the diff shows one match, so the count must not claim a place. */
+        if (tlen > (long)sizeof(ALL_MARK) - 1
+                && memcmp(target + tlen - (sizeof(ALL_MARK) - 1), ALL_MARK, sizeof(ALL_MARK) - 1) == 0) {
+            every = 1;
+            tlen -= (long)sizeof(ALL_MARK) - 1;
+        }
         if (is_word(tool, toollen, "Write"))
             tlen = strip_line_count(target, tlen);
         for (k = tlen; k > 0; k--)
@@ -215,7 +230,9 @@ long permsum_build(const char *header, long hlen,
     if (nlines > 0) {
         if (is_word(tool, toollen, "Edit") || is_word(tool, toollen, "MultiEdit")) {
             long n = snprintf(tail, sizeof(tail), ": +%ld -%ld lines", added, removed);
-            if (hunks > 0)
+            if (every && hunks > 0)
+                snprintf(tail + n, sizeof(tail) - n, " at every match");
+            else if (hunks > 0)
                 snprintf(tail + n, sizeof(tail) - n, " in %ld place%s", hunks, hunks == 1 ? "" : "s");
         } else if (is_word(tool, toollen, "Write")) {
             snprintf(tail, sizeof(tail), ": +%ld lines", added);

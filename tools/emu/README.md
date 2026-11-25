@@ -204,7 +204,7 @@ Run these in the emulator, and the hardware rows on the SE/30. Tick each one.
 | ☐ | Opening a fold below the view scrolls to show it; opening one above the view leaves the visible text where it is | Emulator | Stress bridge |
 | ☐ | While a long block still arrives its marker's line count goes up, and `fold` in a tab scrolled up does not move the view | Emulator | Stress bridge |
 | ☐ | Open folds and closed folds both reach the log in full (Tools > open the log file) after the transcript trims | Emulator | `burst` after `fold` |
-| ☐ | The header under the bold line is one plain line; a long one (`wide`) ends in an ellipsis and nothing above the list is clipped. The bold line, the header and the list do not overlap at 512 x 342, and the buttons and keys behave as before (Cmd-Y, Cmd-N, Cmd-A, Cmd-period; Return and a held key do nothing; clicks in the first 0.75 s are ignored) | Emulator |
+| ☐ | The header under the bold line is one plain line; a header too wide for it (`wide`, or a path 60+ characters long) ends in an ellipsis and the list opens with the whole header; nothing above the list is clipped. The bold line, the header and the list do not overlap at 512 x 342, and the buttons and keys behave as before (Cmd-Y, Cmd-N, Cmd-A, Cmd-period; Return and a held key do nothing; clicks in the first 0.75 s are ignored) | Emulator |
 
 **Hardware (SE/30)**
 

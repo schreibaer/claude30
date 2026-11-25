@@ -25,6 +25,7 @@ typedef struct {
     long off;                    /* offset into the request body */
     short len;
     Boolean cont;                /* continuation of the line above */
+    Boolean hdr;                 /* off is into the request's header, not its body */
 } Row;
 
 static PermReq *gReq;            /* the request the open dialog shows */
@@ -38,6 +39,7 @@ static Rect gList;
 static short gRowH, gRowAscent, gVisible;
 static Rect gHeadRect;           /* the bold headline above the header */
 static Rect gTitleRect;          /* the request's header: one plain line, cut to fit */
+static Boolean gTitleCut;        /* it did not fit: the list opens with the whole header */
 static char gHeadline[PERMSUM_MAX];
 static long gHeadlineLen;
 
@@ -107,6 +109,27 @@ static void build_rows(short cols)
     gNRows = 0;
     if (cols < 8)
         cols = 8;
+    /* A header cut to one line must still be readable: the list opens with
+       all of it, wrapped. */
+    if (gTitleCut) {
+        pos = 0;
+        end = gReq->title[0];
+        do {
+            long n = end - pos;
+            if (n > cols)
+                n = cols;
+            if (!grow(&gRows, (gNRows + 1) * sizeof(Row))) {
+                gReq->incomplete = true;
+                return;
+            }
+            r = &((Row *)*gRows)[gNRows++];
+            r->off = pos;
+            r->len = (short)n;
+            r->cont = pos != 0;
+            r->hdr = true;
+            pos += n;
+        } while (pos < end);
+    }
     for (i = 0; i < gReq->nlines; i++) {
         end = ((long *)*gReq->line_ends)[i];
         pos = start;
@@ -122,6 +145,7 @@ static void build_rows(short cols)
             r->off = pos;
             r->len = (short)n;
             r->cont = pos != start;
+            r->hdr = false;
             pos += n;
         } while (pos < end);
         start = end;
@@ -135,7 +159,7 @@ static pascal void draw_list(DialogPtr d, short item)
     long first, i;
     short y;
     Rect inner = gList;
-    char saveState;
+    char saveState = 0;
     (void)d;
     (void)item;
 
@@ -151,17 +175,20 @@ static pascal void draw_list(DialogPtr d, short item)
         MoveTo(inner.left + 4, y);
         DrawString("\p(no details)");
     }
-    if (gReq->body && gNRows > 0) {
-        saveState = HGetState(gReq->body);
-        HLock(gReq->body);
+    if (gNRows > 0) {
+        if (gReq->body) {
+            saveState = HGetState(gReq->body);
+            HLock(gReq->body);
+        }
         for (i = first; i < gNRows && i < first + gVisible; i++) {
             Row *r = &((Row *)*gRows)[i];
             MoveTo(inner.left + 3, y);
             DrawText(r->cont ? "\xC2 " : "  ", 0, MARK_WIDTH);
-            DrawText(*gReq->body + r->off, 0, r->len);
+            DrawText(r->hdr ? (Ptr)gReq->title + 1 : *gReq->body + r->off, 0, r->len);
             y += gRowH;
         }
-        HSetState(gReq->body, saveState);
+        if (gReq->body)
+            HSetState(gReq->body, saveState);
     }
     TextFont(0);
     TextSize(0);
@@ -351,6 +378,12 @@ short permdlg_run(PermReq *q)
     GetDialogItem(gDlg, kPermSummary, &type, &h, &gTitleRect);
     titleUPP = NewUserItemUPP(draw_title);
     SetDialogItem(gDlg, kPermSummary, type, (Handle)titleUPP, &gTitleRect);
+    /* Does the header fit its one line? If not, the list will open with it. */
+    TextFont(GENEVA);
+    TextSize(TITLE_SIZE);
+    gTitleCut = TextWidth((Ptr)q->title + 1, 0, q->title[0]) > gTitleRect.right - gTitleRect.left - 2;
+    TextFont(MONACO);
+    TextSize(LIST_SIZE);
 
     GetDialogItem(gDlg, kPermList, &type, &h, &gList);
     drawUPP = NewUserItemUPP(draw_list);

@@ -581,8 +581,52 @@ static void test_numbered_from_batch(void)
     fold_free(&a.fs);
 }
 
+/* Two short blocks with no text between them stay two short blocks. */
+static void test_adjacent_blocks(void)
+{
+    Doc a;
+    Batch b;
+    int i, blk;
+    doc_init(&a, 0);
+    batch_init(&b);
+    for (blk = 0; blk < 2; blk++) {
+        batch_event(&b, EV_CODE_BEGIN, "", 0);
+        for (i = 0; i < 7; i++)
+            batch_event(&b, EV_CODE, "x", 1);
+        batch_event(&b, EV_CODE_END, "", 0);
+    }
+    for (i = 0; i < b.nruns; i++) {
+        char run[2000];
+        memcpy(run, b.text + b.runs[i].start, b.runs[i].len);
+        run[b.runs[i].len] = 0;
+        add(&a, 1, b.runs[i].style, run);
+    }
+    CHECK_EQ_LONG(a.fs.n, 0);
+    /* a longer one next to a short one folds alone */
+    batch_clear(&b);
+    batch_event(&b, EV_CODE_BEGIN, "", 0);
+    for (i = 0; i < 13; i++)
+        batch_event(&b, EV_CODE, "y", 1);
+    batch_event(&b, EV_CODE_END, "", 0);
+    batch_event(&b, EV_CODE_BEGIN, "", 0);
+    for (i = 0; i < 3; i++)
+        batch_event(&b, EV_CODE, "z", 1);
+    batch_event(&b, EV_CODE_END, "", 0);
+    for (i = 0; i < b.nruns; i++) {
+        char run[2000];
+        memcpy(run, b.text + b.runs[i].start, b.runs[i].len);
+        run[b.runs[i].len] = 0;
+        add(&a, 1, b.runs[i].style, run);
+    }
+    CHECK_EQ_LONG(a.fs.n, 1);
+    CHECK_EQ_LONG(a.fs.f[0].lines, 13);
+    batch_free(&b);
+    fold_free(&a.fs);
+}
+
 int main(void)
 {
+    test_adjacent_blocks();
     test_numbered_from_batch();
     test_code();
     test_code_one_run_and_continuation();

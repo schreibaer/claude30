@@ -278,6 +278,17 @@ static void finalize(FoldSet *fs)
     reset_scan(fs);
 }
 
+/* A code line whose number is 1: "  1 text" or "  1". */
+static int starts_numbered_block(const char *line, long n)
+{
+    long i = 0;
+    while (i < n && line[i] == ' ')
+        i++;
+    if (i >= n || line[i] != '1')
+        return 0;
+    return i + 1 == n || line[i + 1] == ' ';
+}
+
 void fold_append(FoldSet *fs, const FoldOps *o, RunStyle style,
                  const char *text, long len, long base)
 {
@@ -303,6 +314,13 @@ void fold_append(FoldSet *fs, const FoldOps *o, RunStyle style,
                 int k = kind;
                 if (kind == FK_TOOL && text[i] != MR_BULLET)
                     k = FK_NONE;       /* a permission line or other text */
+                if (k == FK_CODE && fs->kind == FK_CODE && fs->count > 0
+                        && starts_numbered_block(text + i, j - i)) {
+                    /* batch.c numbers each block from 1: a line numbered 1
+                       inside a block starts the next one */
+                    flush(fs, o, &shift);
+                    finalize(fs);
+                }
                 if (k == FK_NONE) {
                     flush(fs, o, &shift);
                     finalize(fs);

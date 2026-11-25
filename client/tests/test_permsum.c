@@ -25,6 +25,16 @@ static const char *head_for(const char *hdr, const char **lines, long n, int inc
     CHECK_MEM(g_, (long)strlen(g_), want); \
 } while (0)
 
+static void test_label_rule(void)
+{
+    /* a subagent's type is a short plain word; a subshell is a command */
+    EXPECT(head_for("Bash (general-purpose) git status", NULL, 0, 0, WIDE),
+           "Bash (general-purpose): git status");
+    EXPECT(head_for("Bash (a;b${IFS}c) && ls", NULL, 0, 0, WIDE),
+           "Bash: (a;b${IFS}c) && ls");
+    EXPECT(head_for("Bash (ls)", NULL, 0, 0, WIDE), "Bash: (ls)");
+}
+
 static void test_edit(void)
 {
     /* two hunks: +12 -3, as the bridge's diff body (no file headers) */
@@ -56,6 +66,14 @@ static void test_edit(void)
         EXPECT(head_for("MultiEdit lib/m.py", multi, 8, 0, WIDE), "MultiEdit m.py: +3 -2 lines in 3 places");
     }
     EXPECT(head_for("Edit src/parser.py", NULL, 0, 0, WIDE), "Edit parser.py");
+    /* replace_all: the bridge adds a marker, and no place count is claimed */
+    {
+        const char *one[] = { "@@ -1 +1 @@", "-a", "+b" };
+        EXPECT(head_for("Edit src/parser.py (all occurrences)", one, 3, 0, WIDE),
+               "Edit parser.py: +1 -1 lines at every match");
+        EXPECT(head_for("Edit src/parser.py", one, 3, 0, WIDE),
+               "Edit parser.py: +1 -1 lines in 1 place");
+    }
 }
 
 static void test_write(void)
@@ -144,6 +162,7 @@ static void test_fit(void)
 int main(void)
 {
     test_edit();
+    test_label_rule();
     test_write();
     test_bash();
     test_other();

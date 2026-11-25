@@ -1252,6 +1252,14 @@ static void fold_flip(Tab *t, int idx)
     SetPort(gWin);
     id = t->folds.f[idx].id;
     if (!t->folds.f[idx].open) {
+        /* With the log unwritable a trim would drop text nobody saved: leave
+           the fold closed instead. */
+        if (t->log_err
+                && (*te)->teLength + t->folds.f[idx].body_len + 64 >= TE_HARD_LIMIT) {
+            SysBeep(1);
+            window_set_status("Cannot open: the log file cannot be written.");
+            return;
+        }
         /* Room first: opening adds the body, and trimming may drop this fold. */
         trim_for(t, t->folds.f[idx].body_len + 64);
         idx = fold_by_id(&t->folds, id);
@@ -1293,28 +1301,33 @@ Boolean window_fold_available(void)
     return gTab && gTab->folds.n > 0;
 }
 
-/* Cmd-J: the fold at the insertion point, else the last one on screen. */
+/* Cmd-J: the fold at the caret when the caret is on screen, else the last
+   fold on screen. Appends leave the caret at the end of the transcript, so
+   a caret below the view says nothing about what the person means. */
 void window_toggle_fold_key(void)
 {
     Tab *t = gTab;
     TEHandle te;
-    long px, first, last;
-    int idx;
+    long px, viewH, first, last, ln, lastline;
+    int idx = -1;
     if (!t || t->folds.n == 0) {
         SysBeep(1);
         return;
     }
     te = t->trans;
-    idx = fold_containing(&t->folds, (*te)->selStart);
-    if (idx < 0) {
-        px = scrolled_px(te);
-        first = (*te)->lineStarts[px / gLineH < (*te)->nLines ? px / gLineH : (*te)->nLines - 1];
-        {
-            long ln = (px + (gTransView.bottom - gTransView.top)) / gLineH + 1;
-            last = ln >= (*te)->nLines ? (*te)->teLength : (*te)->lineStarts[ln];
-        }
+    px = scrolled_px(te);
+    viewH = gTransView.bottom - gTransView.top;
+    ln = px / gLineH;
+    if (ln >= (*te)->nLines)
+        ln = (*te)->nLines - 1;
+    first = (*te)->lineStarts[ln];
+    lastline = (px + viewH - 1) / gLineH;          /* the last line that shows */
+    last = lastline + 1 < (*te)->nLines ? (*te)->lineStarts[lastline + 1] - 1
+                                        : (*te)->teLength;
+    if ((*te)->selStart >= first && (*te)->selStart <= last)
+        idx = fold_containing(&t->folds, (*te)->selStart);
+    if (idx < 0)
         idx = fold_last_in(&t->folds, first, last);
-    }
     if (idx < 0) {
         SysBeep(1);
         return;
