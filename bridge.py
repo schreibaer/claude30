@@ -889,7 +889,8 @@ class ClaudeSession:
                     await ag.close_all()
                     if getattr(msg, "session_id", None):
                         self.cfg.claude_id = msg.session_id
-                    status = "interrupted" if getattr(msg, "terminal_reason", None) else msg.subtype
+                    reason = getattr(msg, "terminal_reason", None) or ""
+                    status = "interrupted" if reason.startswith("aborted") else msg.subtype
                     await self.term.result(status, getattr(msg, "total_cost_usd", None))
         finally:
             await ag.close_all()
