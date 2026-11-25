@@ -91,6 +91,10 @@ static void reset_link(Proto *p)
     p->ping_out = 0;
     p->resume_cap = 0;
     p->ping_cap = 0;
+    p->models_cap = 0;
+    p->nmodels = 0;
+    p->def_model[0] = 0;
+    p->def_effort[0] = 0;
     p->quit_sent = 0;
     p->got_ok = 0;
     p->timer = 0;
@@ -302,6 +306,7 @@ static void read_ok(Proto *p, const char *line, long n)
     p->files = FILES_OFF;
     p->resume_cap = 0;
     p->ping_cap = 0;
+    p->models_cap = 0;
     while (i < n) {
         long w;
         while (i < n && line[i] == ' ')
@@ -317,7 +322,54 @@ static void read_ok(Proto *p, const char *line, long n)
             p->resume_cap = 1;
         else if (equals(line + w, i - w, "ping"))
             p->ping_cap = 1;
+        else if (equals(line + w, i - w, "models"))
+            p->models_cap = 1;
     }
+}
+
+/* "<model|-> <effort|->" into the two fields; "-" is stored as "". */
+static void copy_setting(char *dst, const char *s, long n)
+{
+    if (n <= 0 || n >= MODEL_LEN || (n == 1 && s[0] == '-'))
+        n = 0;
+    memcpy(dst, s, n);
+    dst[n] = 0;
+}
+
+/* The M list of the handshake: M[, M <name>, M] <model> <effort>. Only a
+   bridge that said "models" sends it, so only then is it read. */
+static int models_line(Proto *p, const char *line, long n)
+{
+    if (!p->models_cap)
+        return 0;
+    if (equals(line, n, "M[")) {
+        p->nmodels = 0;
+        p->def_model[0] = 0;
+        p->def_effort[0] = 0;
+        return 1;
+    }
+    if (starts(line, n, "M ")) {
+        if (p->nmodels < MAX_MODELS && n - 2 > 0 && n - 2 < MODEL_LEN) {
+            memcpy(p->models[p->nmodels], line + 2, n - 2);
+            p->models[p->nmodels][n - 2] = 0;
+            p->nmodels++;
+        }
+        return 1;
+    }
+    if (starts(line, n, "M]")) {
+        long k = 2, m;
+        while (k < n && line[k] == ' ')
+            k++;
+        m = k;
+        while (m < n && line[m] != ' ')
+            m++;
+        copy_setting(p->def_model, line + k, m - k);
+        while (m < n && line[m] == ' ')
+            m++;
+        copy_setting(p->def_effort, line + m, n - m);
+        return 1;
+    }
+    return 0;
 }
 
 /* Link-level lines: W, the project list, I. Returns 1 if it was one. */
@@ -328,6 +380,8 @@ static int link_line(Proto *p, const char *line, long n)
         p->noise = 0;            /* a W arrived intact: no ACK is owed for it */
         return 1;
     }
+    if (n > 0 && line[0] == 'M' && models_line(p, line, n))
+        return 1;
     if (equals(line, n, "P[")) {
         projects_reset(p);
         return 1;
@@ -586,6 +640,8 @@ static void session_line(Proto *p, int sid, const char *line, long n)
             memcpy(text + hn + 1, pay, k);
             emit(p, sid, EV_RESUMED, text, hn + 1 + k);
         }
+    } else if (TAG("M")) {
+        emit(p, sid, EV_MODEL, pay, plen);
     } else if (TAG("O")) {
         /* Stay in SS_OPENING until the first >, so that > cannot end a
            turn the shell starts in between. */
@@ -829,6 +885,54 @@ int proto_open_resume(Proto *p, int sid, const char *project, const char *token)
     reset_turn(&p->sess[sid]);
     p->sess[sid].closing_turn = 0;
     set_sess(p, sid, SS_OPENING);
+    return 1;
+}
+
+int proto_models_cap(const Proto *p)
+{
+    return p->models_cap;
+}
+
+int proto_nmodels(const Proto *p)
+{
+    return p->nmodels;
+}
+
+const char *proto_model(const Proto *p, int i)
+{
+    return i >= 0 && i < p->nmodels ? p->models[i] : "";
+}
+
+const char *proto_default_model(const Proto *p)
+{
+    return p->def_model;
+}
+
+const char *proto_default_effort(const Proto *p)
+{
+    return p->def_effort;
+}
+
+int proto_set_model(Proto *p, int sid, const char *model, const char *effort)
+{
+    char buf[2 * MODEL_LEN + 4];
+    long m, e;
+    if (p->state != ST_ONLINE || !p->models_cap || sid < 1 || sid > MAX_SESS)
+        return 0;
+    if (!model || !model[0])
+        model = "-";
+    if (!effort || !effort[0])
+        effort = "-";
+    m = (long)strlen(model);
+    e = (long)strlen(effort);
+    if (m >= MODEL_LEN || e >= MODEL_LEN || strchr(model, ' ') || strchr(effort, ' '))
+        return 0;
+    buf[0] = 'M';
+    buf[1] = ' ';
+    memcpy(buf + 2, model, m);
+    buf[2 + m] = ' ';
+    memcpy(buf + 3 + m, effort, e + 1);
+    send_sess(p, sid, buf);
     return 1;
 }
 

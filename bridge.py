@@ -1629,8 +1629,12 @@ class Channel:
         self.pending = (m, e)
         if self.busy:
             await self.notice("Model and effort change when this turn ends.")
-        await self.send_settings(m, e)
-        if not self.busy:
+            await self.send_settings(m, e)
+        else:
+            # Confirmed when applied, together with the fresh >: an effort
+            # change restarts Claude, which can take a while, and a > that
+            # came long after the confirmation could end a turn the person
+            # started in between.
             self.prompts.put_nowait(CHANGE)
 
     async def _apply_pending(self):
@@ -1737,8 +1741,9 @@ class Channel:
             await self.session.start()
         return how
 
-    async def _read_prompt(self):
-        await self.tag(">")
+    async def _read_prompt(self, announce=True):
+        if announce:
+            await self.tag(">")
         parts = []
         while True:
             line = await self.prompts.get()
@@ -1769,11 +1774,17 @@ class Channel:
             for p in self.preset_problems:
                 await self.tool_error(p)
             await self.send_settings(self.pick_model, self.pick_effort)
+            announce = True
             while True:
-                prompt = await self._read_prompt()
+                prompt = await self._read_prompt(announce)
+                announce = True
                 if prompt is CHANGE:
                     if not await self._apply_pending():
                         return
+                    await self.send_settings(self.pick_model, self.pick_effort)
+                    # A prompt typed meanwhile is already queued: its turn
+                    # ends with its own >, so no fresh one now.
+                    announce = self.prompts.empty()
                     continue
                 if not prompt:
                     continue
