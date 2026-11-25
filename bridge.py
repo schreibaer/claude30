@@ -1750,6 +1750,12 @@ class Channel:
             if line is None:
                 raise EOFError
             if line is CHANGE:
+                if parts:
+                    # Mid-prompt: don't drop the lines already read. The
+                    # change applies before this prompt's turn; confirm it now.
+                    if self.pending:
+                        await self.send_settings(*self.pending)
+                    continue
                 return CHANGE
             if line.endswith("\\"):
                 parts.append(line[:-1])
