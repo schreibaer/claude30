@@ -671,6 +671,7 @@ class AgentTracker:
         self.clock = clock
         self.running = {}       # tool_use_id -> dict
         self.ended = set()      # tool_use_ids already ended this turn
+        self.background = {}    # tool_use_id -> dict, launched in the background
         self.interrupted = False
 
     def _free_slot(self):
@@ -685,19 +686,29 @@ class AgentTracker:
         task = " ".join(str(inp.get("description") or inp.get("prompt") or "").split())
         self.running[tool_use_id] = {"k": k, "type": typ, "task": task, "steps": 0,
                                      "tool": "", "summary": "", "sent": (0, ""),
-                                     "last": self.clock(), "task_id": None}
+                                     "last": self.clock(), "task_id": None,
+                                     "bg": bool(inp.get("run_in_background"))}
         await self.term.agent_start(k, typ, task)
 
     def owns(self, tool_use_id):
-        return tool_use_id in self.running or tool_use_id in self.ended
+        return (tool_use_id in self.running or tool_use_id in self.ended
+                or tool_use_id in self.background)
 
     def bind(self, tool_use_id, task_id):
-        a = self.running.get(tool_use_id)
+        a = self.running.get(tool_use_id) or self.background.get(tool_use_id)
         if a and task_id:
             a["task_id"] = task_id
 
     async def step(self, tool_use_id, name=None, summary="", steps=None, force=False):
         """One more tool the subagent used (or the CLI's own count and tool)."""
+        b = self.background.get(tool_use_id)
+        if b:
+            # Counted for its end line; its line is not live while it runs.
+            if name is not None:
+                b["steps"] = max(b["steps"] + (1 if steps is None else 0), steps or 0)
+            elif steps is not None:
+                b["steps"] = max(b["steps"], steps)
+            return
         a = self.running.get(tool_use_id)
         if not a:
             return
@@ -714,6 +725,16 @@ class AgentTracker:
         await self.term.agent_step(a["k"], a["steps"], a["tool"] or "-", a["summary"])
 
     async def end(self, tool_use_id, status, summary=""):
+        b = self.background.pop(tool_use_id, None)
+        if b:
+            # A background subagent ended, maybe turns later: its own line
+            # went with the turn that started it, so it gets a new one.
+            k = self._free_slot()
+            if k is None:
+                return
+            await self.term.agent_start(k, b["type"], b["task"])
+            await self.term.agent_end(k, b["type"], status, b["steps"], summary or b["task"])
+            return
         a = self.running.pop(tool_use_id, None)
         if not a:
             return
@@ -722,6 +743,16 @@ class AgentTracker:
 
     async def end_result(self, tool_use_id, content, is_error):
         """The Agent tool's own result, when the CLI sent no notification."""
+        a = self.running.get(tool_use_id)
+        if a and a["bg"] and not is_error:
+            # Only the launch was confirmed. Close its line now, since the
+            # turn may end long before it does; its result comes as a
+            # notification, between turns or in a later one.
+            del self.running[tool_use_id]
+            self.background[tool_use_id] = a
+            await self.term.agent_end(a["k"], a["type"], "background", a["steps"],
+                                      "runs on, its result follows")
+            return
         status = "failed" if is_error else "done"
         if is_error and self.interrupted:
             status = "stopped"
@@ -736,7 +767,7 @@ class AgentTracker:
         conversation, the subagent's type when it can be told, else "subagent"."""
         if not agent_id:
             return ""
-        for a in self.running.values():
+        for a in list(self.running.values()) + list(self.background.values()):
             if a["task_id"] == agent_id:
                 return a["type"]
         if len(self.running) == 1:
@@ -766,6 +797,7 @@ def new_conversation(cfg):
 
 
 CHANGE = object()   # wakes a Channel's prompt loop to apply a settings change
+WAKE = object()     # ... or to show what Claude sent between turns
 
 
 class SessionConfig:
@@ -823,9 +855,17 @@ class ClaudeSession:
                 opts.session_id = self.cfg.claude_id
         self.client = ClaudeSDKClient(options=opts)
         await self.client.connect()
+        self._msgs = asyncio.Queue()
+        self._in_turn = False
+        self._pump = asyncio.ensure_future(self._pump_messages())
         self.term.on_interrupt = self.interrupt
 
     async def stop(self):
+        pump, self._pump = getattr(self, "_pump", None), None
+        if pump:
+            pump.cancel()
+            with contextlib.suppress(asyncio.CancelledError, Exception):
+                await pump
         if self.client:
             client, self.client = self.client, None
             await client.disconnect()
@@ -861,7 +901,79 @@ class ClaudeSession:
             return PermissionResultAllow(updated_input=input_data)
         return PermissionResultDeny(message="The user denied this action.", interrupt=False)
 
+    async def _pump_messages(self):
+        """Reads everything Claude sends, in turns and between them: a
+        background subagent ends between turns, and Claude then starts a
+        turn of its own to report it."""
+        try:
+            async for msg in self.client.receive_messages():
+                self._msgs.put_nowait(msg)
+                if not self._in_turn:
+                    self._wake()
+        except Exception as e:  # noqa: BLE001
+            self._msgs.put_nowait(e)
+        else:
+            self._msgs.put_nowait(EOFError("Claude stopped"))
+
+    def _wake(self):
+        """Tells a v2 channel that output arrived between turns. tty and v1
+        show it before the next turn instead."""
+        wake = getattr(self.term, "wake", None)
+        if wake:
+            wake()
+
+    async def _next(self):
+        msg = await self._msgs.get()
+        if isinstance(msg, BaseException):
+            raise msg
+        return msg
+
     async def turn(self, prompt):
+        ag = self.agents
+        if not self._msgs.empty():
+            await self.follow()
+        ag.interrupted = False
+        ag.ended.clear()
+        self._in_turn = True
+        try:
+            await self.client.query(prompt)
+            while not await self._handle(await self._next()):
+                pass
+        finally:
+            await ag.close_all()
+            self._in_turn = False
+            if not self._msgs.empty():
+                self._wake()
+
+    async def follow(self):
+        """Shows what arrived between turns. Background subagents' progress
+        and ends are applied as they come; when Claude starts a turn by
+        itself, it runs to its result. Returns whether there was a turn."""
+        from claude_agent_sdk import AssistantMessage, ResultMessage, UserMessage
+        ag = self.agents
+        turned = False
+        self._in_turn = True
+        try:
+            while turned or not self._msgs.empty():
+                msg = await self._next()
+                if not turned and (isinstance(msg, ResultMessage) or (
+                        isinstance(msg, (AssistantMessage, UserMessage))
+                        and not getattr(msg, "parent_tool_use_id", None))):
+                    turned = True
+                    ag.interrupted = False
+                    ag.ended.clear()
+                if await self._handle(msg):
+                    break
+        finally:
+            if turned:
+                await ag.close_all()
+            self._in_turn = False
+            if not self._msgs.empty():
+                self._wake()
+        return turned
+
+    async def _handle(self, msg):
+        """One message from Claude. Returns True at the end of a turn."""
         from claude_agent_sdk import (AssistantMessage, ResultMessage, SystemMessage,
                                       TextBlock, ToolUseBlock, UserMessage)
         try:
@@ -869,51 +981,45 @@ class ClaudeSession:
         except ImportError:
             ToolResultBlock = None
         ag = self.agents
-        ag.interrupted = False
-        ag.ended.clear()
-        await self.client.query(prompt)
-        try:
-            async for msg in self.client.receive_response():
-                if isinstance(msg, AssistantMessage):
-                    parent = getattr(msg, "parent_tool_use_id", None)
-                    for block in msg.content:
-                        if parent:
-                            # A subagent's own work: counted, never sent.
-                            if isinstance(block, ToolUseBlock):
-                                s, _ = describe_tool(block.name, block.input or {}, self.cfg.cwd)
-                                await ag.step(parent, block.name, s)
-                        elif isinstance(block, TextBlock) and block.text.strip():
-                            await self.term.text(block.text)
-                        elif isinstance(block, ToolUseBlock):
-                            if block.name in ("Agent", "Task"):
-                                await ag.start(block.id, block.input or {})
-                            else:
-                                s, _ = describe_tool(block.name, block.input or {}, self.cfg.cwd)
-                                await self.term.tool(block.name, s)
-                elif isinstance(msg, UserMessage) and ToolResultBlock:
-                    if getattr(msg, "parent_tool_use_id", None):
-                        continue
-                    content = msg.content if isinstance(msg.content, list) else []
-                    for block in content:
-                        if not isinstance(block, ToolResultBlock):
-                            continue
-                        if ag.owns(block.tool_use_id):
-                            await ag.end_result(block.tool_use_id, block.content,
-                                                bool(block.is_error))
-                        elif block.is_error:
-                            first = first_line(block.content) or "error"
-                            await self.term.tool_error(first)
-                elif isinstance(msg, SystemMessage):
-                    await self._system(msg)
-                elif isinstance(msg, ResultMessage):
-                    await ag.close_all()
-                    if getattr(msg, "session_id", None):
-                        self.cfg.claude_id = msg.session_id
-                    reason = getattr(msg, "terminal_reason", None) or ""
-                    status = "interrupted" if reason.startswith("aborted") else msg.subtype
-                    await self.term.result(status, getattr(msg, "total_cost_usd", None))
-        finally:
+        if isinstance(msg, AssistantMessage):
+            parent = getattr(msg, "parent_tool_use_id", None)
+            for block in msg.content:
+                if parent:
+                    # A subagent's own work: counted, never sent.
+                    if isinstance(block, ToolUseBlock):
+                        s, _ = describe_tool(block.name, block.input or {}, self.cfg.cwd)
+                        await ag.step(parent, block.name, s)
+                elif isinstance(block, TextBlock) and block.text.strip():
+                    await self.term.text(block.text)
+                elif isinstance(block, ToolUseBlock):
+                    if block.name in ("Agent", "Task"):
+                        await ag.start(block.id, block.input or {})
+                    else:
+                        s, _ = describe_tool(block.name, block.input or {}, self.cfg.cwd)
+                        await self.term.tool(block.name, s)
+        elif isinstance(msg, UserMessage) and ToolResultBlock:
+            if getattr(msg, "parent_tool_use_id", None):
+                return False
+            content = msg.content if isinstance(msg.content, list) else []
+            for block in content:
+                if not isinstance(block, ToolResultBlock):
+                    continue
+                if ag.owns(block.tool_use_id):
+                    await ag.end_result(block.tool_use_id, block.content, bool(block.is_error))
+                elif block.is_error:
+                    first = first_line(block.content) or "error"
+                    await self.term.tool_error(first)
+        elif isinstance(msg, SystemMessage):
+            await self._system(msg)
+        elif isinstance(msg, ResultMessage):
             await ag.close_all()
+            if getattr(msg, "session_id", None):
+                self.cfg.claude_id = msg.session_id
+            reason = getattr(msg, "terminal_reason", None) or ""
+            status = "interrupted" if reason.startswith("aborted") else msg.subtype
+            await self.term.result(status, getattr(msg, "total_cost_usd", None))
+            return True
+        return False
 
     async def _system(self, msg):
         data = msg.data if isinstance(msg.data, dict) else {}
@@ -946,6 +1052,9 @@ class DemoSession:
         self._stop = False
         self._child = None
         self.init_agents = ["Explore", "general-purpose", "Plan"]
+        self.agents = AgentTracker(term)
+        self._bg = None           # the background subagent's timer
+        self._bg_done = False     # ... which ended between turns
 
     async def start(self):
         # Test hook: a slow start with a child process that, like the real
@@ -958,6 +1067,9 @@ class DemoSession:
         self.term.on_interrupt = self.interrupt
 
     async def stop(self):
+        if self._bg:
+            self._bg.cancel()
+            self._bg = None
         if self._child and self._child.returncode is None:
             self._child.kill()
             await self._child.wait()
@@ -965,6 +1077,37 @@ class DemoSession:
 
     async def interrupt(self):
         self._stop = True
+
+    async def _background_turn(self):
+        """A fake background subagent that ends about 1.5 s after the turn."""
+        t = self.term
+        ag = self.agents
+        await t.text("Starting a subagent in the background.")
+        await ag.start("b1", {"subagent_type": "Explore", "description": "Survey the tests",
+                              "run_in_background": True})
+        await ag.end_result("b1", "Async agent launched successfully.", False)
+        await t.text("It runs on; ask me anything meanwhile.")
+        await t.result("success", 0.0)
+        self._bg = asyncio.ensure_future(self._background_runs())
+
+    async def _background_runs(self):
+        await asyncio.sleep(1.5)
+        for name in ("Glob", "Grep", "Read"):
+            await self.agents.step("b1", name, "tests")
+        self._bg_done = True
+        wake = getattr(self.term, "wake", None)
+        if wake:
+            wake()
+
+    async def follow(self):
+        """Like Claude after a background subagent ends: its end, then a turn."""
+        if not self._bg_done:
+            return False
+        self._bg_done = False
+        await self.agents.end("b1", "done", "Found 12 test files")
+        await self.term.text("The background subagent is done: there are 12 test files.")
+        await self.term.result("success", 0.0)
+        return True
 
     async def _agents_turn(self):
         """Two overlapping fake subagents, one of which asks permission."""
@@ -1009,8 +1152,12 @@ class DemoSession:
     async def turn(self, prompt):
         self._stop = False
         t = self.term
+        if self._bg_done:
+            await self.follow()
         if "agents" in prompt.lower().split():
             return await self._agents_turn()
+        if "background" in prompt.lower().split():
+            return await self._background_turn()
         where = os.path.basename(self.cfg.cwd.rstrip("/")) or self.cfg.cwd
         edits = "auto" if self.cfg.accept_edits else "ask"
         turn = f"turn {self.cfg.turns}, " if self.cfg.turns else ""
@@ -1785,6 +1932,7 @@ class Channel:
         self.cfg.effort = self.pick_effort
         self.pending = None
         self.prompts = asyncio.Queue()
+        self._wake_queued = False
         self.answers = asyncio.Queue()
         self.on_interrupt = None
         self.busy = False
@@ -2026,6 +2174,11 @@ class Channel:
             line = await self.prompts.get()
             if line is None:
                 raise EOFError
+            if line is WAKE:
+                self._wake_queued = False
+                if parts:
+                    continue     # mid-prompt: its turn shows it first
+                return WAKE
             if line is CHANGE:
                 if parts:
                     # Mid-prompt: don't drop the lines already read. The
@@ -2068,6 +2221,9 @@ class Channel:
                     # A prompt typed meanwhile is already queued: its turn
                     # ends with its own >, so no fresh one now.
                     announce = self.prompts.empty()
+                    continue
+                if prompt is WAKE:
+                    announce = await self._follow()
                     continue
                 if not prompt:
                     continue
@@ -2130,6 +2286,39 @@ class Channel:
                     self._save(turn_running=False)
         except EOFError:
             pass
+
+    def wake(self):
+        """Called by the session when Claude sent something between turns."""
+        if not self._wake_queued:
+            self._wake_queued = True
+            self.prompts.put_nowait(WAKE)
+
+    async def _follow(self):
+        """Shows what Claude sent between turns, such as the turn it starts
+        by itself when a background subagent ends. The SE/30 did not ask for
+        that turn, so it ends with > only when no prompt of its own is
+        waiting (that prompt's turn ends with its own >). Returns whether to
+        send > now."""
+        follow = getattr(self.session, "follow", None)
+        if not follow:
+            return False
+        self.busy = True
+        self.idle.clear()
+        self._in_fence = False
+        try:
+            turned = await follow()
+        except EOFError:
+            raise
+        except Exception as e:  # noqa: BLE001
+            await self.notice(f"Error: {e}")
+            turned = False
+        finally:
+            self.busy = False
+            self.idle.set()
+        if turned and not self.term.eof and not self.closing:
+            self.cfg.resume = True
+            self._save(turn_running=False)
+        return turned and self.prompts.empty()
 
     async def shutdown(self):
         """Deny any open request, stop a running turn, stop the session."""

@@ -47,17 +47,42 @@ class FakeTerm:
 
 
 class StubClient:
+    """Yields a scripted stream, then stays open like the CLI does. A
+    callable in the script runs when the session handles it, so a test can
+    act at a given point (advance the clock, raise)."""
     def __init__(self, msgs):
-        self.msgs = msgs
+        self.msgs = list(msgs)
+        self.more = asyncio.Queue()    # messages to send later, between turns
+        self.queries = []
 
     async def query(self, prompt):
+        self.queries.append(prompt)
+
+    async def disconnect(self):
         pass
 
-    async def receive_response(self):
+    async def receive_messages(self):
         for m in self.msgs:
-            if callable(m):
-                m = m()
             yield m
+        while True:
+            yield await self.more.get()
+
+
+def attach(sess, client):
+    """What ClaudeSession.start does, with the stub instead of the CLI.
+    Call inside the event loop."""
+    sess.client = client
+    sess._msgs = asyncio.Queue()
+    sess._in_turn = False
+    sess._pump = asyncio.ensure_future(sess._pump_messages())
+    handle = sess._handle
+
+    async def scripted(msg):
+        if callable(msg):
+            msg()
+            return False
+        return await handle(msg)
+    sess._handle = scripted
 
 
 def agent_use(tid, typ="Explore", desc="Find parser tests"):
@@ -100,9 +125,15 @@ def run_turn(msgs):
     term = FakeTerm()
     cfg = bridge.SessionConfig("/tmp")
     sess = bridge.ClaudeSession(term, cfg)
-    sess.client = StubClient(msgs)
     sess.agents.clock = Clock()
-    asyncio.run(sess.turn("hi"))
+
+    async def go():
+        attach(sess, StubClient(msgs))
+        try:
+            await sess.turn("hi")
+        finally:
+            await sess.stop()
+    asyncio.run(go())
     return term.out, sess
 
 
@@ -143,14 +174,13 @@ class TrackerTests(unittest.TestCase):
         sess = bridge.ClaudeSession(term, bridge.SessionConfig("/tmp"))
 
         async def flow():
-            async def stream():
-                yield agent_use("a1")
-                sess.agents.interrupted = True   # what interrupt() sets
-                yield top_result("a1", "The user doesn't want to proceed", err=True)
-                yield done("success", "aborted")
-            sess.client = type("C", (), {"query": staticmethod(lambda p: asyncio.sleep(0)),
-                                         "receive_response": staticmethod(stream)})()
+            attach(sess, StubClient([
+                agent_use("a1"),
+                lambda: setattr(sess.agents, "interrupted", True),   # what interrupt() sets
+                top_result("a1", "The user doesn't want to proceed", err=True),
+                done("success", "aborted")]))
             await sess.turn("hi")
+            await sess.stop()
         asyncio.run(flow())
         ends = [o for o in term.out if o[0] == "a-"]
         self.assertEqual(ends[0][3], "stopped")
@@ -185,9 +215,15 @@ class TrackerTests(unittest.TestCase):
             raise RuntimeError("link gone")
         term = FakeTerm()
         sess = bridge.ClaudeSession(term, bridge.SessionConfig("/tmp"))
-        sess.client = StubClient([agent_use("a1"), boom])
+
+        async def go():
+            attach(sess, StubClient([agent_use("a1"), boom]))
+            try:
+                await sess.turn("hi")
+            finally:
+                await sess.stop()
         with self.assertRaises(RuntimeError):
-            asyncio.run(sess.turn("hi"))
+            asyncio.run(go())
         self.assertIn(("a-", 1, "Explore", "stopped", 0, "Find parser tests"), term.out)
 
     def test_interrupted_result_message_closes_open_subagents(self):
@@ -286,6 +322,105 @@ import tempfile  # noqa: E402
 from v2client import Client  # noqa: E402
 
 
+class BackgroundTests(unittest.TestCase):
+    """An Agent call with run_in_background: its tool result only confirms
+    the launch, the turn ends, and the subagent's end arrives between turns,
+    followed by a turn Claude starts by itself."""
+
+    def bg_use(self, tid="b1"):
+        return AssistantMessage(content=[ToolUseBlock(id=tid, name="Agent", input={
+            "subagent_type": "Explore", "description": "Survey tests", "prompt": "x",
+            "run_in_background": True})], model="m")
+
+    def later(self):
+        return [sub_use("b1"), sub_use("b1", "Read", {"file_path": "/tmp/a.py"}),
+                sysmsg("task_notification", task_id="T1", tool_use_id="b1",
+                       status="completed", summary="Found 12 test files"),
+                AssistantMessage(content=[TextBlock(text="The survey is done.")], model="m"),
+                done()]
+
+    def start(self, term):
+        sess = bridge.ClaudeSession(term, bridge.SessionConfig("/tmp"))
+        stub = StubClient([self.bg_use(), top_result("b1", "Async agent launched successfully."),
+                           AssistantMessage(content=[TextBlock(text="Started.")], model="m"),
+                           done()])
+        attach(sess, stub)
+        return sess, stub
+
+    def test_launch_closes_the_line_and_the_end_comes_with_a_new_one(self):
+        term = FakeTerm()
+        woken = []
+        term.wake = lambda: woken.append(1)
+
+        async def flow():
+            sess, stub = self.start(term)
+            await sess.turn("go")
+            first = list(term.out)
+            for m in self.later():
+                stub.more.put_nowait(m)
+            for _ in range(20):
+                await asyncio.sleep(0)
+            self.assertTrue(woken)
+            self.assertTrue(await sess.follow())
+            self.assertFalse(await sess.follow())    # nothing left
+            await sess.stop()
+            return first, term.out[len(first):]
+        first, after = asyncio.run(flow())
+        self.assertEqual(first, [
+            ("a+", 1, "Explore", "Survey tests"),
+            ("a-", 1, "Explore", "background", 0, "runs on, its result follows"),
+            ("text", "Started."), ("result", "success")])
+        self.assertEqual(after, [
+            ("a+", 1, "Explore", "Survey tests"),
+            ("a-", 1, "Explore", "done", 2, "Found 12 test files"),
+            ("text", "The survey is done."), ("result", "success")])
+
+    def test_progress_alone_between_turns_is_not_a_turn(self):
+        term = FakeTerm()
+
+        async def flow():
+            sess, stub = self.start(term)
+            await sess.turn("go")
+            n = len(term.out)
+            stub.more.put_nowait(sub_use("b1"))
+            for _ in range(20):
+                await asyncio.sleep(0)
+            turned = await sess.follow()
+            await sess.stop()
+            return turned, term.out[n:]
+        turned, after = asyncio.run(flow())
+        self.assertFalse(turned)
+        self.assertEqual(after, [])
+
+    def test_unread_output_is_shown_before_the_next_turn(self):
+        # tty and v1 have no wake: the next prompt shows it first, and that
+        # prompt's turn still ends at its own result.
+        term = FakeTerm()
+
+        async def flow():
+            sess, stub = self.start(term)
+            await sess.turn("go")
+            n = len(term.out)
+            for m in self.later():
+                stub.more.put_nowait(m)
+            for _ in range(20):
+                await asyncio.sleep(0)
+            stub.more.put_nowait(AssistantMessage(content=[TextBlock(text="Reply.")], model="m"))
+            stub.more.put_nowait(done())
+            await sess.turn("next")
+            await sess.stop()
+            return term.out[n:]
+        after = asyncio.run(flow())
+        self.assertEqual([o[0] for o in after], ["a+", "a-", "text", "result", "text", "result"])
+        self.assertEqual(after[4], ("text", "Reply."))
+
+    def test_turn_end_leaves_a_background_subagent_running(self):
+        out, sess = run_turn([self.bg_use(), top_result("b1", "launched"), done()])
+        self.assertEqual([o for o in out if o[0] == "a-"],
+                         [("a-", 1, "Explore", "background", 0, "runs on, its result follows")])
+        self.assertIn("b1", sess.agents.background)
+
+
 class WireTests(unittest.TestCase):
     def setUp(self):
         self.root = tempfile.mkdtemp()
@@ -308,6 +443,26 @@ class WireTests(unittest.TestCase):
     def test_ok_advertises_agents(self):
         c = self.client(False)
         self.assertIn("#OK se30bridge 2 files=rw resume ping models agents", c.text())
+
+    def test_background_result_arrives_after_the_turn(self):
+        c = self.client(True)
+        end = c.turn(1, "run in the background please")
+        c.wait_for(lambda l: l == "1>", timeout=10, start=end + 1)
+        got = c.session(1, end + 1)
+        self.assertEqual([l for l in got if l[:1] in "JTR>"][:5], [
+            "J+ 1 Explore Survey the tests", "J- 1 done 3 Found 12 test files",
+            "T The background subagent is done: there are 12 test files.",
+            "R success $0.0000", ">"])
+
+    def test_background_result_without_optin_is_plain_lines(self):
+        c = self.client(False)
+        end = c.turn(1, "run in the background please")
+        before = c.session(1, 0)
+        self.assertIn("U Agent Explore background: runs on, its result follows", before)
+        c.wait_for(lambda l: l == "1>", timeout=10, start=end + 1)
+        got = c.session(1, end + 1)
+        self.assertEqual(got[:2], ["U Agent Explore: Survey the tests",
+                                   "U Agent Explore done: Found 12 test files"])
 
     def test_without_optin_only_plain_lines(self):
         c = self.client(False)
