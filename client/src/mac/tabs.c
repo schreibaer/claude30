@@ -19,6 +19,7 @@ Tab *tabs_add(const char *project, short sid)
     strncpy(t->project, project, TAB_NAME_MAX);
     batch_init(&t->batch);
     al_init(&t->agents);
+    fold_init(&t->folds);
     t->agent_pending = -1;
     at = gFront ? tabs_index(gFront) + 1 : gCount;
     for (i = gCount; i > at; i--)
@@ -37,6 +38,7 @@ void tabs_remove(Tab *t)
         gOrder[i] = gOrder[i + 1];
     gCount--;
     batch_free(&t->batch);
+    fold_free(&t->folds);
     log_close(&t->log);
     permdlg_free(&t->perm);
     t->used = false;

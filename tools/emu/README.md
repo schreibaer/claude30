@@ -34,6 +34,8 @@ Steps:
 |---|---|
 | `perm` | A Write permission request with a 2,000-line body |
 | `wide` | A Bash permission request whose one command line is 3,000 bytes |
+| `edit` | An Edit permission request whose diff has two hunks, +12 -3 lines, one removed line starting with `--` |
+| `fold` | Code blocks of 40, 13 and 12 lines and runs of 5 and 2 tool lines: the first two blocks and the 5-line run fold, the rest stay plain |
 | `long` | Prose, code and permission lines over 4 KB each |
 | `error` | A turn ending in `I Error: ...` and `>` with no `R`, with a code block left open |
 | `burst` | 600 short lines, windows back to back |
@@ -194,6 +196,15 @@ Run these in the emulator, and the hardware rows on the SE/30. Tick each one.
 | ☐ | Copy from the transcript and paste into the input work | Emulator |
 | ☐ | Change the speed to 38,400, quit and relaunch: the setting persists and the port opens at 38,400 | Emulator |
 | ☐ | The stress bridge's `wide` case shows every character of the 3,000-byte command across marked rows | Emulator |
+| ☐ | The `perm` case's dialog opens with the bold line `Write big.txt: +2000 lines` above the header, and the list still scrolls to the last line | Emulator |
+| ☐ | The `edit` case shows `Edit parser.py: +12 -3 lines in 2 places`, and `wide` shows `Bash: long command (3000 characters), read it below` | Emulator |
+| ☐ | The `fold` case: the 40-line and 13-line blocks each show one `[+] Code, N lines: ...` line, the 12-line block stays open, the 5 tool lines show `[+] 5 tools: Read 3, Grep, Bash` and the 2 stay plain | Emulator | Stress bridge |
+| ☐ | Code lines are numbered from 1 in each block, right-aligned (`  1`, ` 12`), and an opened fold shows the same numbers | Emulator | Stress bridge |
+| ☐ | Clicking a `[+]` line opens it in place and the line reads `[-]`; clicking again closes it. Cmd-J does the same with the caret in the block or the fold last on screen, and is dimmed when there is no fold | Emulator | Stress bridge |
+| ☐ | Opening a fold below the view scrolls to show it; opening one above the view leaves the visible text where it is | Emulator | Stress bridge |
+| ☐ | While a long block still arrives its marker's line count goes up, and `fold` in a tab scrolled up does not move the view | Emulator | Stress bridge |
+| ☐ | Open folds and closed folds both reach the log in full (Tools > open the log file) after the transcript trims | Emulator | `burst` after `fold` |
+| ☐ | The header under the bold line is one plain line; a header too wide for it (`wide`, or a path 60+ characters long) ends in an ellipsis and the list opens with the whole header; nothing above the list is clipped. The bold line, the header and the list do not overlap at 512 x 342, and the buttons and keys behave as before (Cmd-Y, Cmd-N, Cmd-A, Cmd-period; Return and a held key do nothing; clicks in the first 0.75 s are ignored) | Emulator |
 
 **Hardware (SE/30)**
 

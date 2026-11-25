@@ -559,9 +559,13 @@ def describe_tool(name, inp, cwd):
         old = inp.get("old_string", "").splitlines()
         new = inp.get("new_string", "").splitlines()
         diff = list(difflib.unified_diff(old, new, lineterm="", n=2))[2:]
+        if inp.get("replace_all"):
+            path += " (all occurrences)"   # the diff shows one match; the edit changes every one
         return path, diff
     if name == "MultiEdit":
         path = rel(inp.get("file_path"))
+        if any(e.get("replace_all") for e in inp.get("edits", [])):
+            path += " (all occurrences)"
         diff = []
         for e in inp.get("edits", []):
             diff += list(difflib.unified_diff(e.get("old_string", "").splitlines(),

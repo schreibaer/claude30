@@ -7,6 +7,8 @@ the session that sent it:
 
   perm     a Write permission request with a 2,000-line body
   wide     a Bash permission request whose single command line is 3,000 bytes
+  edit     an Edit permission request with a known diff: +12 -3 lines in 2 places
+  fold     code blocks of 40, 13 and 12 lines and runs of 5 and 2 tool lines, to fold
   long     prose, code and permission lines over 4 KB each
   error    a turn that ends with "I Error: ..." and ">" but no "R"
   burst    600 short lines, windows back to back
@@ -144,6 +146,39 @@ class StressSession:
         await self.tag("U", f"Bash ({'allowed' if ans in 'ya' else 'denied'})")
         await self.tag("R", "success $0.0000")
 
+    async def case_edit(self):
+        # A real Edit diff from the bridge's own describe_tool: one hunk that
+        # removes 3 lines (one of them starts with "--") and one that adds 12.
+        old = [f"line {i:02d}" for i in range(1, 41)]
+        new = list(old)
+        old[2] = "--flag removed with two dashes"
+        new[30:30] = [f"added {i:02d}" for i in range(1, 13)]
+        del new[2:5]
+        summary, body = bridge.describe_tool(
+            "Edit", {"file_path": "/tmp/project/src/parser.py",
+                     "old_string": "\n".join(old), "new_string": "\n".join(new)}, "/tmp/project")
+        ans = await self.ask(3, "Edit", summary, body)
+        await self.tag("U", f"Edit {summary} ({'allowed' if ans in 'ya' else 'denied'})")
+        await self.tag("R", "success $0.0000")
+
+    async def case_fold(self):
+        async def block(n, label):
+            await self.tag("T", f"{label} ({n} lines):")
+            await self.tag("C[")
+            for i in range(1, n + 1):
+                await self.tag("C", f"line_{i:02d} = compute({i})")
+            await self.tag("C]")
+        await block(40, "A long block")
+        await self.tag("T", "Now some tools:")
+        for name in ("Read a.py", "Read b.py", "Grep parse", "Bash ls", "Read c.py"):
+            await self.tag("U", name)
+        await self.tag("T", "Two tools stay plain:")
+        await self.tag("U", "Read d.py")
+        await self.tag("U", "Read e.py")
+        await block(13, "Just over the limit")
+        await block(12, "Exactly at the limit")
+        await self.tag("R", "success $0.0000")
+
     async def case_long(self):
         await self.tag("T", "A prose line over 4 KB: " + "word " * 900)
         await self.tag("C[")
@@ -202,7 +237,7 @@ class StressSession:
         await self.tag("R", "success $0.0000")
 
     async def case_help(self):
-        for line in __doc__.split("\n")[5:22]:
+        for line in __doc__.split("\n")[5:24]:
             await self.tag("I", line.strip())
         await self.tag("R", "success $0.0000")
 
