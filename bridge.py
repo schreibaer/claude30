@@ -888,9 +888,47 @@ class DemoSession:
     async def interrupt(self):
         self._stop = True
 
+    async def _agents_turn(self):
+        """Two overlapping fake subagents, one of which asks permission."""
+        t = self.term
+        ag = AgentTracker(t)
+        ag.STEP_EVERY = 0.2
+        await t.text("Starting two subagents.")
+        await ag.start("d1", {"subagent_type": "Explore", "description": "Find where the parser is tested"})
+        await ag.start("d2", {"subagent_type": "general-purpose", "description": "Check the docs for the parser"})
+        ag.bind("d2", "demo-2")
+        script = [("d1", "Grep", "def parse"), ("d2", "Read", "docs/parser.md"),
+                  ("d1", "Read", "tests/test_parser.py"), ("d2", "Glob", "docs/*.md"),
+                  ("d1", "Grep", "parse(")]
+        for tid, name, summ in script[:3]:
+            if self._stop:
+                break
+            await asyncio.sleep(0.3)
+            await ag.step(tid, name, summ)
+        if not self._stop:
+            summary, detail = describe_tool("Bash", {"command": "git log -5"}, self.cfg.cwd)
+            label = ag.label_for("demo-2")
+            ans = await t.ask_permission(1, "Bash", f"({label}) {summary}", detail)
+            await t.tool("Bash", f"git log -5 ({'allowed' if ans in 'ya' else 'denied'})")
+        for tid, name, summ in script[3:]:
+            if self._stop:
+                break
+            await asyncio.sleep(0.3)
+            await ag.step(tid, name, summ)
+        if self._stop:
+            await ag.close_all()
+            await t.result("interrupted", 0.0)
+            return
+        await ag.end("d2", "done", "The parser is documented in docs/parser.md")
+        await ag.end("d1", "done", "Tests are in tests/test_parser.py")
+        await t.text("Both subagents are done.")
+        await t.result("success", 0.0)
+
     async def turn(self, prompt):
         self._stop = False
         t = self.term
+        if "agents" in prompt.lower().split():
+            return await self._agents_turn()
         where = os.path.basename(self.cfg.cwd.rstrip("/")) or self.cfg.cwd
         edits = "auto" if self.cfg.accept_edits else "ask"
         turn = f"turn {self.cfg.turns}, " if self.cfg.turns else ""
@@ -1636,14 +1674,24 @@ class Channel:
     async def tool(self, name, summary):
         await self.tag("U", f"{name} {summary}")
 
+    # Subagents. An app that sent !AGENTS gets J+ (started), J~ (progress)
+    # and J- (ended) to draw one live line each; everyone else gets the
+    # plain start and end lines.
     async def agent_start(self, k, typ, task):
-        await self.tool("Agent", f"{typ}: {clip(task, 120)}")
+        if self.v2.agents_optin:
+            await self.tag("J+", f"{k} {typ} {clip(task, 120)}")
+        else:
+            await self.tool("Agent", f"{typ}: {clip(task, 120)}")
 
     async def agent_step(self, k, steps, tool, summary):
-        pass
+        if self.v2.agents_optin:
+            await self.tag("J~", f"{k} {steps} {tool} {clip(summary, 120)}")
 
     async def agent_end(self, k, typ, status, steps, summary):
-        await self.tool("Agent", f"{typ} {status}: {clip(summary, 120)}")
+        if self.v2.agents_optin:
+            await self.tag("J-", f"{k} {status} {steps} {clip(summary, 120)}")
+        else:
+            await self.tool("Agent", f"{typ} {status}: {clip(summary, 120)}")
 
     async def tool_error(self, msg):
         await self.tag("E", clip(msg, 200))
@@ -1864,6 +1912,7 @@ class V2:
         self.args = args
         self.channels = {}
         self.store = ResumeStore(args.state_dir)
+        self.agents_optin = False   # the app sent !AGENTS: it draws subagent lines
 
     def forget(self, ch):
         if self.channels.get(ch.sid) is ch:
@@ -1926,13 +1975,16 @@ class V2:
 
     async def run(self):
         try:
-            await self.term.send_line(f"#OK se30bridge 2 files={self.args.files} resume ping".encode(),
+            await self.term.send_line(f"#OK se30bridge 2 files={self.args.files} resume ping agents".encode(),
                                       counted=False)
             await self.send_list()
             while True:
                 line = await self.term.lines.get()
                 if line is None or line == "!QUIT":
                     break
+                if line == "!AGENTS":
+                    self.agents_optin = True
+                    continue
                 if line == "!LIST":
                     await self.send_list()
                 elif line[:1] in ("1", "2", "3", "4", "5", "6") and line:

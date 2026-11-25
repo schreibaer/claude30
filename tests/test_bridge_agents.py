@@ -10,6 +10,7 @@ import sys
 import unittest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import bridge  # noqa: E402
 from claude_agent_sdk import (AssistantMessage, ResultMessage, SystemMessage,  # noqa: E402
                               TextBlock, ToolResultBlock, ToolUseBlock, UserMessage)
@@ -271,9 +272,112 @@ class TrackerTests(unittest.TestCase):
         async def tool(name, summary):
             sent.append((name, summary))
         term.tool = tool
+        term.v2 = type("V", (), {"agents_optin": False})()
         asyncio.run(bridge.Channel.agent_start(term, 1, "Explore", "x" * 300))
         self.assertEqual(len(sent[0][1]), len("Explore: ") + 120)
 
+
+# ---- over the wire, against the demo bridge ---------------------------------
+
+import re  # noqa: E402
+import shutil  # noqa: E402
+import tempfile  # noqa: E402
+
+from v2client import Client  # noqa: E402
+
+
+class WireTests(unittest.TestCase):
+    def setUp(self):
+        self.root = tempfile.mkdtemp()
+        os.mkdir(os.path.join(self.root, "alpha"))
+        self.addCleanup(shutil.rmtree, self.root, True)
+
+    def client(self, agents):
+        c = Client("--demo", "--projects", self.root)
+        self.addCleanup(c.reap)
+        c.hello(agents=agents)
+        c.open(1, "alpha")
+        c.wait_line("1>")
+        return c
+
+    def agents_turn(self, c, answer="y"):
+        start = len(c.lines)
+        end = c.turn(1, "run the agents demo", answer)
+        return c.session(1, start)[: end - start], start
+
+    def test_ok_advertises_agents(self):
+        c = self.client(False)
+        self.assertIn("#OK se30bridge 2 files=rw resume ping agents", c.text())
+
+    def test_without_optin_only_plain_lines(self):
+        c = self.client(False)
+        lines, _ = self.agents_turn(c)
+        self.assertFalse([l for l in lines if l.startswith("J")])
+        tools = [l for l in lines if l.startswith("U Agent")]
+        self.assertEqual(tools[0], "U Agent Explore: Find where the parser is tested")
+        self.assertEqual(tools[1], "U Agent general-purpose: Check the docs for the parser")
+        self.assertIn("U Agent general-purpose done: The parser is documented in docs/parser.md", tools)
+        self.assertIn("U Agent Explore done: Tests are in tests/test_parser.py", tools)
+
+    def test_with_optin_j_lines_and_labelled_permission(self):
+        c = self.client(True)
+        lines, _ = self.agents_turn(c)
+        j = [l for l in lines if l.startswith("J")]
+        self.assertEqual(j[0], "J+ 1 Explore Find where the parser is tested")
+        self.assertEqual(j[1], "J+ 2 general-purpose Check the docs for the parser")
+        self.assertTrue(any(l.startswith("J~ 1 ") for l in j))
+        self.assertTrue(any(l.startswith("J~ 2 ") for l in j))
+        self.assertIn("J- 2 done 2 The parser is documented in docs/parser.md", j)
+        self.assertIn("J- 1 done 3 Tests are in tests/test_parser.py", j)
+        self.assertFalse([l for l in lines if l.startswith("U Agent")])
+        q = [l for l in lines if l.startswith("Q ")]
+        self.assertEqual(q, ["Q 1 Bash (general-purpose) git log -5"])
+        # the ends come before the turn's R line and the ready line
+        self.assertLess(max(i for i, l in enumerate(lines) if l.startswith("J-")),
+                        next(i for i, l in enumerate(lines) if l.startswith("R ")))
+
+    def test_slot_numbers_are_reused(self):
+        c = self.client(True)
+        self.agents_turn(c)
+        lines, _ = self.agents_turn(c)
+        self.assertEqual([l for l in lines if l.startswith("J+")][0][:4], "J+ 1")
+
+    def test_stop_ends_open_subagents_as_stopped(self):
+        c = self.client(True)
+        start = len(c.lines)
+        c.send("1P run the agents demo")
+        c.wait_for(lambda l: l.startswith("1J~ "), start=start)
+        c.send("1!STOP")
+        c.wait_line("1>", start=start)
+        lines = c.session(1, start)
+        ends = [l for l in lines if l.startswith("J-")]
+        self.assertEqual(len(ends), 2)
+        self.assertTrue(all(" stopped " in l for l in ends))
+        self.assertTrue([l for l in lines if l.startswith("R interrupted")])
+
+    def test_throttle_limits_progress_lines(self):
+        c = self.client(True)
+        lines, _ = self.agents_turn(c)
+        steps = [l for l in lines if l.startswith("J~")]
+        self.assertLessEqual(len(steps), 5)
+        for l in steps:
+            self.assertRegex(l, r"^J~ [12] \d+ \S+ ")
+
+    def test_tty_mode_prints_agent_lines(self):
+        c = Client("--demo", "--projects", self.root)
+        self.addCleanup(c.reap)
+        # tty mode has no HELLO: type a prompt at the demo bridge
+        c.send(b"")
+        time.sleep(0.5)
+        c.send("agents")
+        c.wait_for(lambda l: "[Agent] Explore: Find where the parser is tested" in l, timeout=15)
+        c.wait_for(lambda l: "(general-purpose) git log -5" in l, timeout=15)
+        c.send("y")
+        c.wait_for(lambda l: "[Agent] Explore done: Tests are in tests/test_parser.py" in l,
+                   timeout=25)
+
+
+import time  # noqa: E402
 
 if __name__ == "__main__":
     unittest.main()
