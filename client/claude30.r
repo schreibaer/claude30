@@ -193,8 +193,8 @@ resource 'DITL' (kPermDialog) {
 		{ 278, 410, 298, 490 }, Button { enabled, "Allow" };
 		{ 278, 320, 298, 400 }, Button { enabled, "Deny" };
 		{ 278, 230, 298, 310 }, Button { enabled, "Always" };
-		{ 24, 10, 60, 490 }, StaticText { disabled, "" };
-		{ 64, 10, 270, 490 }, UserItem { disabled };
+		{ 24, 10, 40, 490 }, UserItem { disabled };
+		{ 44, 10, 270, 490 }, UserItem { disabled };
 		{ 280, 10, 298, 224 }, StaticText { disabled, "\0x11Y \0x11N \0x11A   \0x11. stops" };
 		{ 4, 10, 22, 490 }, UserItem { disabled };
 	}

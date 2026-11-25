@@ -19,6 +19,7 @@
 #define ARM_TICKS    45          /* clicks on the buttons are ignored for 0.75 s */
 #define GENEVA       3
 #define HEAD_SIZE    12
+#define TITLE_SIZE   10
 
 typedef struct {
     long off;                    /* offset into the request body */
@@ -36,6 +37,7 @@ static ControlHandle gBar;
 static Rect gList;
 static short gRowH, gRowAscent, gVisible;
 static Rect gHeadRect;           /* the bold headline above the header */
+static Rect gTitleRect;          /* the request's header: one plain line, cut to fit */
 static char gHeadline[PERMSUM_MAX];
 static long gHeadlineLen;
 
@@ -191,6 +193,33 @@ static pascal void draw_headline(DialogPtr d, short item)
     TextSize(0);
 }
 
+/* The header the bridge sent ("Bash git status", "Edit src/parser.py"), on
+   one line in plain Geneva. A header too wide for the line ends in an
+   ellipsis; the full text is in the list below or in the headline. */
+static pascal void draw_title(DialogPtr d, short item)
+{
+    const char *s = (const char *)gReq->title + 1;
+    short n = gReq->title[0], w = gTitleRect.right - gTitleRect.left - 2;
+    (void)d;
+    (void)item;
+    EraseRect(&gTitleRect);
+    TextFont(GENEVA);
+    TextSize(TITLE_SIZE);
+    TextFace(0);
+    MoveTo(gTitleRect.left + 1, gTitleRect.top + 12);
+    if (TextWidth((Ptr)s, 0, n) <= w) {
+        DrawText((Ptr)s, 0, n);
+    } else {
+        short ell = CharWidth((char)0xC9);
+        while (n > 0 && TextWidth((Ptr)s, 0, n) + ell > w)
+            n--;
+        DrawText((Ptr)s, 0, n);
+        DrawChar((char)0xC9);
+    }
+    TextFont(0);
+    TextSize(0);
+}
+
 static void redraw_list(void)
 {
     SetPort(gDlg);
@@ -230,18 +259,10 @@ static void flash(short item)
 /* Part of the request was lost: say so, and leave only Deny and Cmd-period. */
 static void show_incomplete(void)
 {
-    static const unsigned char note[] = "\p  [Part of this request could not be shown. Deny it.]";
+    /* The headline already reads "Incomplete request: deny it". */
     short type, i;
     Handle h;
     Rect r;
-    Str255 t;
-    short room = 255 - gReq->title[0];
-    short n = note[0] < room ? note[0] : room;
-    memcpy(t, gReq->title, gReq->title[0] + 1);
-    memcpy(t + 1 + t[0], note + 1, n);
-    t[0] = (unsigned char)(t[0] + n);
-    GetDialogItem(gDlg, kPermSummary, &type, &h, &r);
-    SetDialogItemText(h, t);
     for (i = 0; i < 2; i++) {
         GetDialogItem(gDlg, i == 0 ? kPermAllow : kPermAlways, &type, &h, &r);
         HiliteControl((ControlHandle)h, 255);
@@ -305,10 +326,10 @@ short permdlg_run(PermReq *q)
 {
     short hit = 0, type, cols, result;
     Handle h;
-    Rect r, barRect;
+    Rect barRect;
     FontInfo fi;
     ModalFilterUPP filterUPP;
-    UserItemUPP drawUPP, headUPP;
+    UserItemUPP drawUPP, headUPP, titleUPP;
     GrafPtr save;
 
     if (q->close_requested)
@@ -327,8 +348,9 @@ short permdlg_run(PermReq *q)
     gRowH = fi.ascent + fi.descent + fi.leading;
     gRowAscent = fi.ascent;
 
-    GetDialogItem(gDlg, kPermSummary, &type, &h, &r);
-    SetDialogItemText(h, q->title);
+    GetDialogItem(gDlg, kPermSummary, &type, &h, &gTitleRect);
+    titleUPP = NewUserItemUPP(draw_title);
+    SetDialogItem(gDlg, kPermSummary, type, (Handle)titleUPP, &gTitleRect);
 
     GetDialogItem(gDlg, kPermList, &type, &h, &gList);
     drawUPP = NewUserItemUPP(draw_list);
@@ -396,6 +418,7 @@ short permdlg_run(PermReq *q)
     DisposeModalFilterUPP(filterUPP);
     DisposeUserItemUPP(drawUPP);
     DisposeUserItemUPP(headUPP);
+    DisposeUserItemUPP(titleUPP);
     DisposeControlActionUPP(gBarUPP);
     gDlg = NULL;
     gReq = NULL;
