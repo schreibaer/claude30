@@ -67,6 +67,10 @@ typedef enum {
     EV_CLOSED,       /* id 0: a disconnect the user asked for has finished */
     EV_SILENCE,      /* id 0: no input for the warning time during a turn */
     EV_RESUMED,      /* a session's conversation: text is "<new|resumed|cut> <token>" */
+    EV_AGENT_START,  /* a subagent started: the J+ payload "<k> <type> <task>" */
+    EV_AGENT_STEP,   /* progress: the J~ payload "<k> <steps> <tool> <summary>" */
+    EV_AGENT_END,    /* ended: the J- payload "<k> <status> <steps> <summary>", or
+                        "* stopped" when the turn ended with subagent lines open */
     EV_MODEL,        /* the model and effort a session runs with (or will from
                         its next turn): text is "<model|-> <effort|->" */
     /* Files (files.h). During these, proto_xfer() names the transfer. */
@@ -94,6 +98,7 @@ typedef struct {
     char perm_id[16];
     int perm_open;               /* Q seen, waiting for ? */
     int perm_asked;              /* ? seen, no answer sent yet */
+    int agents_open;             /* subagent lines started (J+) and not yet ended (J-) */
     int deny_on_ask;             /* answer n as soon as ? arrives */
     int stopped;                 /* !STOP sent during this turn */
     int closing_turn;            /* disconnecting: waiting for this turn to end */
@@ -151,6 +156,7 @@ struct Proto {
     int files;                   /* FILES_OFF, FILES_RO or FILES_RW */
     int resume_cap;              /* the bridge resumes conversations (<n>Y) */
     int ping_cap;                /* the bridge answers !PING and times out silent apps */
+    int agents_cap;              /* the bridge sends J lines to an app that sent !AGENTS */
     int models_cap;              /* the bridge sends a model list and takes <n>M */
 
     /* The models a session may pick, from the handshake's M lines. */

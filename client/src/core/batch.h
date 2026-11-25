@@ -17,6 +17,7 @@ typedef enum {
     RS_INTERRUPTED,  /* the user stopped the turn */
     RS_NOISE,        /* serial errors: output above may be damaged */
     RS_DIVIDER,      /* new conversation */
+    RS_AGENT,        /* a subagent's line: the window rewrites it in place */
     RS_COUNT
 } RunStyle;
 

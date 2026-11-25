@@ -18,6 +18,8 @@ Tab *tabs_add(const char *project, short sid)
     t->sid = sid;
     strncpy(t->project, project, TAB_NAME_MAX);
     batch_init(&t->batch);
+    al_init(&t->agents);
+    t->agent_pending = -1;
     at = gFront ? tabs_index(gFront) + 1 : gCount;
     for (i = gCount; i > at; i--)
         gOrder[i] = gOrder[i - 1];

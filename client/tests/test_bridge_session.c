@@ -405,6 +405,43 @@ static void test_demo_two_sessions(void)
 }
 
 
+/* The demo bridge's two overlapping fake subagents: start, progress and end
+   events for each, a labelled permission request, and nothing else. */
+static void test_demo_agents(void)
+{
+    start(demo_argv);
+    connect_two("alpha", "beta");
+    CHECK(proto_send_prompt(&P, 1, "run the agents", 14));
+    CHECK(run(one_done, 20));
+    CHECK_EQ_LONG(S.s[1].counts[EV_AGENT_START], 2);
+    CHECK_EQ_LONG(S.s[1].counts[EV_AGENT_END], 2);
+    CHECK(S.s[1].counts[EV_AGENT_STEP] >= 2);
+    CHECK_EQ_LONG(S.s[1].counts[EV_PERM_ASK], 1);
+    CHECK_EQ_LONG(S.s[1].counts[EV_TOOL], 1);   /* only the main conversation's own tool line */
+    CHECK(strcmp(S.s[1].result, "success $0.0000") == 0);
+    CHECK_EQ_LONG(P.dropped, 0);
+    finish_with_disconnect();
+}
+
+/* A background subagent ends after its turn: its lines and Claude's own
+   follow-up arrive while the session is ready, and nothing is dropped. */
+static int bg_done(void) { return S.s[1].counts[EV_AGENT_END] >= 2 && S.s[1].counts[EV_RESULT] >= 2; }
+
+static void test_demo_background(void)
+{
+    start(demo_argv);
+    connect_two("alpha", "beta");
+    CHECK(proto_send_prompt(&P, 1, "run in the background", 21));
+    CHECK(run(one_done, 20));
+    CHECK_EQ_LONG(S.s[1].counts[EV_AGENT_END], 1);      /* "background" */
+    CHECK(run(bg_done, 20));
+    CHECK_EQ_LONG(S.s[1].counts[EV_AGENT_START], 2);
+    CHECK(proto_sess_state(&P, 1) == SS_READY);
+    CHECK(proto_send_prompt(&P, 1, "hi", 2));            /* still takes prompts */
+    CHECK_EQ_LONG(P.dropped, 0);
+    finish_with_disconnect();
+}
+
 /* A drop in the middle of a turn, then a new bridge and the same
    conversations: session 1 continues, session 2 reports its reply cut off. */
 static void test_drop_and_resume(void)
@@ -693,6 +730,8 @@ int main(void)
     signal(SIGPIPE, SIG_IGN);
     make_projects();
     test_demo_two_sessions();
+    test_demo_agents();
+    test_demo_background();
     test_drop_and_resume();
     test_model_and_effort();
     test_demo_stop_one();

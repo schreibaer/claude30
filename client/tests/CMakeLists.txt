@@ -19,11 +19,12 @@ add_library(core STATIC
     ${CORE}/mascot.c
     ${CORE}/heartbeat.c
     ${CORE}/promptmarks.c
+    ${CORE}/agentline.c
     ${CORE}/permsum.c)
 target_include_directories(core PUBLIC ${CORE})
 
 enable_testing()
-foreach(t test_linebuf_prompt test_protocol test_batch test_files test_mascot test_promptmarks test_heartbeat test_permsum)
+foreach(t test_linebuf_prompt test_protocol test_batch test_files test_mascot test_promptmarks test_heartbeat test_agentline test_permsum)
     add_executable(${t} ${t}.c)
     target_link_libraries(${t} core)
     target_compile_definitions(${t} PRIVATE FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures")

@@ -51,6 +51,10 @@ void window_idle(void);
 
 /* Appends the tab's batch to its transcript, trimming old text to its log. */
 void window_append(Tab *t);
+/* Subagent lines (see agentline.h): slot's line is drawn as a new line, or
+   rewritten where it is. text is the composed Mac Roman line. */
+void window_agent_new(Tab *t, int slot, const char *text);
+void window_agent_update(Tab *t, int slot, const char *text);
 /* True when the tab's transcript is empty (nothing appended yet). */
 Boolean window_transcript_empty(Tab *t);
 
