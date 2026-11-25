@@ -19,6 +19,7 @@ add_application(Claude30
     src/core/mascot.c
     src/core/heartbeat.c
     src/core/promptmarks.c
+    src/core/permsum.c
     src/mac/main.c
     src/mac/serial.c
     src/mac/modem.c
