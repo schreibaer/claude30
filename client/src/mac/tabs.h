@@ -15,6 +15,7 @@
 #include "log.h"
 #include "permdlg.h"
 #include "promptmarks.h"
+#include "usage.h"
 
 #define MAX_TABS 6
 #define TAB_NAME_MAX 63
@@ -39,6 +40,7 @@ typedef struct Tab {
     char model[32];              /* its Claude model ("" = the bridge default) */
     char effort[8];              /* low, medium, high, xhigh or max ("" = default) */
     Boolean stream;              /* Stream Answers is on for it */
+    Usage usage;                 /* its context and cost, from the bridge's $ line */
     Boolean token_sent;          /* opened asking to resume: its <n>Y says how it went */
     Boolean opened_once;         /* a conversation ran in it this launch */
     Boolean reopened;            /* opened; waiting for its first > */

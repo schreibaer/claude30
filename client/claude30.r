@@ -178,7 +178,8 @@ resource 'DITL' (kSettingsDialog) {
 		{ 94, 20, 110, 330 }, StaticText { disabled, "Dial string, sent to the modem as typed" };
 		{ 166, 20, 214, 340 }, StaticText { disabled,
 			"The speed must match the WiFi232 and run.sh --baud. Port, speed and dial string apply at the next Connect." };
-		{ 142, 20, 158, 330 }, CheckBox { enabled, "Hide scroll bar" };
+		{ 142, 20, 158, 170 }, CheckBox { enabled, "Hide scroll bar" };
+		{ 142, 190, 158, 330 }, CheckBox { enabled, "Hide cost" };
 	}
 };
 

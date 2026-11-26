@@ -17,6 +17,7 @@ Tab *tabs_add(const char *project, short sid)
     memset(t, 0, sizeof(*t));
     t->used = true;
     t->sid = sid;
+    usage_clear(&t->usage);          /* no reading yet; memset left zeros */
     strncpy(t->project, project, TAB_NAME_MAX);
     batch_init(&t->batch);
     batch_set_rule(&t->batch, window_rule_len());

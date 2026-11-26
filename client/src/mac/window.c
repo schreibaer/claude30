@@ -122,6 +122,9 @@ static void set_rule_len(void)
 
 #define POS_W        4      /* with the bar hidden: a rule and a 3-pixel position strip */
 #define POS_FIELD_W  30     /* the "Top", "End" or "42%" field in the status line */
+#define USAGE_GAP    8      /* between the status message and the context and cost field */
+#define GAUGE_W      5      /* a tab's context bar, frame included */
+#define GAUGE_H      10
 #define POS_MIN_H    6      /* the position marker's least height */
 
 static Boolean gBarHidden;       /* Settings > Hide scroll bar */
@@ -445,8 +448,10 @@ static void relayout(void)
 
 void window_prefs_changed(void)
 {
-    if ((gPrefs.hide_scrollbar != 0) == gBarHidden)
+    if ((gPrefs.hide_scrollbar != 0) == gBarHidden) {
+        window_status_redraw();          /* Hide cost may have changed */
         return;
+    }
     gBarHidden = !gBarHidden;
     SetPort(gWin);
     relayout();
@@ -600,10 +605,19 @@ Boolean window_transcript_empty(Tab *t)
 
 /* ---- drawing ------------------------------------------------------------ */
 
-/* Draws the status text with pos, the position field, at its right end. */
+/* Draws the status line: the message at the left, then the front tab's
+   context and cost ("ctx 42% $0.31"), then pos, the position field, at the
+   right end. The usage field's right edge is fixed just left of the
+   position field's room, so it stays still while pos changes. A message
+   that does not fit loses its middle, because what the status line appends
+   to the end ([model, effort], the line noise and log warnings) matters
+   next to the cost. */
 static void draw_status_pos(const char *pos)
 {
-    short len = (short)strlen(gStatus), room = gStatusRect.right - gStatusRect.left - 4;
+    Str255 msg;
+    char use[USAGE_STATUS_MAX];
+    short len = (short)strlen(gStatus), ulen = 0, uw = 0, limit, room;
+    short fieldRight = (short)(gStatusRect.right - POS_FIELD_W - 2);
     short y = gStatusRect.top + gAscent + 1;
     SetPort(gWin);
     EraseRect(&gStatusRect);
@@ -615,12 +629,29 @@ static void draw_status_pos(const char *pos)
         short w = TextWidth(gPosText, 0, (short)strlen(gPosText));
         MoveTo((short)(gStatusRect.right - 2 - w), y);
         DrawText(gPosText, 0, (short)strlen(gPosText));
-        room -= POS_FIELD_W;
-        while (len > 0 && TextWidth(gStatus, 0, len) > room)
-            len--;              /* a long message stops short of the field */
     }
+    use[0] = 0;
+    if (gTab && session_usage_shown())
+        usage_status(&gTab->usage, gPrefs.hide_cost != 0, use, sizeof(use));
+    ulen = (short)strlen(use);
+    if (ulen) {
+        uw = TextWidth(use, 0, ulen);
+        MoveTo((short)(fieldRight - uw), y);
+        DrawText(use, 0, ulen);
+    }
+    limit = (gPosText[0] || ulen) ? fieldRight : gStatusRect.right;
+    if (ulen)
+        limit = (short)(limit - uw - USAGE_GAP);
+    room = (short)(limit - (gStatusRect.left + 2));
+    if (room < 12)
+        room = 12;
+    if (len > 254)
+        len = 254;
+    msg[0] = (unsigned char)len;
+    memcpy(msg + 1, gStatus, len);
+    TruncString(room, msg, truncMiddle);
     MoveTo(gStatusRect.left + 2, y);
-    DrawText(gStatus, 0, len);
+    DrawString(msg);
 }
 
 static void draw_status(void)
@@ -677,6 +708,26 @@ static void tab_rect(short i, Rect *r)
             (short)(gTabsRect.left + 2 + (i + 1) * w), gTabsRect.bottom);
 }
 
+/* A tab's context bar: a frame GAUGE_W by GAUGE_H at the label's right end,
+   filled from the bottom, gray below USAGE_NEAR_PERCENT and solid black from
+   there. Without a reading it is the frame alone. */
+static void draw_gauge(const Rect *tab, const Usage *u)
+{
+    Rect g, inner, f;
+    short fill;
+    SetRect(&g, (short)(tab->right - 4 - GAUGE_W), (short)(tab->top + 2), (short)(tab->right - 4),
+            (short)(tab->top + 2 + GAUGE_H));
+    FrameRect(&g);
+    inner = g;
+    InsetRect(&inner, 1, 1);
+    fill = (short)usage_fill(u, inner.bottom - inner.top);
+    if (fill > 0) {
+        f = inner;
+        f.top = (short)(inner.bottom - fill);
+        FillRect(&f, usage_near_full(u) ? &qd.black : &qd.gray);
+    }
+}
+
 /* One tab label. The front tab is open into the transcript; the others sit
    behind a line. Marks: a leading bullet while the turn runs, an underline
    for output that arrived in the background, and the whole label inverted
@@ -689,6 +740,7 @@ static void draw_tab(short i)
     short n = (short)strlen(t->project), room;
     Boolean front = t == gTab;
     Boolean waiting = t->want_perm;
+    Boolean gauge = session_usage_shown();
 
     tab_rect(i, &r);
     inner = r;
@@ -719,6 +771,8 @@ static void draw_tab(short i)
     memcpy(label + 1 + label[0], t->project, n);
     label[0] = (unsigned char)(label[0] + n);
     room = (short)(r.right - r.left - 8);
+    if (gauge)
+        room = (short)(room - GAUGE_W - 3);
     TruncString(room, label, truncMiddle);
     MoveTo(r.left + 4, r.bottom - 4);
     DrawString(label);
@@ -728,6 +782,8 @@ static void draw_tab(short i)
         LineTo(r.left + 4 + w, r.bottom - 2);
     }
     TextFace(0);
+    if (gauge)
+        draw_gauge(&r, &t->usage);
     if (waiting)
         InvertRect(&inner);
 }
@@ -814,6 +870,12 @@ void window_activate(Boolean active)
             TEDeactivate(gFocus);
     }
     HiliteControl(gScroll, active && gTrans ? 0 : 255);
+}
+
+void window_status_redraw(void)
+{
+    if (gWin)
+        draw_status();
 }
 
 void window_set_status(const char *s)

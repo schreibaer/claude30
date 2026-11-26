@@ -3,7 +3,8 @@
    folder. Version 1 prefs load with no remembered tabs, version 2 with
    the input box expanded, version 3 with the scroll bar shown, version 4
    with no resume tokens, version 5 with every tab at the bridge's model
-   and effort, version 6 with Stream Answers off in every tab.
+   and effort, version 6 with Stream Answers off in every tab, version 7
+   with the cost shown.
    Toolbox: Folder Manager (FindFolder), File Manager (FSMakeFSSpec),
    Resource Manager (FSpCreateResFile, FSpOpenResFile, Get1Resource,
    AddResource, ChangedResource, UpdateResFile), Dialog Manager. */
@@ -12,7 +13,7 @@
 
 #include <MacTypes.h>
 
-#define PREFS_VERSION 7
+#define PREFS_VERSION 8
 #define PREFS_TABS    6
 
 typedef struct {
@@ -28,6 +29,7 @@ typedef struct {
     char models[PREFS_TABS][32]; /* the tabs' models, C strings ("" = bridge default) */
     char efforts[PREFS_TABS][8]; /* the tabs' efforts, C strings ("" = bridge default) */
     char streams[PREFS_TABS];    /* 1 = Stream Answers on in the tab */
+    short hide_cost;             /* the status line leaves out the dollar figure */
 } Prefs;
 
 extern Prefs gPrefs;
