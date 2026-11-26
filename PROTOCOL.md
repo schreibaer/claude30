@@ -152,6 +152,7 @@ Every v1 bridge→client tag works per session with the digit in front: `<n>T`, 
 | `<n>O <name>` | Open session `<n>` in the project named `<name>`, exactly as the list spelled it. The client picks `<n>`. The bridge never builds a path from client text: a name that is not in a freshly built list is refused with `<n>X not available`. The reserved name `*` opens a chat instead, when `#OK` has the word `chat` (see Chats). |
 | `<n>Y <token> <name>` | Open session `<n>` and resume the conversation `<token>` (see Resume and heartbeat) |
 | `<n>M <model> <effort>` | Set the session's model and effort, whether or not it is open yet (see Model and effort) |
+| `<n>V on` / `<n>V off` | Stream Answers for session `<n>`, whether or not it is open yet (see Streaming answers). Only sent when `#OK` has the word `stream`. |
 | `<n>X` | Close session `<n>`. The bridge denies any open permission request, stops a running turn, stops the session and answers `<n>X closed`. No `!STOP` is needed first. |
 | `<n>P <line>` | One line of a prompt. A line ending in `\` continues on the next `<n>P` line; the bridge joins the lines with line breaks. Commands such as `/new`, `/edits on` and `/help` work and affect only this session. |
 | `<n>A <id> y` / `n` / `a` | Answer permission request `<id>` of session `<n>` |
@@ -284,7 +285,7 @@ B: 2>
 
 ## Subagents
 
-The capability word `agents` in `#OK` (`#OK se30bridge 2 files=rw resume ping models agents chat`) means the bridge can report Claude's subagents (the Agent tool) as lines a client rewrites in place. A client that wants them answers with `!AGENTS` once, after the project list. Without `!AGENTS`, and for ZTerm and v1, the bridge sends ordinary lines instead: `<n>U Agent <type>: <task>` when a subagent starts and `<n>U Agent <type> <status>: <summary>` when it ends (tty mode prints them as `  [Agent] ...`). A subagent's own prose and tool lines are never sent; only its start, its progress and its end are.
+The capability word `agents` in `#OK` (`#OK se30bridge 2 files=rw resume ping models agents chat stream`) means the bridge can report Claude's subagents (the Agent tool) as lines a client rewrites in place. A client that wants them answers with `!AGENTS` once, after the project list. Without `!AGENTS`, and for ZTerm and v1, the bridge sends ordinary lines instead: `<n>U Agent <type>: <task>` when a subagent starts and `<n>U Agent <type> <status>: <summary>` when it ends (tty mode prints them as `  [Agent] ...`). A subagent's own prose and tool lines are never sent; only its start, its progress and its end are.
 
 A client sends `!AGENTS` and the bridge then sends, per session:
 
@@ -300,7 +301,7 @@ When a turn ends, the bridge closes any subagent still open with `J-` and `stopp
 
 ## Chats
 
-The capability word `chat` in `#OK` (`#OK se30bridge 2 files=rw resume ping models agents chat`) means a client can open a conversation that belongs to no project. The client sends `<n>O *` (or `<n>Y <token> *` to resume one); `*` is never in the project list, and a project folder with that name is left out of it. The bridge answers as for a project: `<n>O *`, `<n>Y <token> new`, `<n>M ...` and `<n>>`, with the same refusals (`already open`, `too many tabs`, `could not start: ...`). A client sends `*` only after it saw `chat`; a bridge without the word refuses it with `<n>X not available`.
+The capability word `chat` in `#OK` (`#OK se30bridge 2 files=rw resume ping models agents chat stream`) means a client can open a conversation that belongs to no project. The client sends `<n>O *` (or `<n>Y <token> *` to resume one); `*` is never in the project list, and a project folder with that name is left out of it. The bridge answers as for a project: `<n>O *`, `<n>Y <token> new`, `<n>M ...` and `<n>>`, with the same refusals (`already open`, `too many tabs`, `could not start: ...`). A client sends `*` only after it saw `chat`; a bridge without the word refuses it with `<n>X not available`.
 
 A chat is a short-lived conversation:
 
@@ -311,6 +312,18 @@ A chat is a short-lived conversation:
 - `<n>X` ends a chat for good. Before it answers `<n>X closed` the bridge deletes the chat's resume record, its folder and the transcripts Claude Code saved for it, so a client that sends `<n>X` and then `!QUIT` leaves nothing behind. A dropped link or `!QUIT` alone keeps the chat so the next call can resume it. At the start of each call the bridge also deletes chats not used for 7 days and chat folders no record names, so a chat the app could not close does not stay on the host. A client that wants chats gone when it quits sends `<n>X` for each of them before `!QUIT`, and keeps no token for them.
 
 tty mode and v1 have no chats. Unknown words and tags are ignored by both sides, so version 2 is unchanged.
+
+## Streaming answers (`stream`)
+
+The capability word `stream` in `#OK` (`#OK se30bridge 2 files=rw resume ping models agents chat stream`) means a session can send Claude's prose while it is being written instead of when the whole message is done. A client that wants it sends `<n>V on`; `<n>V off` turns it off again. Like `<n>M` it is a preset when session `<n>` is not open yet and is applied when it opens; on an open session it takes effect at once, even in the middle of an answer, and affects only that session. A session starts with streaming off. Any other payload is ignored. A client sends `<n>V` only after it saw `stream`; a bridge without the word ignores the line like any unknown tag, so version 2 is unchanged.
+
+With streaming off the bridge sends exactly the lines it sent before. With it on, the text of an answer goes out in pieces as it arrives, using tags that already exist: the first piece of a paragraph is a `<n>T` line and each later piece of that paragraph is a `<n>+` line, which the client joins to the line before it with one space (nothing after a `C` line). So a client that already handles `T`/`+` needs no new code.
+
+- Prose is cut at spaces, so a word is never split. A piece is sent once about 100 bytes of whole words are waiting, or after about half a second when at least one whole word is waiting; the bridge checks this as text arrives and runs no timer. A piece is at most 200 bytes.
+- Code blocks are never cut mid-line: a line that is, or may become, a code fence, and everything inside a fence, is held until its newline and then sent as the `C` lines it would have been.
+- A `+` is only sent while the last line sent for that session is the open paragraph. If a tool, permission or other line went out in between, the next piece is sent as a `T` that starts a new line instead, so a client never glues text onto the wrong line.
+- Text a subagent writes is never streamed.
+- Streaming changes only the timing and the cuts, not the words: the pieces of a message, joined as above, equal the text sent with streaming off. tty mode and v1 do not stream.
 
 ## Files
 

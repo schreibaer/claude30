@@ -91,6 +91,14 @@ Each tab has its own Claude model and effort, so a quick question can run on a c
 - When either is set, the status line ends with it in brackets, for example `[sonnet, high]`. The tab remembers both across a redial and relaunching, and a tab reopened after a drop uses them from its first turn. If the bridge no longer offers a remembered model, the tab falls back to the bridge default and the transcript says so.
 - New tabs start at the bridge default. An older bridge (without `models`) leaves the menu item dimmed.
 
+### Stream Answers
+
+**Session > Stream Answers** is a checked item for the front tab. When it is on, Claude's prose appears as it is written, in pieces of a few words, instead of all at once after a long answer; code blocks still arrive one finished line at a time, and a subagent's own text stays hidden.
+
+- It takes effect at once, even in the middle of an answer, and only for that tab.
+- New tabs and chats start with it off. A project tab remembers it when you relaunch Claude30 (a chat does not outlive its tab).
+- It is dimmed while online against a bridge without streaming (the `stream` capability word), and the tab keeps its choice for a newer bridge.
+
 ### Project files
 
 **File > Open Project File…** (Cmd-O) browses the front tab's project, folders first. Double-click a folder to go into it, and **Up** (or Cmd-up arrow) to go back. Typing selects by name. The list hides `.git`, secrets such as `.env` and keys, and anything the project's git ignore rules exclude.
