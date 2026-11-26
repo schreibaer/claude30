@@ -23,6 +23,7 @@ enum { kKeyNone, kKeySend, kKeyHandled };
 enum { kClickNone, kClickSend, kClickTab };
 
 void window_create(void);
+int window_rule_len(void);      /* em dashes that fill the transcript width */
 /* Full screen: the window covers the whole screen and the menu bar is
    hidden (menus stay reachable by Command keys). Leaving it, or quitting or
    switching to another application, puts both back. */

@@ -1,5 +1,6 @@
 #include "tabs.h"
 #include <string.h>
+#include "window.h"
 
 static Tab gTabs[MAX_TABS];      /* by session id - 1 */
 static short gOrder[MAX_TABS];   /* strip order: indexes into gTabs */
@@ -18,6 +19,7 @@ Tab *tabs_add(const char *project, short sid)
     t->sid = sid;
     strncpy(t->project, project, TAB_NAME_MAX);
     batch_init(&t->batch);
+    batch_set_rule(&t->batch, window_rule_len());
     al_init(&t->agents);
     fold_init(&t->folds);
     t->agent_pending = -1;
