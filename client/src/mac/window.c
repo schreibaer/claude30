@@ -1,7 +1,9 @@
 #include "window.h"
+#include "find.h"
 #include "filewin.h"
 #include "heartbeat.h"
 #include "log.h"
+#include "logwin.h"
 #include "mascot.h"
 #include "modem.h"
 #include "prefs.h"
@@ -856,7 +858,7 @@ Boolean app_update(WindowPtr w)
         window_update();
         return true;
     }
-    return filewin_update(w);
+    return filewin_update(w) || logwin_update(w);
 }
 
 void window_activate(Boolean active)
@@ -1806,6 +1808,129 @@ Boolean window_scroll_key(EventRecord *ev)
         scroll_to_px(gTrans, px + dir * page);
     else
         scroll_to_px(gTrans, px + dir * 3L * gLineH);
+    return true;
+}
+
+/* ---- Find --------------------------------------------------------------- */
+
+/* Where the last find left the selection and the view. A selection or scroll
+   that has moved since means the person went elsewhere, and the next search
+   restarts from the view (R4). */
+static Tab *gFindTab;
+static long gFindStart, gFindEnd, gFindPx;
+
+static void find_remember(Tab *t)
+{
+    TEHandle te = t->trans;
+    gFindTab = t;
+    gFindStart = (*te)->selStart;
+    gFindEnd = (*te)->selEnd;
+    gFindPx = scrolled_px(te);
+}
+
+/* Selects [a, b) of the front tab's transcript and scrolls it into view. */
+static void find_show(Tab *t, long a, long b)
+{
+    TEHandle te = t->trans;
+    long line, px, viewH = gTransView.bottom - gTransView.top;
+    SetPort(gWin);
+    mascot_erase();
+    set_focus(te);
+    TESetSelect(a, b, te);
+    line = line_of(te, a);
+    px = line * (long)gLineH;
+    if (px < scrolled_px(te) || px + gLineH > scrolled_px(te) + viewH)
+        scroll_to_px(te, px - viewH / 3);
+    sync_scrollbar();
+    InvalRect(&gTransView);
+    find_remember(t);
+}
+
+long window_find_token(void)
+{
+    TEHandle te;
+    if (!gTab)
+        return 0;
+    te = gTab->trans;
+    return scrolled_px(te) * 1000003L + (*te)->selStart * 31L + (*te)->selEnd;
+}
+
+void window_find_reset(void)
+{
+    gFindTab = NULL;
+}
+
+Boolean window_find_restarts(void)
+{
+    TEHandle te;
+    if (!gTab || gFindTab != gTab)
+        return true;
+    te = gTab->trans;
+    return (*te)->selStart != gFindStart || (*te)->selEnd != gFindEnd
+        || scrolled_px(te) != gFindPx;
+}
+
+/* Searches the front tab's transcript, folds included, from the current view
+   or the last match: dir < 0 toward older text, dir > 0 toward newer. A match
+   in a closed fold opens the fold. Returns true when it selected one. */
+Boolean window_find(const char *pat, short dir)
+{
+    Tab *t = gTab;
+    TEHandle te;
+    long plen = (long)strlen(pat), start, a, bestoff = -1, bm = -1, m, len;
+    int i, best = -1;
+    char state;
+    if (!t || plen == 0)
+        return false;
+    te = t->trans;
+    len = (*te)->teLength;
+    if (window_find_restarts()) {
+        short ln = (short)(scrolled_px(te) / gLineH);
+        if (ln >= (*te)->nLines)
+            ln = (short)((*te)->nLines - 1);
+        start = ln < 0 ? 0 : (*te)->lineStarts[ln];
+    } else
+        start = dir < 0 ? (*te)->selStart : (*te)->selEnd;
+
+    state = HGetState((*te)->hText);
+    HLock((*te)->hText);
+    a = dir < 0 ? find_backward(*(*te)->hText, len, start, pat, plen)
+                : find_forward(*(*te)->hText, len, start, pat, plen);
+    HSetState((*te)->hText, state);
+
+    /* A closed fold stands at its marker's place: the nearest wins. */
+    for (i = 0; i < t->folds.n; i++) {
+        Fold *f = &t->folds.f[i];
+        if (f->open || f->growing || !f->body || f->body_len == 0)
+            continue;
+        if (dir < 0 ? f->off >= start : f->off < start)
+            continue;
+        if (dir < 0 ? (a >= 0 && f->off <= a) : (a >= 0 && f->off >= a))
+            continue;
+        if (best >= 0 && (dir < 0 ? f->off <= bestoff : f->off >= bestoff))
+            continue;
+        m = dir < 0 ? find_backward(f->body, f->body_len, f->body_len, pat, plen)
+                    : find_forward(f->body, f->body_len, 0, pat, plen);
+        if (m >= 0) {
+            best = i;
+            bestoff = f->off;
+            bm = m;
+        }
+    }
+    if (best >= 0) {
+        long id = t->folds.f[best].id;
+        int idx;
+        fold_flip(t, best);
+        idx = fold_by_id(&t->folds, id);
+        if (idx < 0 || !t->folds.f[idx].open)
+            return false;
+        a = t->folds.f[idx].off + t->folds.f[idx].len + 1 + bm;
+        find_show(t, a, a + plen);
+        return true;
+    }
+    if (a < 0)
+        return false;
+    find_show(t, a, a + plen);
     return true;
 }
 

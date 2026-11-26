@@ -6,6 +6,8 @@
    Manager, Text Utilities (TruncString). No Color QuickDraw, no floating
    point, no TCP/IP. */
 #include "filewin.h"
+#include "finddlg.h"
+#include "logwin.h"
 #include "files.h"
 #include "linktest.h"
 #include "log.h"
@@ -130,6 +132,15 @@ static void build_window_menu(void)
             CheckItem(gWindow, n, w == front);
         }
     }
+    if (logwin_ptr()) {
+        if (CountMItems(gWindow) > 0)
+            AppendMenu(gWindow, "\p(-");
+        GetWTitle(logwin_ptr(), s);
+        AppendMenu(gWindow, "\px");
+        n = CountMItems(gWindow);
+        SetMenuItemText(gWindow, n, s);
+        CheckItem(gWindow, n, logwin_ptr() == front);
+    }
     if (CountMItems(gWindow) == 0) {
         AppendMenu(gWindow, "\pNo Windows");
         DisableItem(gWindow, 1);
@@ -150,7 +161,7 @@ static void adjust_menus(void)
         Tab *owner = fw ? tabs_by_sid(filewin_sid(front)) : t;
         enable(gFile, kOpenFileItem, online && owner && !owner->chat && session_tab_ready(owner));
     }
-    enable(gFile, file_item(kCloseItem), fw || (front == window_ptr() && t != NULL));
+    enable(gFile, file_item(kCloseItem), fw || logwin_is(front) || (front == window_ptr() && t != NULL));
     enable(gFile, file_item(kSaveItem), fw && filewin_can_save(front));
     enable(gFile, file_item(kRevertItem), fw && filewin_can_revert(front));
     enable(gFile, file_item(kFullScreenItem), filewin_count() == 0);
@@ -171,11 +182,18 @@ static void adjust_menus(void)
     CheckItem(gSession, kStreamItem, session_stream_on());
     enable(gSession, kLinkTestItem, s == ST_IDLE);
 
-    enable(gEdit, kUndoItem, !fw && front != window_ptr());
-    enable(gEdit, kCutItem, !fw || filewin_editable(front));
-    enable(gEdit, kCopyItem, true);
-    enable(gEdit, kPasteItem, !fw || filewin_editable(front));
-    enable(gEdit, kClearItem, !fw || filewin_editable(front));
+    {
+        Boolean lw = logwin_is(front), can_find = fw || lw || (front == window_ptr() && t != NULL);
+        enable(gEdit, kUndoItem, !fw && !lw && front != window_ptr());
+        enable(gEdit, kCutItem, !lw && (!fw || filewin_editable(front)));
+        enable(gEdit, kCopyItem, true);
+        enable(gEdit, kPasteItem, !lw && (!fw || filewin_editable(front)));
+        enable(gEdit, kClearItem, !lw && (!fw || filewin_editable(front)));
+        enable(gEdit, kSelectAllItem, !lw);
+        enable(gEdit, kFindItem, can_find);
+        enable(gEdit, kFindAgainItem, can_find);
+        enable(gEdit, kFindNewerItem, can_find);
+    }
     build_window_menu();
 }
 
@@ -248,7 +266,9 @@ static void open_project_file(void)
 static void close_front(void)
 {
     WindowPtr front = FrontWindow();
-    if (filewin_is(front))
+    if (logwin_is(front))
+        logwin_close();
+    else if (filewin_is(front))
         filewin_close(front);
     else if (front == window_ptr())
         session_close_tab(tabs_front());
@@ -268,6 +288,11 @@ static void choose_window_item(short item)
         if (t && t != tabs_front())
             session_select_tab(t);
         SelectWindow(w);
+    } else if (logwin_ptr()) {
+        Tab *t = tabs_by_sid(logwin_sid());
+        if (t && t != tabs_front())
+            session_select_tab(t);
+        SelectWindow(logwin_ptr());
     }
 }
 
@@ -275,6 +300,103 @@ static void choose_window_item(short item)
 static Boolean item_enabled(MenuHandle m, short item)
 {
     return ((*m)->enableFlags & (1UL << item)) != 0;
+}
+
+/* ---- Find ---------------------------------------------------------------- */
+
+static char gFindStr[64];
+static Tab *gLogPending;         /* the window search ran out: Cmd-G goes on in the log */
+static long gPendingToken;       /* the view it ran out in */
+
+static void log_step(Tab *t, short dir)
+{
+    switch (logwin_search(t, gFindStr, dir)) {
+    case LOG_FOUND:
+        break;
+    case LOG_NONE:
+        SysBeep(1);
+        if (dir < 0) {
+            window_set_status("No more matches in the log.");
+        } else {
+            /* Past the newest log match: the transcript comes back. */
+            SelectWindow(window_ptr());
+            window_set_status("No newer matches in the log. Back in the transcript.");
+        }
+        break;
+    case LOG_UNAVAILABLE:
+        SysBeep(1);
+        window_set_status("A chat keeps no log. Not found.");
+        break;
+    default:
+        SysBeep(1);
+        window_set_status("The log could not be read.");
+        break;
+    }
+}
+
+/* Cmd-G (newer false) and Cmd-Shift-G (newer true). In a transcript and the
+   Log window Cmd-G goes toward older text; in a file window toward the end,
+   the way a file is read. */
+static void find_again(Boolean newer)
+{
+    WindowPtr front = FrontWindow();
+    Tab *t;
+    short dir = newer ? 1 : -1;
+    if (!gFindStr[0]) {
+        if (finddlg_run(gFindStr, sizeof(gFindStr))) {
+            window_find_reset();
+            logwin_reset();
+            gLogPending = NULL;
+            find_again(false);
+        }
+        return;
+    }
+    if (filewin_is(front)) {
+        if (!filewin_find(front, gFindStr, (short)-dir)) {
+            SysBeep(1);
+            window_set_status(filewin_find_partial(front)
+                              ? "Not found in the lines loaded so far." : "Not found.");
+        }
+        return;
+    }
+    if (logwin_is(front)) {
+        t = tabs_by_sid(logwin_sid());
+        if (t)
+            log_step(t, dir);
+        return;
+    }
+    t = tabs_front();
+    if (front != window_ptr() || !t) {
+        SysBeep(1);
+        return;
+    }
+    if (dir < 0 && gLogPending == t && gPendingToken == window_find_token()) {
+        log_step(t, dir);
+        return;
+    }
+    gLogPending = NULL;
+    if (window_find(gFindStr, dir))
+        return;
+    SysBeep(1);
+    if (dir < 0 && !t->chat) {
+        gLogPending = t;
+        gPendingToken = window_find_token();
+        window_set_status("Not in window. Cmd-G searches the log.");
+    } else
+        window_set_status("Not found.");
+}
+
+static void find_dialog(void)
+{
+    char s[sizeof(gFindStr)];
+    strcpy(s, gFindStr);
+    if (finddlg_run(s, sizeof(s))) {
+        strcpy(gFindStr, s);
+        window_find_reset();
+        logwin_reset();
+        gLogPending = NULL;
+        find_again(false);
+    }
 }
 
 static void toggle_full_screen(void)
@@ -313,6 +435,15 @@ static void do_menu(long choice)
             if (item == kSettingsItem) {
                 if (prefs_dialog())
                     window_prefs_changed();
+            } else if (item == kFindItem) {
+                find_dialog();
+            } else if (item == kFindAgainItem) {
+                find_again(false);
+            } else if (item == kFindNewerItem) {
+                find_again(true);
+            } else if (logwin_is(front)) {
+                if (item == kCopyItem)
+                    logwin_copy();
             } else if (filewin_is(front))
                 filewin_edit(front, item);
             else
@@ -366,8 +497,12 @@ static void do_mouse(EventRecord *ev)
         filewin_zoom(w, part, ev->where);
         break;
     case inGoAway:
-        if (TrackGoAway(w, ev->where) && filewin_is(w))
-            filewin_close(w);
+        if (TrackGoAway(w, ev->where)) {
+            if (filewin_is(w))
+                filewin_close(w);
+            else if (logwin_is(w))
+                logwin_close();
+        }
         break;
     case inContent:
         if (w != FrontWindow()) {
@@ -379,6 +514,8 @@ static void do_mouse(EventRecord *ev)
             }
         } else if (filewin_is(w)) {
             filewin_click(w, ev);
+        } else if (logwin_is(w)) {
+            logwin_click(w, ev);
         }
         break;
     }
@@ -407,6 +544,10 @@ static void do_key(EventRecord *ev)
         if (ev->what != keyDown)
             return;
         adjust_menus();
+        if (lc == 'g') {
+            find_again(true);
+            return;
+        }
         if (lc == 'f') {
             if (item_enabled(gFile, file_item(kFullScreenItem)))
                 toggle_full_screen();
@@ -435,6 +576,8 @@ static void do_key(EventRecord *ev)
             session_send_input();
     } else if (filewin_is(front)) {
         filewin_key(front, ev);
+    } else if (logwin_is(front)) {
+        logwin_key(front, ev);
     }
 }
 
@@ -442,6 +585,8 @@ static void activate(WindowPtr w, Boolean on)
 {
     if (w == window_ptr())
         window_activate(on);
+    else if (logwin_is(w))
+        logwin_activate(w, on);
     else
         filewin_activate(w, on);
 }

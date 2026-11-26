@@ -95,6 +95,18 @@ Boolean window_scroll_key(EventRecord *ev);
 void window_toggle_fold_key(void);
 Boolean window_fold_available(void);
 
+/* Find: searches the front tab's transcript and its closed folds toward older
+   (dir < 0) or newer text, from the last match or else from the view. A
+   match in a closed fold opens the fold. True when a match is selected. */
+Boolean window_find(const char *pat, short dir);
+/* True when the next search starts from the view (nothing found yet, or the
+   person moved the selection or scrolled since). */
+Boolean window_find_restarts(void);
+/* A new Find string: the next search starts from the view. */
+void window_find_reset(void);
+/* A number that changes when the front tab's view or selection moves. */
+long window_find_token(void);
+
 /* Edit menu commands for the front tab. */
 void window_edit(short item);
 

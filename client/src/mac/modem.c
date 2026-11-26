@@ -1,4 +1,5 @@
 #include "modem.h"
+#include "logwin.h"
 #include "batch.h"
 #include "chatlabel.h"
 #include "files.h"
@@ -922,10 +923,12 @@ static void drop_refused_tabs(void)
     for (i = tabs_count() - 1; i >= 0; i--) {
         t = tabs_at(i);
         if (t->refused) {
+            logwin_tab_closed(t->sid);
             window_tab_free(t);
             tabs_remove(t);
             window_show_tab(tabs_front());
             filewin_show_tab(tabs_front() ? tabs_front()->sid : 0);
+            logwin_show_tab(tabs_front() ? tabs_front()->sid : 0);
             remember_tabs();
             gTabsChanged = true;
         }
@@ -1039,6 +1042,7 @@ void session_select_tab(Tab *t)
         tabs_set_front(t);
         window_show_tab(t);
         filewin_show_tab(t->sid);
+        logwin_show_tab(t->sid);
     }
     if (FrontWindow() != window_ptr())
         SelectWindow(window_ptr());
@@ -1160,10 +1164,12 @@ Boolean session_close_tab(Tab *t)
         proto_close(&gProto, t->sid);
     permdlg_request_close(&t->perm);
     window_append(t);                /* the last lines reach its log */
+    logwin_tab_closed(t->sid);
     window_tab_free(t);
     tabs_remove(t);
     window_show_tab(tabs_front());
     filewin_show_tab(tabs_front() ? tabs_front()->sid : 0);
+    logwin_show_tab(tabs_front() ? tabs_front()->sid : 0);
     remember_tabs();
     window_draw_tabs();
     update_status();
