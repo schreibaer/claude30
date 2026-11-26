@@ -21,10 +21,20 @@ typedef enum {
     RS_COUNT
 } RunStyle;
 
+/* Faces a prose run can add to its kind's own: the window turns them into
+   a Toolbox Style and, for BF_MONO, Monaco instead of Geneva. Only prose
+   runs carry any. */
+#define BF_BOLD    1
+#define BF_ITALIC  2
+#define BF_UNDER   4
+#define BF_EXTEND  8
+#define BF_MONO    16
+
 typedef struct {
     RunStyle style;
     long start;
     long len;
+    unsigned char flags;   /* BF_* */
 } Run;
 
 /* Hard limits that keep any single insert well inside TextEdit's 32 KB. */
@@ -48,6 +58,9 @@ typedef struct {
     int oom;            /* memory ran out; some text was dropped */
     long code_line;     /* the last line number given in the current code block */
     int prose_open;     /* the last thing drawn was prose, so a + may continue it */
+    unsigned char flags; /* BF_* faces for the bytes being put (mdstyle.c sets it) */
+    int rule_len;       /* em dashes in a horizontal rule; the window sets it */
+    struct MdStyle *md; /* the Markdown styler's state, made when prose first arrives */
 } Batch;
 
 /* Code lines carry their line number in the block, right-aligned in 3
@@ -60,6 +73,16 @@ void batch_free(Batch *b);
 void batch_clear(Batch *b);
 /* Starts the next block on a fresh line, e.g. after the transcript was
    emptied (call with 0) or when text already exists (call with 1). */
+
+/* Prose is Markdown: emphasis, inline code, links, headings, lists, quotes,
+   rules and table rows become faces and glyphs (mdstyle.h). The window tells
+   the batcher how wide a rule is. */
+void batch_set_rule(Batch *b, int em_dashes);
+/* Ends the paragraph that is still open, so text held back while waiting for
+   a closing mark is drawn as typed. Every block that is not prose does this. */
+void batch_flush(Batch *b);
+/* Puts prose bytes with faces, for mdstyle.c: LF becomes CR, long lines break. */
+void batch_put_prose(Batch *b, unsigned char flags, const char *text, long len);
 
 void batch_event(Batch *b, EventKind kind, const char *text, long len);
 void batch_prompt(Batch *b, const char *text, long len);

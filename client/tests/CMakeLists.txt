@@ -14,6 +14,7 @@ add_library(core STATIC
     ${CORE}/prompt.c
     ${CORE}/protocol.c
     ${CORE}/batch.c
+    ${CORE}/mdstyle.c
     ${CORE}/files.c
     ${CORE}/crc32.c
     ${CORE}/mascot.c
@@ -26,7 +27,7 @@ add_library(core STATIC
 target_include_directories(core PUBLIC ${CORE})
 
 enable_testing()
-foreach(t test_linebuf_prompt test_protocol test_batch test_files test_mascot test_promptmarks test_heartbeat test_agentline test_permsum test_fold test_chatlabel)
+foreach(t test_linebuf_prompt test_protocol test_batch test_mdstyle test_files test_mascot test_promptmarks test_heartbeat test_agentline test_permsum test_fold test_chatlabel)
     add_executable(${t} ${t}.c)
     target_link_libraries(${t} core)
     target_compile_definitions(${t} PRIVATE FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures")

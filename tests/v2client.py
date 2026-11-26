@@ -111,13 +111,15 @@ class Client:
     def wait_line(self, line, timeout=10, start=0):
         return self.wait_for(lambda l: l == line, timeout, start)
 
-    def hello(self, agents=False):
+    def hello(self, agents=False, md=False):
         self.send(b"")
         self.send("#HELLO SE30 2")
         self.wait_for(lambda l: l.startswith("#OK se30bridge 2"))
         i = self.wait_line("P]")
         if agents:
             self.send("!AGENTS")
+        if md:
+            self.send("!MD")
         return i
 
     def projects(self, start=0):

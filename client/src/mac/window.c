@@ -73,7 +73,7 @@ static void measure_fonts(void)
     for (font = 3; font <= 4; font++) {
         TextFont(font);
         TextSize(FONT_SIZE);
-        TextFace(bold | italic);
+        TextFace(bold | italic | underline | extend);
         GetFontInfo(&fi);
         if (fi.ascent + fi.descent + fi.leading > h)
             h = fi.ascent + fi.descent + fi.leading;
@@ -83,6 +83,36 @@ static void measure_fonts(void)
     TextFace(0);
     gLineH = h;
     gAscent = a;
+}
+
+/* How many em dashes (Geneva 9) fill the transcript's width: a Markdown rule. */
+static int gRuleEm = 40;
+
+int window_rule_len(void)
+{
+    return gRuleEm;
+}
+
+static void set_rule_len(void)
+{
+    short i, w, em;
+    if (gTransView.right <= gTransView.left)
+        return;
+    TextFont(3);
+    TextSize(FONT_SIZE);
+    TextFace(0);
+    em = CharWidth(0xD1);
+    TextFace(0);
+    if (em < 1)
+        return;
+    w = gTransView.right - gTransView.left;
+    gRuleEm = w / em;
+    if (gRuleEm < 8)
+        gRuleEm = 8;
+    if (gRuleEm > 120)
+        gRuleEm = 120;
+    for (i = 0; i < tabs_count(); i++)
+        batch_set_rule(&tabs_at(i)->batch, gRuleEm);
 }
 
 /* ---- layout ------------------------------------------------------------- */
@@ -141,6 +171,7 @@ static void layout(void)
         SetRect(&gSendRect, gInputView.right + 8, gInputView.top + 8, r.right - 8,
                 gInputView.top + 28);
     }
+    set_rule_len();
 }
 
 /* ---- drawing suppression for background records ---------------------------- */
@@ -832,7 +863,8 @@ void window_show_tab(Tab *t)
 
 static StScrpHandle gScrap;   /* one-style scrap reused for every insert */
 
-static void insert_at(TEHandle te, long n, const char *text, long len, RunStyle style)
+static void insert_at(TEHandle te, long n, const char *text, long len, RunStyle style,
+                      unsigned char flags)
 {
     ScrpSTElement *e;
     if (!gScrap) {
@@ -845,16 +877,25 @@ static void insert_at(TEHandle te, long n, const char *text, long len, RunStyle 
     e->scrpStartChar = 0;
     e->scrpHeight = gLineH;
     e->scrpAscent = gAscent;
-    e->scrpFont = kStyles[style].font;
+    e->scrpFont = (flags & BF_MONO) ? 4 : kStyles[style].font;
     e->scrpFace = kStyles[style].face;
+    if (flags & BF_BOLD)
+        e->scrpFace |= bold;
+    if (flags & BF_ITALIC)
+        e->scrpFace |= italic;
+    if (flags & BF_UNDER)
+        e->scrpFace |= underline;
+    if (flags & BF_EXTEND)
+        e->scrpFace |= extend;
     e->scrpSize = FONT_SIZE;
     TESetSelect(n, n, te);
     TEStyleInsert((Ptr)text, len, gScrap, te);
 }
 
-static void insert_run(TEHandle te, const char *text, long len, RunStyle style)
+static void insert_run(TEHandle te, const char *text, long len, RunStyle style,
+                       unsigned char flags)
 {
-    insert_at(te, (*te)->teLength, text, len, style);
+    insert_at(te, (*te)->teLength, text, len, style, flags);
 }
 
 /* ---- folds -------------------------------------------------------------- */
@@ -887,7 +928,7 @@ static void fold_replace_cb(void *ctx, long off, long oldlen, const char *text,
         TESetSelect(off, off + oldlen, te);
         TEDelete(te);
     }
-    insert_at(te, off, text, tlen, kind == FK_CODE ? RS_CODE : RS_TOOL);
+    insert_at(te, off, text, tlen, kind == FK_CODE ? RS_CODE : RS_TOOL, 0);
     if (st > off)
         st = st >= off + oldlen ? st + delta : off + tlen;
     if (en > off)
@@ -1062,7 +1103,8 @@ void window_append(Tab *t)
             t->agent_pending = -1;
         }
         base = (*te)->teLength;
-        insert_run(te, b->text + b->runs[i].start, b->runs[i].len, b->runs[i].style);
+        insert_run(te, b->text + b->runs[i].start, b->runs[i].len, b->runs[i].style,
+                   b->runs[i].flags);
         fold_append(&t->folds, &fops, b->runs[i].style, b->text + b->runs[i].start,
                     b->runs[i].len, base);
     }
@@ -1159,7 +1201,7 @@ void window_agent_update(Tab *t, int slot, const char *text)
     ClipRect(&empty);
     TESetSelect(off, off + oldlen, te);
     TEDelete(te);
-    insert_at(te, off, buf, len, RS_AGENT);
+    insert_at(te, off, buf, len, RS_AGENT, 0);
     if (st > off)
         st = st >= off + oldlen ? st + delta : off + len;
     if (en > off)

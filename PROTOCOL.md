@@ -129,6 +129,7 @@ Both sides ignore a session line whose tag they do not know, and a line for a se
 | `!QUIT` | End the call. The bridge stops every session and exits. |
 | `!PING` | Heartbeat (see Resume and heartbeat) |
 | `!AGENTS` | Send subagent progress as `J` lines (see Subagents). Only a client that saw the `agents` word sends it. |
+| `!MD` | Keep Markdown marks in prose (see Markdown prose). Only a client that saw the `md` word sends it. |
 
 ### Session lines, bridge → client
 
@@ -285,7 +286,7 @@ B: 2>
 
 ## Subagents
 
-The capability word `agents` in `#OK` (`#OK se30bridge 2 files=rw resume ping models agents chat stream`) means the bridge can report Claude's subagents (the Agent tool) as lines a client rewrites in place. A client that wants them answers with `!AGENTS` once, after the project list. Without `!AGENTS`, and for ZTerm and v1, the bridge sends ordinary lines instead: `<n>U Agent <type>: <task>` when a subagent starts and `<n>U Agent <type> <status>: <summary>` when it ends (tty mode prints them as `  [Agent] ...`). A subagent's own prose and tool lines are never sent; only its start, its progress and its end are.
+The capability word `agents` in `#OK` (`#OK se30bridge 2 files=rw resume ping models agents chat stream md`) means the bridge can report Claude's subagents (the Agent tool) as lines a client rewrites in place. A client that wants them answers with `!AGENTS` once, after the project list. Without `!AGENTS`, and for ZTerm and v1, the bridge sends ordinary lines instead: `<n>U Agent <type>: <task>` when a subagent starts and `<n>U Agent <type> <status>: <summary>` when it ends (tty mode prints them as `  [Agent] ...`). A subagent's own prose and tool lines are never sent; only its start, its progress and its end are.
 
 A client sends `!AGENTS` and the bridge then sends, per session:
 
@@ -301,7 +302,7 @@ When a turn ends, the bridge closes any subagent still open with `J-` and `stopp
 
 ## Chats
 
-The capability word `chat` in `#OK` (`#OK se30bridge 2 files=rw resume ping models agents chat stream`) means a client can open a conversation that belongs to no project. The client sends `<n>O *` (or `<n>Y <token> *` to resume one); `*` is never in the project list, and a project folder with that name is left out of it. The bridge answers as for a project: `<n>O *`, `<n>Y <token> new`, `<n>M ...` and `<n>>`, with the same refusals (`already open`, `too many tabs`, `could not start: ...`). A client sends `*` only after it saw `chat`; a bridge without the word refuses it with `<n>X not available`.
+The capability word `chat` in `#OK` (`#OK se30bridge 2 files=rw resume ping models agents chat stream md`) means a client can open a conversation that belongs to no project. The client sends `<n>O *` (or `<n>Y <token> *` to resume one); `*` is never in the project list, and a project folder with that name is left out of it. The bridge answers as for a project: `<n>O *`, `<n>Y <token> new`, `<n>M ...` and `<n>>`, with the same refusals (`already open`, `too many tabs`, `could not start: ...`). A client sends `*` only after it saw `chat`; a bridge without the word refuses it with `<n>X not available`.
 
 A chat is a short-lived conversation:
 
@@ -315,7 +316,7 @@ tty mode and v1 have no chats. Unknown words and tags are ignored by both sides,
 
 ## Streaming answers (`stream`)
 
-The capability word `stream` in `#OK` (`#OK se30bridge 2 files=rw resume ping models agents chat stream`) means a session can send Claude's prose while it is being written instead of when the whole message is done. A client that wants it sends `<n>V on`; `<n>V off` turns it off again. Like `<n>M` it is a preset when session `<n>` is not open yet and is applied when it opens; on an open session it takes effect at once, even in the middle of an answer, and affects only that session. A session starts with streaming off. Any other payload is ignored. A client sends `<n>V` only after it saw `stream`; a bridge without the word ignores the line like any unknown tag, so version 2 is unchanged.
+The capability word `stream` in `#OK` (`#OK se30bridge 2 files=rw resume ping models agents chat stream md`) means a session can send Claude's prose while it is being written instead of when the whole message is done. A client that wants it sends `<n>V on`; `<n>V off` turns it off again. Like `<n>M` it is a preset when session `<n>` is not open yet and is applied when it opens; on an open session it takes effect at once, even in the middle of an answer, and affects only that session. A session starts with streaming off. Any other payload is ignored. A client sends `<n>V` only after it saw `stream`; a bridge without the word ignores the line like any unknown tag, so version 2 is unchanged.
 
 With streaming off the bridge sends exactly the lines it sent before. With it on, the text of an answer goes out in pieces as it arrives, using tags that already exist: the first piece of a paragraph is a `<n>T` line and each later piece of that paragraph is a `<n>+` line, which the client joins to the line before it with one space (nothing after a `C` line). So a client that already handles `T`/`+` needs no new code.
 
@@ -324,6 +325,14 @@ With streaming off the bridge sends exactly the lines it sent before. With it on
 - A `+` is only sent while the last line sent for that session is the open paragraph. If a tool, permission or other line went out in between, the next piece is sent as a `T` that starts a new line instead, so a client never glues text onto the wrong line.
 - Text a subagent writes is never streamed.
 - Streaming changes only the timing and the cuts, not the words: the pieces of a message, joined as above, equal the text sent with streaming off. tty mode and v1 do not stream.
+
+## Markdown prose (`md`)
+
+The capability word `md` in `#OK` means the bridge can leave Markdown marks in Claude's prose for a client that draws them. A client that wants them answers with `!MD` once, after the project list; it applies to the whole call, and repeating it does no harm. `--no-md` on the bridge leaves the word out and ignores the line.
+
+Without `!MD`, and for ZTerm, tty mode and v1, nothing changes: the bridge strips `**` and `__` from `T`, `+` and `C` lines. After `!MD` it keeps those marks in all three, and strips nothing else. Backticks, `#`, `-`, `>`, `|` and link marks were never stripped, so the client already received them. Streaming (`<n>V on`) cuts and joins the lines as before; a client that styles must treat a `+` as the continuation of the line before it, so a mark that opens in one piece and closes in a later one still pairs. Code inside a fence is sent as `C` lines and is not styled by the client.
+
+After `!MD` the bridge also tells Claude, in the line it adds to the system prompt (and in the chat prompt), which Markdown the screen draws; without it the prompt still asks for plain ASCII and no tables. A session opened before `!MD` keeps the plain prompt. What a client does with the marks is up to it. Claude30 draws `**bold**`, `*italic*`, `` `code` ``, links, headings, quotes, lists, rules and tables in Geneva and Monaco, and shows anything that is not well-formed Markdown as typed.
 
 ## Files
 

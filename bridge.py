@@ -180,11 +180,19 @@ def split_payload(tag, line):
         first = False
 
 
+def strip_marks(s, keep):
+    """Prose as the app got it before !MD: bold marks removed. An app that
+    sent !MD (keep) gets them, and code lines with them, as Claude wrote."""
+    return s if keep else s.replace("**", "").replace("__", "")
+
+
 def app_text_lines(md, fence):
     """Claude's prose as app-mode (tag, payload) pairs. fence is an object
-    whose _in_fence attribute tracks code fences across calls."""
+    whose _in_fence attribute tracks code fences across calls; its keep_marks
+    attribute, when true, leaves ** and __ in the text (see !MD)."""
     out = []
-    for line in md.replace("**", "").replace("__", "").split("\n"):
+    keep = bool(getattr(fence, "keep_marks", False))
+    for line in strip_marks(md, keep).split("\n"):
         if line.strip().startswith("```"):
             fence._in_fence = not fence._in_fence
             out.append(("C[" if fence._in_fence else "C]", ""))
@@ -233,9 +241,8 @@ class StreamChunker:
         self._end_line(out)
         return out
 
-    @staticmethod
-    def _plain(s):
-        return s.replace("**", "").replace("__", "")
+    def _plain(self, s):
+        return strip_marks(s, bool(getattr(self.fence, "keep_marks", False)))
 
     def _end_line(self, out):
         line, opened = self.line, self.opened
@@ -749,8 +756,23 @@ SYSTEM_APPEND = (
     "The user is working from a 1989 Macintosh SE/30 over a slow serial link: "
     "a small monochrome screen about {cols} columns wide. Keep replies concise. "
     "Prefer short paragraphs and short code excerpts; don't repeat large files "
-    "back. Avoid tables, emoji and decorative Unicode; plain ASCII is best."
+    "back. {style}"
 )
+
+# The style sentence for both prompts. A client that sent !MD draws Markdown
+# (see PROTOCOL.md, Markdown prose); ZTerm, tty mode and older apps show it
+# as typed.
+STYLE_PLAIN = "Avoid tables, emoji and decorative Unicode; plain ASCII is best."
+STYLE_MD = (
+    "The screen draws Markdown: **bold**, *italic*, `code`, # headings, - lists, "
+    "> quotes, --- rules, [links](url) and fenced code; tables only when narrow, "
+    "in a fixed-width font. No strikethrough, emoji or decorative Unicode; plain "
+    "ASCII is best."
+)
+
+
+def style_sentence(term):
+    return STYLE_MD if getattr(term, "keep_marks", False) else STYLE_PLAIN
 
 
 # A chat (v2 only) is a conversation outside any project: its own empty
@@ -761,9 +783,8 @@ CHAT_PROMPT = (
     "link: a small monochrome screen about {cols} columns wide. This is a casual "
     "conversation, not a coding session. You can look things up with web search "
     "and web fetch. You have no other tools: you cannot read or change files or "
-    "run commands. Keep replies short and conversational. Prefer short paragraphs; "
-    "avoid tables, emoji and decorative Unicode; plain ASCII is best. Don't repeat "
-    "large amounts of text back."
+    "run commands. Keep replies short and conversational. Prefer short paragraphs. "
+    "{style} Don't repeat large amounts of text back."
 )
 CHAT_TOOLS = ["WebSearch", "WebFetch"]
 
@@ -1018,7 +1039,8 @@ class ClaudeSession:
                 permission_mode="default",
                 tools=list(CHAT_TOOLS),
                 can_use_tool=self._can_use_tool,
-                system_prompt=CHAT_PROMPT.format(cols=self.term.cols),
+                system_prompt=CHAT_PROMPT.format(cols=self.term.cols,
+                                                 style=style_sentence(self.term)),
                 setting_sources=[],
                 strict_mcp_config=True,
             )
@@ -1029,7 +1051,8 @@ class ClaudeSession:
                 allowed_tools=["Read", "Glob", "Grep", "TodoWrite"],
                 can_use_tool=self._can_use_tool,
                 system_prompt={"type": "preset", "preset": "claude_code",
-                               "append": SYSTEM_APPEND.format(cols=self.term.cols)},
+                               "append": SYSTEM_APPEND.format(
+                                   cols=self.term.cols, style=style_sentence(self.term))},
                 setting_sources=["user", "project", "local"],
             )
         if self.cfg.model:
@@ -1307,6 +1330,35 @@ LONG_DEMO = (
     "streams like any other text.")
 
 
+# An answer with every element the app styles (prompt word "styles").
+STYLES_DEMO = (
+    "# Styles demo\n"
+    "## A second level heading\n"
+    "### A third level heading\n"
+    "\n"
+    "Text with **bold**, *italic*, ***bold italic***, __bold too__, _italic too_ and `inline code` "
+    "side by side, a [link to the docs](https://example.com/docs) and https://example.com/bare "
+    "on a line, and snake_case_name, 2 * 3 and ~~strike~~ shown as typed. Escaped: \\*star\\*.\n"
+    "*Note: this asterisk never closes\n"
+    "\n"
+    "- first item with **bold**\n"
+    "  - nested item with `code`\n"
+    "- second item\n"
+    "1. numbered one\n"
+    "2. numbered two\n"
+    "\n"
+    "> a quoted *line*\n"
+    "\n"
+    "---\n"
+    "\n"
+    "| name | value |\n"
+    "|------|:-----:|\n"
+    "| a    | 1     |\n"
+    "\n"
+    "```python\ndef __init__(self, **kwargs):\n    pass\n```\n"
+    "That is all of it.")
+
+
 class DemoSession:
     """Fake Claude, for testing the serial link and the client."""
 
@@ -1436,23 +1488,24 @@ class DemoSession:
         if self._block:
             await self._block.switched()
 
-    async def _long_turn(self, prompt):
-        """One long text block (the prompt has the word "streaming"), fed in
-        small slices so that streaming shows.
+    async def _long_turn(self, prompt, text=None):
+        """One long text block (the prompt has the word "streaming", or
+        "styles" for STYLES_DEMO), fed in small slices so that streaming shows.
         With the word "tool" a tool line comes in the middle of it."""
         t = self.term
+        text = text or LONG_DEMO
         delay = float(os.environ.get("SE30_DEMO_STREAM_DELAY", "0.005") or 0)
         self._block = block = BlockStream(t)
         try:
-            for n, i in enumerate(range(0, len(LONG_DEMO), 12)):
+            for n, i in enumerate(range(0, len(text), 12)):
                 if self._stop:
                     await block.flush()
                     return await t.result("interrupted", 0.0)
                 await asyncio.sleep(delay)
-                await block.delta(LONG_DEMO[i:i + 12])
+                await block.delta(text[i:i + 12])
                 if n == 30 and "tool" in prompt.lower().split():
                     await t.tool("Read", "src/parser.py")
-            await block.end(LONG_DEMO)
+            await block.end(text)
         finally:
             self._block = None
         await t.result("success", 0.0)
@@ -1464,6 +1517,8 @@ class DemoSession:
             await self.follow()
         if "streaming" in prompt.lower().split():
             return await self._long_turn(prompt)
+        if "styles" in prompt.lower().split():
+            return await self._long_turn(prompt, STYLES_DEMO)
         if "agents" in prompt.lower().split():
             return await self._agents_turn()
         if "background" in prompt.lower().split():
@@ -2368,6 +2423,11 @@ class Channel:
 
     # ---- output ------------------------------------------------------------
 
+    @property
+    def keep_marks(self):
+        """The app sent !MD: it styles ** and __ itself."""
+        return self.v2.md_optin
+
     async def tag(self, t, payload=""):
         self._para_open = False
         line = f"{self.sid}{t}" + (f" {payload}" if payload else "")
@@ -2825,6 +2885,8 @@ class V2:
         self.stream_presets = {}   # sid -> whether it streams, for a tab not open yet
         self.store = ResumeStore(args.state_dir)
         self.agents_optin = False   # the app sent !AGENTS: it draws subagent lines
+        self.md_optin = False       # the app sent !MD: it styles ** and __ itself
+        self.no_md = bool(getattr(args, "no_md", False))   # --no-md: do not offer it
         self.closing = set()        # close() tasks still running
         sweep_chats(self.store, args.state_dir)
 
@@ -2921,7 +2983,8 @@ class V2:
 
     async def run(self):
         try:
-            await self.term.send_line(f"#OK se30bridge 2 files={self.args.files} resume ping models agents chat stream".encode(),
+            words = "resume ping models agents chat stream" + ("" if self.no_md else " md")
+            await self.term.send_line(f"#OK se30bridge 2 files={self.args.files} {words}".encode(),
                                       counted=False)
             await self.send_models()
             await self.send_list()
@@ -2931,6 +2994,9 @@ class V2:
                     break
                 if line == "!AGENTS":
                     self.agents_optin = True
+                    continue
+                if line == "!MD":
+                    self.md_optin = not self.no_md
                     continue
                 if line == "!LIST":
                     await self.send_list()
@@ -3090,6 +3156,8 @@ def main():
     p.add_argument("--files", choices=["rw", "ro", "off"], default="rw",
                    help="what the SE/30 may do with project files (tabs only)")
     p.add_argument("--demo", action="store_true", help="fake Claude, to test the link")
+    p.add_argument("--no-md", action="store_true",
+                   help="do not offer the md word, as an older bridge does (for tests)")
     p.add_argument("--baud", type=int, default=57600,
                    help="pace output to this serial speed (0 = no pacing)")
     p.add_argument("--cols", type=int, default=80)
