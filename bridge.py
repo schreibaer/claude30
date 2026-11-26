@@ -240,7 +240,7 @@ class StreamChunker:
     def _end_line(self, out):
         line, opened = self.line, self.opened
         self.line, self.opened = "", False
-        if line.strip().startswith("```"):
+        if not opened and line.strip().startswith("```"):
             self.fence._in_fence = not self.fence._in_fence
             out.append(("C[" if self.fence._in_fence else "C]", ""))
         elif self.fence._in_fence:
@@ -311,14 +311,14 @@ class BlockStream:
 
     async def delta(self, d):
         self.text += d
-        if self._on() and self.text.strip():
+        if not self.claimed and self._on() and self.text.strip():
             was = self.streamed
             self.streamed = True
             await self._feed(force=not was)
 
     async def switched(self):
         """The stream switch just changed."""
-        if self._on() and self.text.strip():
+        if not self.claimed and self._on() and self.text.strip():
             self.streamed = True
             await self._feed(force=True)
 
@@ -2383,7 +2383,7 @@ class Channel:
                 if t == "+" and not self._para_open:
                     t = "T"
                 await self.tag(t, payload)
-                self._para_open = t in ("T", "+")
+                self._para_open = t in ("T", "+", "C")
 
     def set_stream(self, on):
         """The app turned this tab's streaming on or off."""
@@ -2862,7 +2862,6 @@ class V2:
         await ch.tag("X", "closed")
 
     async def open(self, sid, name, token=None):
-        stream = self.stream_presets.pop(sid, False)
         if sid in self.channels:
             return await self.term.send_line(f"{sid}X already open".encode())
         if len(self.channels) >= self.args.max_sessions:
@@ -2872,7 +2871,7 @@ class V2:
         if path is None:
             return await self.term.send_line(f"{sid}X not available".encode())
         ch = Channel(self, sid, name, path, token, self.presets.pop(sid, None))
-        ch.stream = stream
+        ch.stream = self.stream_presets.pop(sid, False)
         self.channels[sid] = ch
         ch.files.start()
         ch.task = asyncio.ensure_future(ch.run())

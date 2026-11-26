@@ -91,6 +91,13 @@ class ChunkerTests(unittest.TestCase):
             self.assertTrue(p.split()[-1].startswith("word") and len(p.split()[-1]) == 7)
         self.assertEqual(render(out), ["T:" + text])
 
+    def test_inline_backticks_in_a_started_line_are_not_a_fence(self):
+        ch = bridge.StreamChunker(Fence(), Clock())
+        text = "some words here and there use ```code``` in the middle of a long prose line " * 3
+        out = ch.feed(text.strip(), True) + ch.finish()
+        self.assertTrue(all(t in ("T", "+") for t, _ in out), out)
+        self.assertEqual(render(out), ["T:" + text.strip()])
+
     def test_a_pause_releases_whole_words(self):
         clock = Clock()
         ch = bridge.StreamChunker(Fence(), clock)
@@ -239,6 +246,14 @@ class SessionTests(unittest.TestCase):
         self.assertEqual(render(term.pieces()), render(bridge.app_text_lines(TEXT, Fence())))
         self.assertGreater(len([o for o in term.out if o[0] == "piece"]), 2)
 
+    def test_turning_it_on_after_the_block_printed_does_not_repeat_it(self):
+        def switch(term, sess):
+            term.stream = True
+            return sess.stream_changed()
+        term = run([asst(TEXT), switch, stop(), done()], False)
+        self.assertEqual([o for o in term.out if o[0] == "piece"], [])
+        self.assertEqual([o for o in term.out if o[0] == "text"], [("text", TEXT)])
+
     def test_streaming_off_prints_the_block_whole_as_today(self):
         term = run(block_events(TEXT) + [asst(TEXT), stop(), done()], False)
         self.assertEqual(term.out, [("text", TEXT), ("result", "success")])
@@ -363,6 +378,13 @@ class ChannelTests(unittest.TestCase):
         self.assertEqual(asyncio.run(go()), [
             "1T first words", "1+ more words", "1J~ 1 3 Grep def parse", "1T after the line",
             "1B file line", "1T after a file line", "1+ same paragraph"])
+
+    def test_a_long_code_line_keeps_its_continuations_as_code(self):
+        async def go():
+            ch = bare_channel()
+            await ch.stream_pieces([("C", "x" * 200), ("+", "y" * 50)])
+            return ch.term.lines
+        self.assertEqual(asyncio.run(go()), ["1C " + "x" * 200, "1+ " + "y" * 50])
 
 
 # ---- over the wire, against the demo bridge ---------------------------------
