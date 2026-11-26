@@ -10,8 +10,10 @@
 
 #include <MacTypes.h>
 
-/* Returns true with the chosen project's name. */
-Boolean picker_run(char *name, short max);
+typedef enum { PICK_NONE, PICK_PROJECT, PICK_CHAT } PickResult;
+/* PICK_PROJECT comes with the chosen project's name. The New Chat button is
+   shown only when chat_ok (the bridge offers chats). */
+PickResult picker_run(char *name, short max, Boolean chat_ok);
 /* The bridge sent its project list again. */
 void picker_projects_changed(void);
 

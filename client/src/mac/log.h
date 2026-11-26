@@ -14,6 +14,7 @@ typedef struct {
     short ref;                   /* open data fork, or 0 */
     Str63 name;
     Boolean have_name;
+    Boolean discard;             /* a chat: nothing is ever written */
 } LogFile;
 
 /* Starts a new file name for the project and tab digit; the file is created

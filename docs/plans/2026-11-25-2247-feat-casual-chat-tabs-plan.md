@@ -238,3 +238,10 @@ stateDiagram-v2
 - `client/src/mac/modem.c`: `session_new_tab`, `session_init`, `remember_tabs`; `client/src/mac/main.c`: `quit_app`; `client/src/mac/picker.c`; `client/claude30.r` picker DITL and Session menu.
 - claude-agent-sdk 0.2.172 `types.py`: `ClaudeAgentOptions.tools`, `strict_mcp_config`, `setting_sources`, `system_prompt`.
 - Prior plans: `docs/plans/2026-11-24-1408-feat-project-tabs-plan.md` (v2 sessions), `docs/plans/2026-11-24-1740-feat-reconnect-resume-after-wifi-drop-plan.md` (resume records and call lock).
+
+
+## Implementation notes (deviations from this plan)
+
+- `/new` in a chat deletes the old conversation's transcript immediately, instead of tracking earlier ids to delete at close.
+- A chat whose scratch folder is gone gets the folder recreated and takes the normal failed-resume path (a new chat), instead of a special case.
+- Not tested: real-CLI web permission, shell refusal and resume memory (account usage limit hit), the emulator and a real SE/30. The Mac UI code builds clean with Retro68 but was not run.

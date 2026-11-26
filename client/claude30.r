@@ -79,7 +79,7 @@ resource 'MENU' (kEditMenu) {
 };
 
 resource 'MENU' (kSessionMenu) {
-	kSessionMenu, textMenuProc, 0x7FFFEB77, enabled, "Session",
+	kSessionMenu, textMenuProc, 0x7FFFD777, enabled, "Session",
 	{
 		"Connect", noIcon, "K", noMark, plain;
 		"Disconnect", noIcon, "D", noMark, plain;
@@ -90,6 +90,7 @@ resource 'MENU' (kSessionMenu) {
 		"Open or Close Fold", noIcon, "J", noMark, plain;
 		"-", noIcon, noKey, noMark, plain;
 		"New Tab\0xC9", noIcon, "T", noMark, plain;
+		"New Chat", noIcon, "N", noMark, plain;
 		"Close Tab", noIcon, noKey, noMark, plain;
 		"-", noIcon, noKey, noMark, plain;
 		"Model and Effort\0xC9", noIcon, noKey, noMark, plain;
@@ -317,6 +318,7 @@ resource 'DITL' (kPickerDialog) {
 		{ 208, 120, 228, 200 }, Button { enabled, "Cancel" };
 		{ 46, 12, 198, 288 }, UserItem { disabled };
 		{ 8, 12, 40, 288 }, StaticText { disabled, "Open a project in a new tab:" };
+		{ 208, 12, 228, 108 }, Button { enabled, "New Chat" };
 	}
 };
 

@@ -57,6 +57,14 @@ void session_model_dialog(void);
 
 /* New Tab: runs the project picker and opens the chosen project. */
 void session_new_tab(void);
+/* New Chat: a tab with no project (needs the bridge's chat word). */
+void session_new_chat(void);
+/* The bridge offers chats, the link is up and a tab is free. */
+Boolean session_chat_available(void);
+/* Quit: ends every chat on the bridge, which deletes it there; the tabs stay
+   until the app exits. session_chats_closing is true until all have ended. */
+void session_close_chats(void);
+Boolean session_chats_closing(void);
 /* Close Tab: confirms a busy tab, settles its file windows, then ends its
    conversation. Returns false if the person cancelled. */
 Boolean session_close_tab(Tab *t);

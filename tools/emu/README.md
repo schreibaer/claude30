@@ -149,6 +149,9 @@ Run these in the emulator, and the hardware rows on the SE/30. Tick each one.
 | ☐ | An empty `--projects` folder shows "No projects available…" with Open dimmed | Emulator | `run.sh --demo --projects /empty` |
 | ☐ | `/quit` in a tab closes that tab only; quitting with tabs open and relaunching restores the same tab order | Emulator | Any bridge |
 | ☐ | Close Tab on a busy tab asks first, and Cancel keeps it running | Emulator | `stream` |
+| ☐ | New Chat in the picker and Session > New Chat (Cmd-N) open tabs labelled "Chat" and "Chat 2" in italics (strip and Window menu); a chat answers; New Chat is dimmed at six tabs | Emulator | `run.sh --demo --projects ...` |
+| ☐ | A chat survives Disconnect and Connect (same conversation) and Wi-Fi drop plus Redial; quitting and relaunching restores only the project tabs | Emulator | Demo bridge, then check `chats/` under the state dir is empty after Quit |
+| ☐ | File > Open Project File is dimmed with a chat in front; no log file appears for a chat; "web search" prompt asks permission | Emulator | Demo bridge |
 
 **Project files**
 

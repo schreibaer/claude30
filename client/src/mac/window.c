@@ -676,7 +676,7 @@ static void draw_tab(short i)
 
     TextFont(3);
     TextSize(FONT_SIZE);
-    TextFace(front ? bold : 0);
+    TextFace((front ? bold : 0) | (t->chat ? italic : 0));   /* a chat is italic */
     label[0] = 0;
     if (t->running && !waiting) {
         label[1] = (char)0xA5;   /* bullet */

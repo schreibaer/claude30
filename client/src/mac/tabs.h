@@ -21,6 +21,7 @@
 
 typedef struct Tab {
     Boolean used;
+    Boolean chat;                /* a chat: no project; project holds its label */
     short sid;                   /* session id, 1..6 */
     char project[TAB_NAME_MAX + 1];
     TEHandle trans;              /* transcript, styled */
@@ -62,6 +63,7 @@ short tabs_count(void);
 Tab *tabs_at(short index);       /* by position in the strip, 0-based */
 short tabs_index(const Tab *t);
 Tab *tabs_by_sid(short sid);
+/* Project tabs only: a chat labelled like a project does not match. */
 Tab *tabs_by_project(const char *project);
 Tab *tabs_front(void);
 void tabs_set_front(Tab *t);
