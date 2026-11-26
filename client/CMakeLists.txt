@@ -14,6 +14,7 @@ add_application(Claude30
     src/core/prompt.c
     src/core/protocol.c
     src/core/batch.c
+    src/core/mdstyle.c
     src/core/files.c
     src/core/crc32.c
     src/core/mascot.c

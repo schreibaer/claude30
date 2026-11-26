@@ -1,4 +1,5 @@
 #include "batch.h"
+#include "mdstyle.h"
 #include <stdlib.h>
 #include <string.h>
 
@@ -13,6 +14,7 @@ void batch_init(Batch *b)
 
 void batch_free(Batch *b)
 {
+    md_free(b);
     free(b->text);
     free(b->runs);
     batch_init(b);
@@ -56,6 +58,7 @@ static int new_run(Batch *b, RunStyle s)
         b->rcap = ncap;
     }
     b->runs[b->nruns].style = s;
+    b->runs[b->nruns].flags = b->flags;
     b->runs[b->nruns].start = b->len;
     b->runs[b->nruns].len = 0;
     b->nruns++;
@@ -65,7 +68,7 @@ static int new_run(Batch *b, RunStyle s)
 static void put_byte(Batch *b, RunStyle s, char c)
 {
     Run *r = b->nruns ? &b->runs[b->nruns - 1] : NULL;
-    if (!r || r->style != s || r->len >= BATCH_MAX_RUN) {
+    if (!r || r->style != s || r->flags != b->flags || r->len >= BATCH_MAX_RUN) {
         if (!new_run(b, s))
             return;
         r = &b->runs[b->nruns - 1];
@@ -123,6 +126,7 @@ static long line_number(char *out, long v)
 /* Starts a new block (paragraph, code line, marker) on its own line. */
 static void block(Batch *b, RunStyle s)
 {
+    md_flush(b);
     if (b->need_break)
         put(b, s, "\r", 1);
     b->need_break = 1;
@@ -134,17 +138,18 @@ void batch_event(Batch *b, EventKind kind, const char *t, long n)
     switch (kind) {
     case EV_TEXT:
         block(b, RS_PROSE);
-        put(b, RS_PROSE, t, n);
+        md_text(b, t, n, 0);
         b->prose_open = 1;
         break;
     case EV_TEXT_CONT:
         /* A streamed paragraph arrives over seconds, so a line the app drew
            itself (line noise, lost output) can come between two pieces. */
-        if (b->prose_open)
-            put(b, RS_PROSE, " ", 1);
-        else
+        if (b->prose_open) {
+            md_text(b, t, n, 1);
+        } else {
             block(b, RS_PROSE);
-        put(b, RS_PROSE, t, n);
+            md_text(b, t, n, 0);
+        }
         b->prose_open = 1;
         break;
     case EV_CODE_BEGIN:
@@ -195,6 +200,23 @@ void batch_event(Batch *b, EventKind kind, const char *t, long n)
     default:
         break;     /* state changes and dialog events draw nothing here */
     }
+}
+
+void batch_set_rule(Batch *b, int em_dashes)
+{
+    b->rule_len = em_dashes;
+}
+
+void batch_flush(Batch *b)
+{
+    md_flush(b);
+}
+
+void batch_put_prose(Batch *b, unsigned char flags, const char *t, long n)
+{
+    b->flags = flags;
+    put(b, RS_PROSE, t, n);
+    b->flags = 0;
 }
 
 void batch_prompt(Batch *b, const char *t, long n)
