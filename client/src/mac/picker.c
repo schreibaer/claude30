@@ -18,6 +18,7 @@ static DialogPtr gDlg;
 static ListHandle gList;
 static Rect gListRect;
 static Boolean gStale;           /* the bridge sent a new list */
+static Boolean gChatOk;          /* the New Chat button is offered */
 
 void picker_projects_changed(void)
 {
@@ -110,12 +111,14 @@ static void fill_list(void)
     }
     LSetDrawingMode(true, gList);
     InvalRect(&gListRect);
+    set_item_enabled(kPickNewChat, tabs_count() < MAX_TABS);
     if (n == 0 || avail == 0)
-        set_message("No projects available. Add folders with --projects on the host.");
+        set_message(gChatOk ? "No projects to open. You can start a chat."
+                            : "No projects available. Add folders with --projects on the host.");
     else if (tabs_count() >= MAX_TABS)
         set_message("Six tabs are open. Close one first.");
     else
-        set_message("Open a project in a new tab:");
+        set_message(gChatOk ? "Open a project, or start a chat:" : "Open a project in a new tab:");
     update_buttons();
 }
 
@@ -252,7 +255,7 @@ static pascal Boolean filter(DialogPtr d, EventRecord *ev, short *item)
     return false;
 }
 
-Boolean picker_run(char *name, short max)
+PickResult picker_run(char *name, short max, Boolean chat_ok)
 {
     short hit = 0, type, row;
     Handle h;
@@ -261,12 +264,12 @@ Boolean picker_run(char *name, short max)
     ModalFilterUPP filterUPP;
     UserItemUPP drawUPP;
     GrafPtr save;
-    Boolean ok = false;
+    PickResult result = PICK_NONE;
 
     GetPort(&save);
     gDlg = GetNewDialog(kPickerDialog, NULL, (WindowPtr)-1);
     if (!gDlg)
-        return false;
+        return PICK_NONE;
     SetPort(gDlg);
     TextFont(0);
     TextSize(0);
@@ -281,10 +284,14 @@ Boolean picker_run(char *name, short max)
         DisposeDialog(gDlg);
         DisposeUserItemUPP(drawUPP);
         SetPort(save);
-        return false;
+        return PICK_NONE;
     }
     (*gList)->selFlags = lOnlyOne;
     gStale = false;
+    gChatOk = chat_ok;
+    if (!chat_ok) {
+        HideDialogItem(gDlg, kPickNewChat);
+    }
     fill_list();
     proto_list_projects(session_proto());   /* fresh folders appear without redialing */
     SetDialogDefaultItem(gDlg, kPickOpen);
@@ -297,7 +304,11 @@ Boolean picker_run(char *name, short max)
             break;
         if (hit == kPickOpen && selected(&row) && row_name(row, name, max)
                 && tabs_count() < MAX_TABS) {
-            ok = true;
+            result = PICK_PROJECT;
+            break;
+        }
+        if (hit == kPickNewChat && chat_ok && tabs_count() < MAX_TABS) {
+            result = PICK_CHAT;
             break;
         }
     }
@@ -308,5 +319,5 @@ Boolean picker_run(char *name, short max)
     DisposeModalFilterUPP(filterUPP);
     DisposeUserItemUPP(drawUPP);
     SetPort(save);
-    return ok;
+    return result;
 }

@@ -299,6 +299,7 @@ static int both_ready(void)
 }
 static int both_done(void) { return S.s[1].readies >= 1 && S.s[2].readies >= 1; }
 static int one_done(void) { return S.s[1].readies >= 1; }
+static int both_done_2(void) { return S.s[2].readies >= 1; }
 static int list_done(void) { return S.list_done != 0; }
 static int piece_or_fail(void) { return S.pieces > 0 || S.failed > 0; }
 static int saved_or_fail(void) { return S.saved > 0 || S.failed > 0 || S.conflicts > 0; }
@@ -419,6 +420,51 @@ static void test_demo_agents(void)
     CHECK_EQ_LONG(S.s[1].counts[EV_PERM_ASK], 1);
     CHECK_EQ_LONG(S.s[1].counts[EV_TOOL], 1);   /* only the main conversation's own tool line */
     CHECK(strcmp(S.s[1].result, "success $0.0000") == 0);
+    CHECK_EQ_LONG(P.dropped, 0);
+    finish_with_disconnect();
+}
+
+/* A chat against the demo bridge: it opens with the reserved name next to a
+   project, answers, and when closed leaves no folder behind. */
+static int session_closed(void) { return proto_sess_state(&P, 2) == SS_NONE; }
+
+static int count_chat_dirs(void)
+{
+    char path[sizeof(state_dir) + 16];
+    char cmd[sizeof(path) + 32];
+    FILE *f;
+    int n = 0;
+    snprintf(path, sizeof(path), "%s/chats", state_dir);
+    snprintf(cmd, sizeof(cmd), "ls -A '%s' 2>/dev/null", path);
+    f = popen(cmd, "r");
+    if (f) {
+        while (fgetc(f) != EOF)
+            n++;
+        pclose(f);
+    }
+    return n;
+}
+
+static void test_demo_chat(void)
+{
+    start(demo_argv);
+    proto_connect(&P, "ATDTbridge", ticks());
+    CHECK(run(is_online, 20));
+    CHECK(proto_chat_cap(&P));
+    CHECK(proto_open(&P, 1, "alpha"));
+    CHECK(proto_open(&P, 2, "*"));
+    CHECK(run(both_ready, 20));
+    CHECK(strcmp(S.s[2].opened, "*") == 0);
+    CHECK(strcmp(S.s[2].how, "new") == 0);
+    CHECK(count_chat_dirs() > 0);
+    S.s[1].readies = S.s[2].readies = 0;
+    CHECK(proto_send_prompt(&P, 2, "hello", 5));
+    CHECK(run(both_done_2, 20));
+    CHECK(strstr(S.s[2].said, "demo chat") != NULL);
+    CHECK(proto_close(&P, 2));
+    CHECK(run(session_closed, 20));
+    CHECK_EQ_LONG(count_chat_dirs(), 0);
+    CHECK(proto_sess_state(&P, 1) == SS_READY);   /* the project tab is untouched */
     CHECK_EQ_LONG(P.dropped, 0);
     finish_with_disconnect();
 }
@@ -738,6 +784,7 @@ int main(void)
     make_projects();
     test_demo_two_sessions();
     test_demo_agents();
+    test_demo_chat();
     test_demo_background();
     test_drop_and_resume();
     test_model_and_effort();

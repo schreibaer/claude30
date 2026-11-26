@@ -115,6 +115,7 @@ static void build_window_menu(void)
         AppendMenu(gWindow, "\px");          /* text set below: no metacharacters */
         SetMenuItemText(gWindow, (short)(i + 1), s);
         SetItemCmd(gWindow, (short)(i + 1), (char)('1' + i));
+        SetItemStyle(gWindow, (short)(i + 1), t->chat ? italic : normal);
         CheckItem(gWindow, (short)(i + 1), t == tabs_front() && front == window_ptr());
     }
     if (filewin_count() > 0) {
@@ -147,7 +148,7 @@ static void adjust_menus(void)
     show_open_item(!online || proto_files_mode(p) != FILES_OFF);
     if (gOpenShown) {
         Tab *owner = fw ? tabs_by_sid(filewin_sid(front)) : t;
-        enable(gFile, kOpenFileItem, online && session_tab_ready(owner));
+        enable(gFile, kOpenFileItem, online && owner && !owner->chat && session_tab_ready(owner));
     }
     enable(gFile, file_item(kCloseItem), fw || (front == window_ptr() && t != NULL));
     enable(gFile, file_item(kSaveItem), fw && filewin_can_save(front));
@@ -163,6 +164,7 @@ static void adjust_menus(void)
     enable(gSession, kNextPromptItem, t != NULL && front == window_ptr());
     enable(gSession, kFoldItem, front == window_ptr() && window_fold_available());
     enable(gSession, kNewTabItem, online && tabs_count() < MAX_TABS);
+    enable(gSession, kNewChatItem, session_chat_available());
     enable(gSession, kCloseTabItem, t != NULL);
     enable(gSession, kModelItem, session_model_available());
     enable(gSession, kLinkTestItem, s == ST_IDLE);
@@ -192,6 +194,17 @@ static void quit_app(void)
         return;                      /* Cancel keeps the app running */
     window_set_full_screen(false);   /* the Finder needs its menu bar back */
     if (session_online()) {
+        /* A chat is deleted by the bridge when it ends: say so before hanging up. */
+        session_close_chats();
+        {
+            unsigned long until = TickCount() + QUIT_WAIT_TICKS;
+            EventRecord ev;
+            while (session_online() && session_chats_closing() && TickCount() < until) {
+                session_pump();
+                if (WaitNextEvent(updateMask, &ev, 1, NULL) && ev.what == updateEvt)
+                    app_update((WindowPtr)ev.message);
+            }
+        }
         session_disconnect();
         pump_until_offline();
     }
@@ -222,7 +235,7 @@ static void open_project_file(void)
     WindowPtr front = FrontWindow();
     Tab *t = filewin_is(front) ? tabs_by_sid(filewin_sid(front)) : tabs_front();
     char path[256];
-    if (!t || !session_tab_ready(t))
+    if (!t || t->chat || !session_tab_ready(t))
         return;
     if (opendlg_run(t, path, sizeof(path))) {
         session_select_tab(t);
@@ -304,6 +317,7 @@ static void do_menu(long choice)
         case kNextPromptItem: window_jump_prompt(1); break;
         case kFoldItem:       window_toggle_fold_key(); break;
         case kNewTabItem:     session_new_tab(); break;
+        case kNewChatItem:    session_new_chat(); break;
         case kCloseTabItem:   session_close_tab(tabs_front()); break;
         case kModelItem:      session_model_dialog(); break;
         case kLinkTestItem:   linktest_run(); break;

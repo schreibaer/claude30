@@ -126,7 +126,7 @@ OSErr log_append(LogFile *lf, const char *text, long len)
 {
     OSErr err;
     long n = len;
-    if (len <= 0)
+    if (len <= 0 || lf->discard)
         return noErr;
     if (!lf->ref) {
         err = open_log(lf);

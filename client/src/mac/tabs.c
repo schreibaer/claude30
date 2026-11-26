@@ -78,7 +78,7 @@ Tab *tabs_by_project(const char *project)
 {
     short i;
     for (i = 0; i < gCount; i++)
-        if (strcmp(gTabs[gOrder[i]].project, project) == 0)
+        if (!gTabs[gOrder[i]].chat && strcmp(gTabs[gOrder[i]].project, project) == 0)
             return &gTabs[gOrder[i]];
     return NULL;
 }

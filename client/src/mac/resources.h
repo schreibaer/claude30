@@ -42,9 +42,10 @@
 #define kNextPromptItem 6
 #define kFoldItem       7
 #define kNewTabItem     9
-#define kCloseTabItem   10
-#define kModelItem      12
-#define kLinkTestItem   14
+#define kNewChatItem    10
+#define kCloseTabItem   11
+#define kModelItem      13
+#define kLinkTestItem   15
 
 /* Window */
 #define kMainWindow     128
@@ -97,6 +98,7 @@
 #define kPickCancel     2
 #define kPickList       3
 #define kPickMessage    4
+#define kPickNewChat    5
 
 #define kOpenOpen       1
 #define kOpenCancel     2

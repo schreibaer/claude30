@@ -1,5 +1,6 @@
 #include "modem.h"
 #include "batch.h"
+#include "chatlabel.h"
 #include "files.h"
 #include "filewin.h"
 #include "log.h"
@@ -97,12 +98,16 @@ static void divider(Tab *t)
 static void remember_tabs(void)
 {
     const char *names[MAX_TABS], *tokens[MAX_TABS], *models[MAX_TABS], *efforts[MAX_TABS];
-    short i, n = tabs_count();
-    for (i = 0; i < n; i++) {
-        names[i] = tabs_at(i)->project;
-        tokens[i] = tabs_at(i)->token;
-        models[i] = tabs_at(i)->model;
-        efforts[i] = tabs_at(i)->effort;
+    short i, n = 0;
+    for (i = 0; i < tabs_count(); i++) {
+        Tab *t = tabs_at(i);
+        if (t->chat)
+            continue;            /* chats are never remembered */
+        names[n] = t->project;
+        tokens[n] = t->token;
+        models[n] = t->model;
+        efforts[n] = t->effort;
+        n++;
     }
     prefs_set_tabs(names, tokens, models, efforts, n);
     gTokensChanged = false;
@@ -130,9 +135,9 @@ static void open_tab(Tab *t)
 {
     char s[128];
     t->unavailable = false;
-    if (!in_project_list(t->project)) {
+    if (t->chat ? !gProto.chat_cap : !in_project_list(t->project)) {
         t->unavailable = true;
-        snprintf(s, sizeof(s), "%s is not available on the host.", t->project);
+        snprintf(s, sizeof(s), t->chat ? "The host does not offer chats." : "%s is not available on the host.", t->project);
         error_line(t, s);
         return;
     }
@@ -141,7 +146,7 @@ static void open_tab(Tab *t)
         proto_set_model(&gProto, t->sid, t->model, t->effort);
     /* A tab with a resume token asks the bridge to continue that conversation. */
     t->token_sent = gProto.resume_cap && t->token[0];
-    if (!proto_open_resume(&gProto, t->sid, t->project, t->token)) {
+    if (!proto_open_resume(&gProto, t->sid, t->chat ? CHAT_WIRE_NAME : t->project, t->token)) {
         t->unavailable = true;
         t->token_sent = false;
         error_line(t, "The tab could not be opened on the bridge.");
@@ -334,7 +339,8 @@ static void tab_event(Tab *t, EventKind k, const char *s, long n)
         }
         break;
     case EV_OPENED:
-        log_new_session(&t->log, t->project, (short)(tabs_index(t) + 1));
+        if (!t->chat)
+            log_new_session(&t->log, t->project, (short)(tabs_index(t) + 1));
         /* A tab that asked to resume waits for the Y line to say what it got. */
         if (!t->token_sent && (t->opened_once || !window_transcript_empty(t) || t->batch.nruns))
             divider(t);
@@ -618,7 +624,7 @@ void session_init(void)
        them. */
     for (i = 0; i < gPrefs.ntabs; i++) {
         copy_text(name, sizeof(name), (const char *)gPrefs.tabs[i] + 1, gPrefs.tabs[i][0]);
-        if (!name[0] || tabs_by_project(name))
+        if (!name[0] || strcmp(name, CHAT_WIRE_NAME) == 0 || tabs_by_project(name))
             continue;
         t = tabs_add(name, (short)(i + 1));
         if (!t)
@@ -976,28 +982,17 @@ static short free_sid(void)
     return 0;
 }
 
-void session_new_tab(void)
+/* Makes a tab with a label (project name or chat label), opens it. */
+static void start_tab(const char *label, Boolean chat)
 {
-    char name[64];
-    short sid;
-    Tab *t;
-    if (gProto.state != ST_ONLINE || tabs_count() >= MAX_TABS)
-        return;
-    if (!picker_run(name, sizeof(name)))
-        return;
-    if (gProto.state != ST_ONLINE)
-        return;                  /* the link went away while choosing */
-    t = tabs_by_project(name);
-    if (t) {
-        session_select_tab(t);
-        return;
-    }
-    sid = free_sid();
-    t = sid ? tabs_add(name, sid) : NULL;
+    short sid = free_sid();
+    Tab *t = sid ? tabs_add(label, sid) : NULL;
     if (!t) {
         SysBeep(1);
         return;
     }
+    t->chat = chat;
+    t->log.discard = chat;
     if (!window_tab_init(t)) {
         tabs_remove(t);
         ParamText("\pThere is not enough memory for another tab.", "\p", "\p", "\p");
@@ -1005,11 +1000,70 @@ void session_new_tab(void)
         return;
     }
     t->from_picker = true;
-    log_new_session(&t->log, t->project, (short)(tabs_index(t) + 1));
+    if (!chat)
+        log_new_session(&t->log, t->project, (short)(tabs_index(t) + 1));
     open_tab(t);
     session_select_tab(t);
     remember_tabs();
     window_draw_tabs();
+}
+
+Boolean session_chat_available(void)
+{
+    return gProto.state == ST_ONLINE && gProto.chat_cap && tabs_count() < MAX_TABS;
+}
+
+void session_new_chat(void)
+{
+    const char *used[MAX_TABS];
+    short i, n = 0;
+    char label[TAB_NAME_MAX + 1];
+    if (!session_chat_available())
+        return;
+    for (i = 0; i < tabs_count(); i++)
+        if (tabs_at(i)->chat)
+            used[n++] = tabs_at(i)->project;
+    chat_label(label, sizeof(label), used, n);
+    start_tab(label, true);
+}
+
+void session_new_tab(void)
+{
+    char name[64];
+    PickResult r;
+    Tab *t;
+    if (gProto.state != ST_ONLINE || tabs_count() >= MAX_TABS)
+        return;
+    r = picker_run(name, sizeof(name), gProto.chat_cap != 0);
+    if (r == PICK_NONE || gProto.state != ST_ONLINE || tabs_count() >= MAX_TABS)
+        return;                  /* cancelled, or the link went away while choosing */
+    if (r == PICK_CHAT) {
+        session_new_chat();
+        return;
+    }
+    t = tabs_by_project(name);
+    if (t) {
+        session_select_tab(t);
+        return;
+    }
+    start_tab(name, false);
+}
+
+void session_close_chats(void)
+{
+    short i;
+    for (i = 0; i < tabs_count(); i++)
+        if (tabs_at(i)->chat && proto_sess_state(&gProto, tabs_at(i)->sid) != SS_NONE)
+            proto_close(&gProto, tabs_at(i)->sid);
+}
+
+Boolean session_chats_closing(void)
+{
+    short i;
+    for (i = 0; i < tabs_count(); i++)
+        if (tabs_at(i)->chat && proto_sess_state(&gProto, tabs_at(i)->sid) != SS_NONE)
+            return true;
+    return false;
 }
 
 Boolean session_close_tab(Tab *t)

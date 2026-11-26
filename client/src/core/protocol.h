@@ -157,6 +157,7 @@ struct Proto {
     int resume_cap;              /* the bridge resumes conversations (<n>Y) */
     int ping_cap;                /* the bridge answers !PING and times out silent apps */
     int agents_cap;              /* the bridge sends J lines to an app that sent !AGENTS */
+    int chat_cap;                /* a session can be opened as a chat with the name "*" */
     int models_cap;              /* the bridge sends a model list and takes <n>M */
 
     /* The models a session may pick, from the handshake's M lines. */
@@ -233,6 +234,8 @@ int proto_open(Proto *p, int sid, const char *project);
 int proto_open_resume(Proto *p, int sid, const char *project, const char *token);
 /* The models the bridge offers (none without the models capability), and
    what "bridge default" means: names, or "" when the CLI decides. */
+/* The bridge offers chats: proto_open(p, sid, "*") opens one (PROTOCOL.md, Chats). */
+int proto_chat_cap(const Proto *p);
 int proto_models_cap(const Proto *p);
 int proto_nmodels(const Proto *p);
 const char *proto_model(const Proto *p, int i);

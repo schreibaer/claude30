@@ -149,7 +149,7 @@ Every v1 bridge→client tag works per session with the digit in front: `<n>T`, 
 
 | Line | Meaning |
 |---|---|
-| `<n>O <name>` | Open session `<n>` in the project named `<name>`, exactly as the list spelled it. The client picks `<n>`. The bridge never builds a path from client text: a name that is not in a freshly built list is refused with `<n>X not available`. |
+| `<n>O <name>` | Open session `<n>` in the project named `<name>`, exactly as the list spelled it. The client picks `<n>`. The bridge never builds a path from client text: a name that is not in a freshly built list is refused with `<n>X not available`. The reserved name `*` opens a chat instead, when `#OK` has the word `chat` (see Chats). |
 | `<n>Y <token> <name>` | Open session `<n>` and resume the conversation `<token>` (see Resume and heartbeat) |
 | `<n>M <model> <effort>` | Set the session's model and effort, whether or not it is open yet (see Model and effort) |
 | `<n>X` | Close session `<n>`. The bridge denies any open permission request, stops a running turn, stops the session and answers `<n>X closed`. No `!STOP` is needed first. |
@@ -284,7 +284,7 @@ B: 2>
 
 ## Subagents
 
-The capability word `agents` in `#OK` (`#OK se30bridge 2 files=rw resume ping models agents`) means the bridge can report Claude's subagents (the Agent tool) as lines a client rewrites in place. A client that wants them answers with `!AGENTS` once, after the project list. Without `!AGENTS`, and for ZTerm and v1, the bridge sends ordinary lines instead: `<n>U Agent <type>: <task>` when a subagent starts and `<n>U Agent <type> <status>: <summary>` when it ends (tty mode prints them as `  [Agent] ...`). A subagent's own prose and tool lines are never sent; only its start, its progress and its end are.
+The capability word `agents` in `#OK` (`#OK se30bridge 2 files=rw resume ping models agents chat`) means the bridge can report Claude's subagents (the Agent tool) as lines a client rewrites in place. A client that wants them answers with `!AGENTS` once, after the project list. Without `!AGENTS`, and for ZTerm and v1, the bridge sends ordinary lines instead: `<n>U Agent <type>: <task>` when a subagent starts and `<n>U Agent <type> <status>: <summary>` when it ends (tty mode prints them as `  [Agent] ...`). A subagent's own prose and tool lines are never sent; only its start, its progress and its end are.
 
 A client sends `!AGENTS` and the bridge then sends, per session:
 
@@ -297,6 +297,20 @@ A client sends `!AGENTS` and the bridge then sends, per session:
 When a turn ends, the bridge closes any subagent still open with `J-` and `stopped`. A subagent Claude starts in the background ends its line at once with `background` (its result is still to come), so it never holds a turn open. When it finishes, possibly turns later, the bridge sends a fresh `J+` and its `J-` with the result, and Claude usually reports on it in a turn of its own. That turn comes while the session is ready: its lines arrive unasked and end with `<n>R` and `<n>>`. If the client sent a prompt meanwhile, the bridge leaves out that `>` and the prompt's turn ends with its own. tty mode and v1 show such output before the next turn instead. A client also treats `<n>>` and a lost link as the end of every open subagent of that session. A permission request raised inside a subagent starts its `<n>?` summary with `(<type>)`. Unknown tags are ignored by both sides, so version 2 is unchanged.
 
 `/agents` (typed as a prompt) lists the subagents the session's project offers: the built-in ones, `.claude/agents/*.md` in the project and `~/.claude/agents/*.md`. Creating one is done by asking Claude, or by editing the file with Open Project File.
+
+## Chats
+
+The capability word `chat` in `#OK` (`#OK se30bridge 2 files=rw resume ping models agents chat`) means a client can open a conversation that belongs to no project. The client sends `<n>O *` (or `<n>Y <token> *` to resume one); `*` is never in the project list, and a project folder with that name is left out of it. The bridge answers as for a project: `<n>O *`, `<n>Y <token> new`, `<n>M ...` and `<n>>`, with the same refusals (`already open`, `too many tabs`, `could not start: ...`). A client sends `*` only after it saw `chat`; a bridge without the word refuses it with `<n>X not available`.
+
+A chat is a short-lived conversation:
+
+- Claude runs in an empty folder of its own, `chats/<16 hex digits>/` in the bridge's state folder. It has web search and web fetch and no other tools, so it cannot read or change files or run commands; each web use asks for permission through the usual `Q` and `?` lines, and `a` (always) covers the rest of that chat. It reads no CLAUDE.md, settings, MCP servers, skills or subagents, and uses a short system prompt for a small screen instead of Claude Code's own, which keeps each turn cheaper.
+- File lines are refused with `files off` whatever `--files` says. `/edits` and `/agents` answer `does not apply in a chat.`; `/new`, `/model`, `/effort`, `/help` and `/quit` work, and `/new` also deletes the conversation it replaces.
+- Per-session model and effort (`<n>M`) work as in a project.
+- A chat resumes like a project conversation, in the same folder (see Resume and heartbeat). A resume whose record or saved conversation has gone starts a new chat, reported as `<n>Y <token> new`; a deleted chat folder is simply made again.
+- `<n>X` ends a chat for good. Before it answers `<n>X closed` the bridge deletes the chat's resume record, its folder and the transcripts Claude Code saved for it, so a client that sends `<n>X` and then `!QUIT` leaves nothing behind. A dropped link or `!QUIT` alone keeps the chat so the next call can resume it. At the start of each call the bridge also deletes chats not used for 7 days and chat folders no record names, so a chat the app could not close does not stay on the host. A client that wants chats gone when it quits sends `<n>X` for each of them before `!QUIT`, and keeps no token for them.
+
+tty mode and v1 have no chats. Unknown words and tags are ignored by both sides, so version 2 is unchanged.
 
 ## Files
 
