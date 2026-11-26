@@ -56,7 +56,7 @@ resource 'MENU' (kFileMenu) {
 		"Save", noIcon, "S", noMark, plain;
 		"Revert to Saved", noIcon, noKey, noMark, plain;
 		"-", noIcon, noKey, noMark, plain;
-		"Full Screen", noIcon, "F", noMark, plain;
+		"Full Screen (Cmd-Shift-F)", noIcon, noKey, noMark, plain;
 		"Compact Input", noIcon, "E", noMark, plain;
 		"-", noIcon, noKey, noMark, plain;
 		"Quit", noIcon, "Q", noMark, plain
@@ -93,7 +93,7 @@ resource 'MENU' (kSessionMenu) {
 		"New Chat", noIcon, "N", noMark, plain;
 		"Close Tab", noIcon, noKey, noMark, plain;
 		"-", noIcon, noKey, noMark, plain;
-		"Model and Effort\0xC9", noIcon, noKey, noMark, plain;
+		"Model and Effort\0xC9", noIcon, "M", noMark, plain;
 		"Stream Answers", noIcon, noKey, noMark, plain;
 		"-", noIcon, noKey, noMark, plain;
 		"Link Test\0xC9", noIcon, noKey, noMark, plain

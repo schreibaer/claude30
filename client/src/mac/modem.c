@@ -623,6 +623,20 @@ Boolean session_model_available(void)
         && proto_sess_state(&gProto, t->sid) != SS_CLOSING;
 }
 
+const char *session_model_reason(void)
+{
+    Tab *t = tabs_front();
+    if (session_model_available())
+        return "";
+    if (gProto.state != ST_ONLINE)
+        return "Model and Effort needs a connected tab.";
+    if (!t)
+        return "Model and Effort needs an open tab.";
+    if (!gProto.models_cap || gProto.nmodels == 0)
+        return "The bridge offers no models.";
+    return "Model and Effort is not available for this tab yet.";
+}
+
 void session_model_dialog(void)
 {
     Tab *t = tabs_front();

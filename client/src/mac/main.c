@@ -271,6 +271,18 @@ static void choose_window_item(short item)
     }
 }
 
+/* True while the File menu's item is enabled (adjust_menus has run). */
+static Boolean item_enabled(MenuHandle m, short item)
+{
+    return ((*m)->enableFlags & (1UL << item)) != 0;
+}
+
+static void toggle_full_screen(void)
+{
+    window_set_full_screen(!window_full_screen());
+    CheckItem(gFile, file_item(kFullScreenItem), window_full_screen());
+}
+
 static void do_menu(long choice)
 {
     short menu = HiWord(choice), item = LoWord(choice);
@@ -291,10 +303,7 @@ static void do_menu(long choice)
         case kCloseItem:    close_front(); break;
         case kSaveItem:     filewin_save(front); break;
         case kRevertItem:   filewin_revert(front); break;
-        case kFullScreenItem:
-            window_set_full_screen(!window_full_screen());
-            CheckItem(gFile, file_item(kFullScreenItem), window_full_screen());
-            break;
+        case kFullScreenItem: toggle_full_screen(); break;
         case kCompactItem:  window_toggle_input(); break;
         case kQuitItem:     quit_app(); break;
         }
@@ -392,14 +401,32 @@ static void do_key(EventRecord *ev)
         window_erase_input();
         return;
     }
+    /* Cmd-Shift keys are caught here: MenuKey ignores Shift (KTD1). */
+    if ((ev->modifiers & cmdKey) && (ev->modifiers & shiftKey)) {
+        char lc = (ch >= 'A' && ch <= 'Z') ? (char)(ch + 32) : ch;
+        if (ev->what != keyDown)
+            return;
+        adjust_menus();
+        if (lc == 'f') {
+            if (item_enabled(gFile, file_item(kFullScreenItem)))
+                toggle_full_screen();
+            else
+                SysBeep(1);
+            return;
+        }
+    }
     if (ev->modifiers & cmdKey) {
         if (ch == '.') {
             session_stop();          /* always the front tab, from any window */
             return;
         }
         if (ev->what == keyDown) {
+            long chosen;
             adjust_menus();
-            do_menu(MenuKey(ch));
+            chosen = MenuKey(ch);
+            if (chosen == 0 && (ch == 'm' || ch == 'M'))
+                window_set_status(session_model_reason());   /* dimmed: say why */
+            do_menu(chosen);
         }
         return;
     }
