@@ -926,8 +926,42 @@ static void test_agent_lines(void)
     CHECK_EQ_LONG(count_sent("!AGENTS"), 0);
 }
 
+static void test_chat_capability(void)
+{
+    /* The word is read from #OK and forgotten at the next one. */
+    reset();
+    proto_connect(&P, "ATDTbridge", now);
+    feed("AT\r\nOK\r\nCONNECT 57600\r\n");
+    feed("#OK se30bridge 2 files=rw resume ping models agents chat\r\n"
+         "P[\r\nP alpha\r\nP]\r\n");
+    CHECK_EQ_LONG(P.state, ST_ONLINE);
+    CHECK(proto_chat_cap(&P));
+
+    /* A chat opens with the reserved name, and resumes with its token. */
+    clear_rec();
+    CHECK(proto_open(&P, 3, "*"));
+    CHECK_MEM(R.sent, R.nsent, "3O *\r");
+    feed("3O *\r\n3Y 0123456789abcdef new\r\n3>\r\n");
+    CHECK_EQ_LONG(proto_sess_state(&P, 3), SS_READY);
+    CHECK(strcmp(R.text[find(EV_OPENED)], "*") == 0);
+    clear_rec();
+    CHECK(proto_close(&P, 3));
+    CHECK_MEM(R.sent, R.nsent, "3X\r");
+    feed("3X closed\r\n");
+    CHECK_EQ_LONG(proto_sess_state(&P, 3), SS_NONE);
+    clear_rec();
+    CHECK(proto_open_resume(&P, 3, "*", "0123456789abcdef"));
+    CHECK_MEM(R.sent, R.nsent, "3Y 0123456789abcdef *\r");
+
+    /* A bridge without the word. */
+    reset();
+    connect_online();
+    CHECK(!proto_chat_cap(&P));
+}
+
 int main(void)
 {
+    test_chat_capability();
     test_dial_and_handshake();
     test_handshake_words_and_old_bridge();
     test_handshake_window();

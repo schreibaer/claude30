@@ -101,6 +101,7 @@ static void reset_link(Proto *p)
     p->resume_cap = 0;
     p->ping_cap = 0;
     p->agents_cap = 0;
+    p->chat_cap = 0;
     p->models_cap = 0;
     p->nmodels = 0;
     p->def_model[0] = 0;
@@ -317,6 +318,7 @@ static void read_ok(Proto *p, const char *line, long n)
     p->resume_cap = 0;
     p->ping_cap = 0;
     p->agents_cap = 0;
+    p->chat_cap = 0;
     p->models_cap = 0;
     while (i < n) {
         long w;
@@ -335,6 +337,8 @@ static void read_ok(Proto *p, const char *line, long n)
             p->ping_cap = 1;
         else if (equals(line + w, i - w, "agents"))
             p->agents_cap = 1;
+        else if (equals(line + w, i - w, "chat"))
+            p->chat_cap = 1;
         else if (equals(line + w, i - w, "models"))
             p->models_cap = 1;
     }
@@ -912,6 +916,11 @@ int proto_open_resume(Proto *p, int sid, const char *project, const char *token)
     p->sess[sid].closing_turn = 0;
     set_sess(p, sid, SS_OPENING);
     return 1;
+}
+
+int proto_chat_cap(const Proto *p)
+{
+    return p->chat_cap;
 }
 
 int proto_models_cap(const Proto *p)
