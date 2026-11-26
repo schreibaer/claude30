@@ -80,7 +80,7 @@ class OpenTest(Base):
     def test_capability_and_open_lines(self):
         c = self.client()
         ok = [l for l in c.text() if l.startswith("#OK")][0]
-        self.assertTrue(ok.endswith(" chat stream md"), ok)
+        self.assertTrue(ok.endswith(" chat stream md usage"), ok)
         start = len(c.lines)
         self.assertEqual(c.open(1, "*"), "1O *")
         c.wait_line("1>", start=start)

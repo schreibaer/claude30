@@ -33,8 +33,11 @@ class FakeTerm:
     async def tool_error(self, msg):
         self.out.append(("error", msg))
 
-    async def result(self, status, cost):
+    async def result(self, status, cost, meter=None):
         self.out.append(("result", status))
+
+    async def usage(self, meter):
+        pass
 
     async def agent_start(self, k, typ, task):
         self.out.append(("a+", k, typ, task))
@@ -442,7 +445,7 @@ class WireTests(unittest.TestCase):
 
     def test_ok_advertises_agents(self):
         c = self.client(False)
-        self.assertIn("#OK se30bridge 2 files=rw resume ping models agents chat stream md", c.text())
+        self.assertIn("#OK se30bridge 2 files=rw resume ping models agents chat stream md usage", c.text())
 
     def test_background_result_arrives_after_the_turn(self):
         c = self.client(True)
@@ -452,7 +455,7 @@ class WireTests(unittest.TestCase):
         self.assertEqual([l for l in got if l[:1] in "JTR>"][:5], [
             "J+ 1 Explore Survey the tests", "J- 1 done 3 Found 12 test files",
             "T The background subagent is done: there are 12 test files.",
-            "R success $0.0000", ">"])
+            "R success $0.0123", ">"])
 
     def test_background_result_without_optin_is_plain_lines(self):
         c = self.client(False)

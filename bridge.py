@@ -638,13 +638,18 @@ class Terminal:
             self.skip_output = False
             await self.out_line(msg)
 
-    async def result(self, status, cost):
+    async def result(self, status, cost, meter=None):
         cost_s = f"${cost:.4f}" if cost is not None else "-"
         if self.mode == "app":
             await self.tag("R", f"{status} {cost_s}")
         else:
             self.skip_output = False
-            await self.out_line(f"({status}, {cost_s})")
+            pct = meter.percent() if meter else None
+            ctx = f", ctx {pct}%" if pct is not None else ""
+            await self.out_line(f"({status}, {cost_s}{ctx})")
+
+    async def usage(self, meter):
+        """tty and v1 have no usage line; the result line says it."""
 
     async def ask_permission(self, pid, name, summary, detail_lines):
         """Returns 'y', 'n' or 'a'."""
@@ -982,10 +987,156 @@ def new_conversation(cfg):
     cfg.resume = False
     cfg.always = set()
     cfg.turns = 0
+    cfg.meter = UsageMeter()
 
 
 CHANGE = object()   # wakes a Channel's prompt loop to apply a settings change
 WAKE = object()     # ... or to show what Claude sent between turns
+
+
+class UsageMeter:
+    """What one conversation has used and cost, for the usage line (v2),
+    the tty result line and /usage. Context is the size of the latest main
+    conversation answer: its input, cached input and output tokens, over the
+    window the CLI reports for that model. Cost is a running total: the CLI's
+    total_cost_usd runs per process (it starts again at zero in a restarted
+    or resumed CLI and after a conversation reset), so the meter adds each
+    turn's difference. Nothing here asks Claude for anything."""
+
+    def __init__(self):
+        self.total = 0.0
+        self.cost_known = False
+        self.turns = 0
+        self.turn_cost = None   # the last turn's own cost, None when unknown
+        self.used = None        # tokens in context after the last answer
+        self.window = None      # the model's context window
+        self._proc = 0.0        # the CLI process's total_cost_usd at the last result
+        self._answer = None     # (tokens, model) of this turn's latest answer
+
+    def new_process(self):
+        """A new CLI process (or a conversation reset) counts from zero."""
+        self._proc = 0.0
+
+    def answer(self, usage, model):
+        """A main-conversation answer's usage. A subagent's never comes here."""
+        if not isinstance(usage, dict):
+            return
+        try:
+            used = sum(int(usage.get(k) or 0) for k in (
+                "input_tokens", "cache_creation_input_tokens",
+                "cache_read_input_tokens", "output_tokens"))
+        except (TypeError, ValueError):
+            return
+        if used > 0:
+            self._answer = (used, model)
+
+    def result(self, total_cost, model_usage):
+        """A turn ended. total_cost is the CLI's running total_cost_usd."""
+        self.turns += 1
+        self.turn_cost = None
+        if isinstance(total_cost, (int, float)) and total_cost >= 0:
+            delta = total_cost - self._proc
+            if delta < 0:
+                delta = total_cost   # the process started again
+            self._proc = float(total_cost)
+            self.total += delta
+            self.turn_cost = delta
+            self.cost_known = True
+        if self._answer:
+            self.used, model = self._answer
+            self._answer = None
+            self.window = self._window_for(model, model_usage)
+
+    @staticmethod
+    def _window_for(model, model_usage):
+        if not model or not isinstance(model_usage, dict):
+            return None
+        entry = model_usage.get(model)
+        if entry is None:
+            entry = next((e for e in model_usage.values()
+                          if isinstance(e, dict) and e.get("canonicalModel") == model), None)
+        window = entry.get("contextWindow") if isinstance(entry, dict) else None
+        return int(window) if isinstance(window, (int, float)) and window > 0 else None
+
+    def percent(self):
+        """Whole percent of the window in use, or None when either is unknown."""
+        if self.used is None or not self.window:
+            return None
+        return max(0, min(100, self.used * 100 // self.window))
+
+    def wire(self):
+        """The payload of a v2 usage line, or None when there is nothing to say."""
+        if self.used is None and not self.cost_known:
+            return None
+        return (f"{self.used if self.used is not None else '-'} "
+                f"{self.window if self.window else '-'} "
+                f"{f'{self.total:.4f}' if self.cost_known else '-'}")
+
+    def to_record(self):
+        return {"cost": round(self.total, 6) if self.cost_known else None,
+                "turns": self.turns, "used": self.used, "window": self.window}
+
+    @classmethod
+    def from_record(cls, rec):
+        m = cls()
+        if not isinstance(rec, dict):
+            return m
+
+        def num(key, kind, low):
+            v = rec.get(key)
+            ok = isinstance(v, (int, float)) and not isinstance(v, bool) and v >= low
+            return kind(v) if ok else None
+        cost = num("cost", float, 0)
+        if cost is not None:
+            m.total, m.cost_known = cost, True
+        m.turns = num("turns", int, 0) or 0
+        m.used = num("used", int, 1)
+        m.window = num("window", int, 1)
+        return m
+
+
+def _group(n):
+    return f"{n:,}"
+
+
+async def usage_report(session, meter):
+    """The lines /usage prints. The one place that asks Claude Code for
+    anything: a local request for its context breakdown, with the meter's
+    own reading as the fallback."""
+    info = None
+    getter = getattr(session, "context_usage", None)
+    if getter:
+        try:
+            info = await asyncio.wait_for(getter(), 5)
+        except Exception:  # noqa: BLE001
+            info = None
+    lines = []
+    used, window = meter.used, meter.window
+    if isinstance(info, dict):
+        total, raw = info.get("totalTokens"), info.get("rawMaxTokens") or info.get("maxTokens")
+        if isinstance(total, int) and isinstance(raw, int) and raw > 0:
+            used, window = total, raw
+    if used is not None and window:
+        lines.append(f"Context: {_group(used)} of {_group(window)} tokens "
+                     f"({max(0, min(100, used * 100 // window))}%).")
+    elif used is not None:
+        lines.append(f"Context: {_group(used)} tokens.")
+    else:
+        lines.append("Context: no reading yet.")
+    cats = info.get("categories") if isinstance(info, dict) else None
+    if isinstance(cats, list):
+        shown = [c for c in cats if isinstance(c, dict) and isinstance(c.get("tokens"), int)
+                 and c["tokens"] > 0 and not any(w in str(c.get("name", "")).lower()
+                                                  for w in ("free", "buffer"))]
+        shown.sort(key=lambda c: -c["tokens"])
+        for c in shown[:4]:
+            lines.append(f"  {clip(str(c.get('name', '?')), 40)}: {_group(c['tokens'])}")
+    if meter.cost_known:
+        lines.append(f"Cost: ${meter.total:.4f} over {meter.turns} "
+                     f"turn{'s' if meter.turns != 1 else ''}.")
+    else:
+        lines.append(f"Cost: unknown over {meter.turns} turn{'s' if meter.turns != 1 else ''}.")
+    return lines
 
 
 class SessionConfig:
@@ -1006,6 +1157,7 @@ class SessionConfig:
         self.partial = False  # v2 only: ask for partial messages, to stream answers
         self.always = set()   # "Tool" or "Bash:<exact command>"
         self.turns = 0
+        self.meter = UsageMeter()   # what the conversation used and cost
 
 
 class ClaudeSession:
@@ -1071,6 +1223,7 @@ class ClaudeSession:
     async def start(self):
         from claude_agent_sdk import ClaudeSDKClient
         opts = self.options()
+        self.cfg.meter.new_process()
         self.client = ClaudeSDKClient(options=opts)
         await self.client.connect()
         self._msgs = asyncio.Queue()
@@ -1097,6 +1250,12 @@ class ClaudeSession:
         """Switches the model of the running conversation (None: default)."""
         if self.client:
             await self.client.set_model(model)
+
+    async def context_usage(self):
+        """Claude Code's own context breakdown (a local request to the CLI)."""
+        if not self.client:
+            return None
+        return await self.client.get_context_usage()
 
     async def _can_use_tool(self, tool_name, input_data, context):
         from claude_agent_sdk.types import PermissionResultAllow, PermissionResultDeny
@@ -1198,12 +1357,18 @@ class ClaudeSession:
             from claude_agent_sdk import ToolResultBlock
         except ImportError:
             ToolResultBlock = None
+        try:
+            from claude_agent_sdk import ConversationResetMessage
+        except ImportError:
+            ConversationResetMessage = None
         ag = self.agents
         if isinstance(msg, StreamEvent):
             if not getattr(msg, "parent_tool_use_id", None):
                 await self._stream_event(msg.event)
         elif isinstance(msg, AssistantMessage):
             parent = getattr(msg, "parent_tool_use_id", None)
+            if not parent:
+                self.cfg.meter.answer(getattr(msg, "usage", None), getattr(msg, "model", None))
             for block in msg.content:
                 if parent:
                     # A subagent's own work: counted, never sent.
@@ -1230,6 +1395,8 @@ class ClaudeSession:
                 elif block.is_error:
                     first = first_line(block.content) or "error"
                     await self.term.tool_error(first)
+        elif ConversationResetMessage and isinstance(msg, ConversationResetMessage):
+            self.cfg.meter.new_process()   # the CLI's running totals start again
         elif isinstance(msg, SystemMessage):
             await self._system(msg)
         elif isinstance(msg, ResultMessage):
@@ -1239,7 +1406,10 @@ class ClaudeSession:
                 self.cfg.claude_id = msg.session_id
             reason = getattr(msg, "terminal_reason", None) or ""
             status = "interrupted" if reason.startswith("aborted") else msg.subtype
-            await self.term.result(status, getattr(msg, "total_cost_usd", None))
+            meter = self.cfg.meter
+            meter.result(getattr(msg, "total_cost_usd", None), getattr(msg, "model_usage", None))
+            await self.term.result(status, meter.turn_cost, meter)
+            await self.term.usage(meter)
             return True
         return False
 
@@ -1372,6 +1542,34 @@ class DemoSession:
         self._bg = None           # the background subagent's timer
         self._bg_done = False     # ... which ended between turns
         self._block = None        # the text block a "long" turn is streaming
+        self._proc_total = 0.0    # the made-up CLI's running cost
+        self._full = False        # the prompt has the word "full": context near 85%
+
+    async def _result(self, status="success"):
+        """Ends a turn with made-up usage that goes through the real meter:
+        each turn adds 0.0123 and 4000 tokens of context, and a prompt with
+        the word "full" jumps the context to 85% of a 200,000-token window."""
+        m = self.cfg.meter
+        if status == "success":
+            used = 170000 if self._full else min((m.used or 8000) + 4000, 199000)
+            m.answer({"input_tokens": used}, "demo")
+            self._proc_total += 0.0123
+            m.result(self._proc_total, {"demo": {"contextWindow": 200000}})
+        else:
+            m.result(self._proc_total, None)
+        await self.term.result(status, m.turn_cost, m)
+        await self.term.usage(m)
+
+    async def context_usage(self):
+        m = self.cfg.meter
+        if m.used is None:
+            return None   # nothing to report before the first turn
+        return {"totalTokens": m.used, "rawMaxTokens": m.window or 200000,
+                "categories": [{"name": "Messages", "tokens": max(m.used - 12000, 0)},
+                               {"name": "System prompt", "tokens": 8000},
+                               {"name": "Tools", "tokens": 3000},
+                               {"name": "Memory files", "tokens": 1000},
+                               {"name": "Free space", "tokens": 100000}]}
 
     async def start(self):
         # Test hook: a slow start with a child process that, like the real
@@ -1381,6 +1579,7 @@ class DemoSession:
             self._child = await asyncio.create_subprocess_exec(
                 "cat", stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.DEVNULL)
             await asyncio.sleep(delay)
+        self.cfg.meter.new_process()
         self.term.on_interrupt = self.interrupt
 
     async def stop(self):
@@ -1404,7 +1603,7 @@ class DemoSession:
                               "run_in_background": True})
         await ag.end_result("b1", "Async agent launched successfully.", False)
         await t.text("It runs on; ask me anything meanwhile.")
-        await t.result("success", 0.0)
+        await self._result()
         self._bg = asyncio.ensure_future(self._background_runs())
 
     async def _background_runs(self):
@@ -1423,7 +1622,7 @@ class DemoSession:
         self._bg_done = False
         await self.agents.end("b1", "done", "Found 12 test files")
         await self.term.text("The background subagent is done: there are 12 test files.")
-        await self.term.result("success", 0.0)
+        await self._result()
         return True
 
     async def _agents_turn(self):
@@ -1455,12 +1654,12 @@ class DemoSession:
             await ag.step(tid, name, summ)
         if self._stop:
             await ag.close_all()
-            await t.result("interrupted", 0.0)
+            await self._result("interrupted")
             return
         await ag.end("d2", "done", "The parser is documented in docs/parser.md")
         await ag.end("d1", "done", "Tests are in tests/test_parser.py")
         await t.text("Both subagents are done.")
-        await t.result("success", 0.0)
+        await self._result()
 
 
     async def _chat_turn(self, prompt):
@@ -1479,7 +1678,7 @@ class DemoSession:
                 if ans == "a":
                     self.cfg.always.add("WebSearch")
             await t.tool("WebSearch", summary + (" (allowed)" if ans in "ya" else " (denied)"))
-        await t.result("success", 0.0)
+        await self._result()
 
     async def set_model(self, model):
         pass   # the demo reads cfg.model each turn
@@ -1500,7 +1699,7 @@ class DemoSession:
             for n, i in enumerate(range(0, len(text), 12)):
                 if self._stop:
                     await block.flush()
-                    return await t.result("interrupted", 0.0)
+                    return await self._result("interrupted")
                 await asyncio.sleep(delay)
                 await block.delta(text[i:i + 12])
                 if n == 30 and "tool" in prompt.lower().split():
@@ -1508,11 +1707,12 @@ class DemoSession:
             await block.end(text)
         finally:
             self._block = None
-        await t.result("success", 0.0)
+        await self._result()
 
     async def turn(self, prompt):
         self._stop = False
         t = self.term
+        self._full = "full" in prompt.lower().split()
         if self._bg_done:
             await self.follow()
         if "streaming" in prompt.lower().split():
@@ -1550,7 +1750,7 @@ class DemoSession:
         )
         for i in range(1, 31):
             if self._stop:
-                await t.result("interrupted", 0.0)
+                await self._result("interrupted")
                 return
             await t.text(f"Pager test line {i} of 30.")
         summary, detail = describe_tool("Edit", {
@@ -1565,7 +1765,7 @@ class DemoSession:
             if ans == "a":
                 self.cfg.always.add("Edit")
         await t.tool("Edit", summary + (" (allowed)" if ans in "ya" else " (denied)"))
-        await t.result("success", 0.0)
+        await self._result()
 
 
 def make_session(args, out, cfg):
@@ -1627,6 +1827,7 @@ HELP = """Commands:
   /new         start a fresh conversation
   /edits on    auto-accept file edits (off asks each time)
   /agents      list the subagents this project offers
+  /usage       context used and what this conversation cost
   /model NAME  the model for the next turn (alone: show choices)
   /effort LVL  low, medium, high, xhigh or max (alone: show choices)
   /help        this text
@@ -1637,6 +1838,7 @@ While Claude works: ctrl-C stops it. At --More--: space, return or q."""
 
 CHAT_HELP = """Commands:
   /new         start a fresh conversation
+  /usage       context used and what this conversation cost
   /model NAME  the model for the next turn (alone: show choices)
   /effort LVL  low, medium, high, xhigh or max (alone: show choices)
   /help        this text
@@ -2494,8 +2696,14 @@ class Channel:
     async def notice(self, msg):
         await self.tag("I", msg)
 
-    async def result(self, status, cost):
+    async def result(self, status, cost, meter=None):
         await self.tag("R", f"{status} {f'${cost:.4f}' if cost is not None else '-'}")
+
+    async def usage(self, meter):
+        """What the conversation has used and cost, for an app that sent !USAGE."""
+        wire = meter.wire() if self.v2.usage_optin else None
+        if wire:
+            await self.tag("$", wire)
 
     async def ask_permission(self, pid, name, summary, detail_lines):
         await self.tag("Q", f"{pid} {name} {summary}")
@@ -2634,6 +2842,7 @@ class Channel:
         self.cfg.resume = False
         self.cfg.always = set()
         self.cfg.turns = 0
+        self.cfg.meter = UsageMeter()
         self.cut = False
         self._save(turn_running=False)
 
@@ -2641,7 +2850,8 @@ class Channel:
         rec = {
             "project": self.name, "claude_id": self.cfg.claude_id,
             "accept_edits": self.cfg.accept_edits, "always": sorted(self.cfg.always),
-            "turns": self.cfg.turns, "turn_running": turn_running}
+            "turns": self.cfg.turns, "turn_running": turn_running,
+            "usage": self.cfg.meter.to_record()}
         if self.chat:
             rec["cwd"] = self.chat_dir
         self.v2.store.put(self.token, rec)
@@ -2664,6 +2874,7 @@ class Channel:
         self.cfg.accept_edits = bool(rec.get("accept_edits"))
         self.cfg.always = set(rec.get("always") or [])
         self.cfg.turns = int(rec.get("turns") or 0)
+        self.cfg.meter = UsageMeter.from_record(rec.get("usage"))
         # A conversation that never ran a turn has nothing saved to resume:
         # it starts under the same id instead.
         self.cfg.resume = self.cfg.turns > 0
@@ -2734,6 +2945,7 @@ class Channel:
         try:
             await self.tag("O", self.name)
             await self.tag("Y", f"{self.token} {how}")
+            await self.usage(self.cfg.meter)   # a resumed conversation's reading
             for p in self.preset_problems:
                 await self.tool_error(p)
             await self.send_settings(self.pick_model, self.pick_effort)
@@ -2767,6 +2979,10 @@ class Channel:
                     continue
                 if cmd[0] == "/agents":
                     for line in agents_lines(self.cfg.cwd, getattr(self.session, "init_agents", [])):
+                        await self.notice(line)
+                    continue
+                if cmd[0] == "/usage":
+                    for line in await usage_report(self.session, self.cfg.meter):
                         await self.notice(line)
                     continue
                 if cmd[0] == "/new":
@@ -2871,6 +3087,7 @@ class Channel:
         if rec is not None:
             # Keep grants given during the last turn for the next call.
             rec["always"] = sorted(self.cfg.always)
+            rec["usage"] = self.cfg.meter.to_record()   # a result that came just before a drop
             self.v2.store.put(self.token, rec)
 
 
@@ -2886,6 +3103,7 @@ class V2:
         self.store = ResumeStore(args.state_dir)
         self.agents_optin = False   # the app sent !AGENTS: it draws subagent lines
         self.md_optin = False       # the app sent !MD: it styles ** and __ itself
+        self.usage_optin = False    # the app sent !USAGE: it draws context and cost
         self.no_md = bool(getattr(args, "no_md", False))   # --no-md: do not offer it
         self.closing = set()        # close() tasks still running
         sweep_chats(self.store, args.state_dir)
@@ -2983,7 +3201,7 @@ class V2:
 
     async def run(self):
         try:
-            words = "resume ping models agents chat stream" + ("" if self.no_md else " md")
+            words = "resume ping models agents chat stream" + ("" if self.no_md else " md") + " usage"
             await self.term.send_line(f"#OK se30bridge 2 files={self.args.files} {words}".encode(),
                                       counted=False)
             await self.send_models()
@@ -2997,6 +3215,9 @@ class V2:
                     continue
                 if line == "!MD":
                     self.md_optin = not self.no_md
+                    continue
+                if line == "!USAGE":
+                    self.usage_optin = True
                     continue
                 if line == "!LIST":
                     await self.send_list()
@@ -3080,6 +3301,10 @@ async def main_async(args):
                 continue
             if cmd[0] == "/agents":
                 for line in agents_lines(cfg.cwd, getattr(session, "init_agents", [])):
+                    await term.notice(line)
+                continue
+            if cmd[0] == "/usage":
+                for line in await usage_report(session, cfg.meter):
                     await term.notice(line)
                 continue
             if cmd[0] == "/new":

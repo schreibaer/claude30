@@ -42,7 +42,7 @@ class HandshakeTest(Projects, unittest.TestCase):
     def test_hello_gets_ok_and_list(self):
         c = self.client()
         c.hello()
-        self.assertIn("#OK se30bridge 2 files=rw resume ping models agents chat stream md", c.text())
+        self.assertIn("#OK se30bridge 2 files=rw resume ping models agents chat stream md usage", c.text())
         self.assertEqual(c.projects(), ["alpha", "beta", "gamma"])
         c.close()
 
@@ -110,8 +110,8 @@ class SessionsTest(Projects, unittest.TestCase):
         c.wait_line("2? 1", start=start, timeout=20)
         c.send("1A 1 y")
         c.send("2A 1 y")
-        c.wait_line("1R success $0.0000", start=start, timeout=20)
-        c.wait_line("2R success $0.0000", start=start, timeout=20)
+        c.wait_line("1R success $0.0123", start=start, timeout=20)
+        c.wait_line("2R success $0.0123", start=start, timeout=20)
         one = c.session(1, start)
         two = c.session(2, start)
         self.assertTrue(any("demo mode in alpha" in l for l in one))
@@ -134,9 +134,9 @@ class SessionsTest(Projects, unittest.TestCase):
         i = c.wait_for(lambda l: l.startswith("1? "), 20, q)
         c.send(f"1A {c.text()[i].split()[1]} y")
         c.wait_line("1>", 20, i)
-        self.assertNotIn("2R success $0.0000", c.text()[start:])
+        self.assertNotIn("2R success $0.0123", c.text()[start:])
         c.send(f"2A {c.text()[q].split()[1]} n")
-        c.wait_line("2R success $0.0000", 20, q)
+        c.wait_line("2R success $0.0123", 20, q)
         c.close()
 
     def test_one_w_per_window_across_sessions(self):
@@ -221,7 +221,7 @@ class SessionsTest(Projects, unittest.TestCase):
         c.wait_line("2X closed", 20)
         # Session 3 still works, and session 1's number is free again.
         c.turn(3, "hi")
-        self.assertIn("3R success $0.0000", c.text()[start:])
+        self.assertIn("3R success $0.0123", c.text()[start:])
         self.assertEqual(c.open(1, "alpha"), "1O alpha")
         c.close()
 
@@ -269,7 +269,7 @@ class CompatibilityTest(Projects, unittest.TestCase):
         self.assertEqual(lines[-1], "? 1")
         self.assertFalse(any(l[:1].isdigit() for l in lines))
         c.send("A 1 y")
-        c.wait_line("R success $0.0000", 20, j)
+        c.wait_line("R success $0.0123", 20, j)
         c.close()
 
     def test_tty_echo_and_pager(self):
