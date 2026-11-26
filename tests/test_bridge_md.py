@@ -97,6 +97,28 @@ class OfferTests(unittest.TestCase):
         self.assertEqual(self.answer(c), prose_lines(bridge.STYLES_DEMO, False))
 
 
+class PromptTests(unittest.TestCase):
+    class Term:
+        cols = 80
+
+    class MdTerm(Term):
+        keep_marks = True
+
+    def test_plain_prompts_without_md(self):
+        for p in (bridge.SYSTEM_APPEND, bridge.CHAT_PROMPT):
+            text = p.format(cols=80, style=bridge.style_sentence(self.Term()))
+            self.assertIn("Avoid tables", text)
+            self.assertNotIn("**bold**", text)
+
+    def test_md_prompts_name_the_styles(self):
+        for p in (bridge.SYSTEM_APPEND, bridge.CHAT_PROMPT):
+            text = p.format(cols=80, style=bridge.style_sentence(self.MdTerm()))
+            self.assertIn("**bold**", text)
+            self.assertIn("No strikethrough", text)
+            self.assertNotIn("Avoid tables", text)
+            self.assertTrue(text.isascii())
+
+
 class ChunkerTests(unittest.TestCase):
     def test_marks_survive_every_split_of_the_deltas(self):
         text = "A **bold phrase** and __this__ with `code` and a line\n```\nx = __y__\n```\ndone"

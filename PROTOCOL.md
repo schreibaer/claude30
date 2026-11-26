@@ -332,7 +332,7 @@ The capability word `md` in `#OK` means the bridge can leave Markdown marks in C
 
 Without `!MD`, and for ZTerm, tty mode and v1, nothing changes: the bridge strips `**` and `__` from `T`, `+` and `C` lines. After `!MD` it keeps those marks in all three, and strips nothing else. Backticks, `#`, `-`, `>`, `|` and link marks were never stripped, so the client already received them. Streaming (`<n>V on`) cuts and joins the lines as before; a client that styles must treat a `+` as the continuation of the line before it, so a mark that opens in one piece and closes in a later one still pairs. Code inside a fence is sent as `C` lines and is not styled by the client.
 
-What a client does with the marks is up to it. Claude30 draws `**bold**`, `*italic*`, `` `code` ``, links, headings, quotes, lists, rules and tables in Geneva and Monaco, and shows anything that is not well-formed Markdown as typed.
+After `!MD` the bridge also tells Claude, in the line it adds to the system prompt (and in the chat prompt), which Markdown the screen draws; without it the prompt still asks for plain ASCII and no tables. A session opened before `!MD` keeps the plain prompt. What a client does with the marks is up to it. Claude30 draws `**bold**`, `*italic*`, `` `code` ``, links, headings, quotes, lists, rules and tables in Geneva and Monaco, and shows anything that is not well-formed Markdown as typed.
 
 ## Files
 

@@ -756,8 +756,23 @@ SYSTEM_APPEND = (
     "The user is working from a 1989 Macintosh SE/30 over a slow serial link: "
     "a small monochrome screen about {cols} columns wide. Keep replies concise. "
     "Prefer short paragraphs and short code excerpts; don't repeat large files "
-    "back. Avoid tables, emoji and decorative Unicode; plain ASCII is best."
+    "back. {style}"
 )
+
+# The style sentence for both prompts. A client that sent !MD draws Markdown
+# (see PROTOCOL.md, Markdown prose); ZTerm, tty mode and older apps show it
+# as typed.
+STYLE_PLAIN = "Avoid tables, emoji and decorative Unicode; plain ASCII is best."
+STYLE_MD = (
+    "The screen draws Markdown: **bold**, *italic*, `code`, # headings, - lists, "
+    "> quotes, --- rules, [links](url) and fenced code; tables only when narrow, "
+    "in a fixed-width font. No strikethrough, emoji or decorative Unicode; plain "
+    "ASCII is best."
+)
+
+
+def style_sentence(term):
+    return STYLE_MD if getattr(term, "keep_marks", False) else STYLE_PLAIN
 
 
 # A chat (v2 only) is a conversation outside any project: its own empty
@@ -768,9 +783,8 @@ CHAT_PROMPT = (
     "link: a small monochrome screen about {cols} columns wide. This is a casual "
     "conversation, not a coding session. You can look things up with web search "
     "and web fetch. You have no other tools: you cannot read or change files or "
-    "run commands. Keep replies short and conversational. Prefer short paragraphs; "
-    "avoid tables, emoji and decorative Unicode; plain ASCII is best. Don't repeat "
-    "large amounts of text back."
+    "run commands. Keep replies short and conversational. Prefer short paragraphs. "
+    "{style} Don't repeat large amounts of text back."
 )
 CHAT_TOOLS = ["WebSearch", "WebFetch"]
 
@@ -1025,7 +1039,8 @@ class ClaudeSession:
                 permission_mode="default",
                 tools=list(CHAT_TOOLS),
                 can_use_tool=self._can_use_tool,
-                system_prompt=CHAT_PROMPT.format(cols=self.term.cols),
+                system_prompt=CHAT_PROMPT.format(cols=self.term.cols,
+                                                 style=style_sentence(self.term)),
                 setting_sources=[],
                 strict_mcp_config=True,
             )
@@ -1036,7 +1051,8 @@ class ClaudeSession:
                 allowed_tools=["Read", "Glob", "Grep", "TodoWrite"],
                 can_use_tool=self._can_use_tool,
                 system_prompt={"type": "preset", "preset": "claude_code",
-                               "append": SYSTEM_APPEND.format(cols=self.term.cols)},
+                               "append": SYSTEM_APPEND.format(
+                                   cols=self.term.cols, style=style_sentence(self.term))},
                 setting_sources=["user", "project", "local"],
             )
         if self.cfg.model:
