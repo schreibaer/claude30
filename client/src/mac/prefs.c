@@ -20,6 +20,7 @@ static const unsigned char kPrefsName[] = "\pClaude30 Prefs";
 #define PREFS_V4_SIZE ((long)offsetof(Prefs, tokens))
 #define PREFS_V5_SIZE ((long)offsetof(Prefs, models))
 #define PREFS_V6_SIZE ((long)offsetof(Prefs, streams))
+#define PREFS_V7_SIZE ((long)offsetof(Prefs, hide_cost))
 
 /* Folder Manager selectors; Multiversal has FindFolder but not these names. */
 #define kOnSystemDiskVol  ((short)0x8000)
@@ -62,6 +63,8 @@ void prefs_load(void)
         short i;
         if (((Prefs *)*h)->version == PREFS_VERSION && GetHandleSize(h) == sizeof(Prefs)) {
             memcpy(&gPrefs, *h, sizeof(Prefs));
+        } else if (((Prefs *)*h)->version == 7 && GetHandleSize(h) >= PREFS_V7_SIZE) {
+            memcpy(&gPrefs, *h, PREFS_V7_SIZE);   /* version 7: the cost is shown */
         } else if (((Prefs *)*h)->version == 6 && GetHandleSize(h) >= PREFS_V6_SIZE) {
             memcpy(&gPrefs, *h, PREFS_V6_SIZE);   /* version 6: streaming off */
         } else if (((Prefs *)*h)->version == 5 && GetHandleSize(h) >= PREFS_V5_SIZE) {
@@ -98,6 +101,7 @@ void prefs_load(void)
             gPrefs.dial[0] = 63;
         gPrefs.compact_input = gPrefs.compact_input != 0;
         gPrefs.hide_scrollbar = gPrefs.hide_scrollbar != 0;
+        gPrefs.hide_cost = gPrefs.hide_cost != 0;
     }
     CloseResFile(ref);
     UseResFile(saved);
@@ -224,7 +228,7 @@ Boolean prefs_dialog(void)
 {
     DialogPtr d = GetNewDialog(kSettingsDialog, NULL, (WindowPtr)-1);
     short hit = 0, type, port = gPrefs.port, speed = gPrefs.speed;
-    short hide = gPrefs.hide_scrollbar;
+    short hide = gPrefs.hide_scrollbar, hideCost = gPrefs.hide_cost;
     Handle h;
     Rect r;
     Str255 s;
@@ -234,6 +238,7 @@ Boolean prefs_dialog(void)
     set_radio(d, kSetModem, kSetPrinter, kSetModem + port);
     set_radio(d, kSet57600, kSet19200, kSet57600 + speed);
     set_check(d, kSetHideBar, hide != 0);
+    set_check(d, kSetHideCost, hideCost != 0);
     GetDialogItem(d, kSetDial, &type, &h, &r);
     SetDialogItemText(h, gPrefs.dial);
     SelectDialogItemText(d, kSetDial, 0, 32767);
@@ -254,6 +259,9 @@ Boolean prefs_dialog(void)
         } else if (hit == kSetHideBar) {
             hide = !hide;
             set_check(d, kSetHideBar, hide != 0);
+        } else if (hit == kSetHideCost) {
+            hideCost = !hideCost;
+            set_check(d, kSetHideCost, hideCost != 0);
         }
     }
     if (hit == kSetOK) {
@@ -266,6 +274,7 @@ Boolean prefs_dialog(void)
         gPrefs.port = port;
         gPrefs.speed = speed;
         gPrefs.hide_scrollbar = hide;
+        gPrefs.hide_cost = hideCost;
         prefs_save();
     }
     DisposeDialog(d);

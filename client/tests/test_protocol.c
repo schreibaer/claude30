@@ -947,6 +947,52 @@ static void test_md_capability(void)
     CHECK_EQ_LONG(count_sent("!MD"), 0);
 }
 
+static void test_usage_capability(void)
+{
+    /* The word turns on !USAGE, sent once after the project list. */
+    reset();
+    proto_connect(&P, "ATDTbridge", now);
+    feed("AT\r\nOK\r\n");
+    feed("CONNECT 57600\r\n");
+    feed("> \r\n> #HELLO SE30 2\r\n#OK se30bridge 2 files=rw resume ping agents chat stream md usage\r\n"
+         "P[\r\nP alpha\r\nP]\r\n");
+    CHECK(proto_usage_cap(&P));
+    CHECK_EQ_LONG(count_sent("!USAGE\r"), 1);
+    feed("P[\r\nP alpha\r\nP]\r\n");     /* a new list is not a new call */
+    CHECK_EQ_LONG(count_sent("!USAGE\r"), 1);
+
+    /* A session's $ line is an event with its payload. */
+    open_ready(2, "alpha");
+    feed("2R success $0.0123\r\n2$ 84112 200000 0.4414\r\n2>\r\n");
+    {
+        int i = find(EV_USAGE);
+        CHECK(i >= 0);
+        if (i >= 0) {
+            CHECK_EQ_LONG(R.sid[i], 2);
+            CHECK_MEM(R.text[i], R.len[i], "84112 200000 0.4414");
+        }
+    }
+    CHECK_EQ_LONG(P.dropped, 0);
+    CHECK_EQ_LONG(proto_sess_state(&P, 2), SS_READY);
+
+    /* A $ line between prose pieces does not break the paragraph. */
+    clear_rec();
+    feed("2T Hello\r\n2$ 1 2 0.0001\r\n2+ there\r\n");
+    CHECK_EQ_LONG(count(EV_TEXT_CONT), 1);
+
+    /* A $ line for a session that is not open is dropped like any other. */
+    clear_rec();
+    feed("5$ 1 2 0.0001\r\n");
+    CHECK_EQ_LONG(count(EV_USAGE), 0);
+
+    /* Without the word the bridge is never asked, and the word is forgotten
+       at the next #OK. */
+    reset();
+    connect_online();
+    CHECK(!proto_usage_cap(&P));
+    CHECK_EQ_LONG(count_sent("!USAGE"), 0);
+}
+
 static void test_chat_capability(void)
 {
     /* The word is read from #OK and forgotten at the next one. */
@@ -1017,6 +1063,7 @@ static void test_stream_capability(void)
 
 int main(void)
 {
+    test_usage_capability();
     test_stream_capability();
     test_md_capability();
     test_chat_capability();

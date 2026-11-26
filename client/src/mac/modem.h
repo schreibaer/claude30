@@ -58,6 +58,8 @@ void session_model_dialog(void);
    checked, and flipping it (an open session at once, else when it opens). */
 Boolean session_stream_available(void);
 Boolean session_stream_on(void);
+/* The bridge reports context and cost, so the tabs and the status line show them. */
+Boolean session_usage_shown(void);
 void session_stream_toggle(void);
 
 /* New Tab: runs the project picker and opens the chosen project. */

@@ -60,6 +60,9 @@ void window_agent_update(Tab *t, int slot, const char *text);
 Boolean window_transcript_empty(Tab *t);
 
 void window_set_status(const char *s);
+/* Draws the status line again, for a change that is not in its message text
+   (the front tab's context and cost). */
+void window_status_redraw(void);
 void window_set_send_enabled(Boolean on);
 
 /* The front tab's input text; valid until the next call that changes it. */

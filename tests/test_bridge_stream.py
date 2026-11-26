@@ -190,8 +190,11 @@ class StreamTerm:
     async def tool_error(self, msg):
         self.out.append(("error", msg))
 
-    async def result(self, status, cost):
+    async def result(self, status, cost, meter=None):
         self.out.append(("result", status))
+
+    async def usage(self, meter):
+        pass
 
     async def agent_start(self, *a):
         pass
@@ -416,7 +419,7 @@ class WireTests(unittest.TestCase):
 
     def test_ok_advertises_stream(self):
         c = self.client()
-        self.assertIn("#OK se30bridge 2 files=rw resume ping models agents chat stream md", c.text())
+        self.assertIn("#OK se30bridge 2 files=rw resume ping models agents chat stream md usage", c.text())
 
     def test_streamed_text_is_chunked_and_equals_the_unstreamed_text(self):
         c = self.client()

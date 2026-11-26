@@ -40,7 +40,7 @@ This is a tagged line protocol for a native SE/30 client.
 | `Q <id> <Tool> <summary>` | Permission request header... |
 | `D[`, `D <line>`, `D]` | ...followed by an optional unified diff or command body... |
 | `? <id>` | ...followed by this line: now answer it |
-| `R <status> <cost>` | Turn finished. Status is `success`, `interrupted` or an error subtype. Cost is e.g. `$0.0123`. |
+| `R <status> <cost>` | Turn finished. Status is `success`, `interrupted` or an error subtype. Cost is that turn's own cost, e.g. `$0.0123`, or `-` when unknown. (An earlier bridge sent the Claude CLI's running total here, which started again whenever it restarted.) |
 | `W` | Flow-control window boundary (see below) |
 
 ### Client → bridge
@@ -130,6 +130,7 @@ Both sides ignore a session line whose tag they do not know, and a line for a se
 | `!PING` | Heartbeat (see Resume and heartbeat) |
 | `!AGENTS` | Send subagent progress as `J` lines (see Subagents). Only a client that saw the `agents` word sends it. |
 | `!MD` | Keep Markdown marks in prose (see Markdown prose). Only a client that saw the `md` word sends it. |
+| `!USAGE` | Send each session's context and cost as `$` lines (see Context and cost). Only a client that saw the `usage` word sends it. |
 
 ### Session lines, bridge → client
 
@@ -142,6 +143,7 @@ Every v1 bridge→client tag works per session with the digit in front: `<n>T`, 
 | `<n>X closed` | The answer to the client's `<n>X`: the session is stopped and its number is free again. |
 | `<n>Y <token> <how>` | Which conversation the session runs: `new`, `resumed` or `cut` (see Resume and heartbeat) |
 | `<n>M <model> <effort>` | The model and effort the session runs with, or will from its next turn (see Model and effort) |
+| `<n>$ <used> <window> <cost>` | What the session's conversation has used and cost (see Context and cost). Only sent to a client that sent `!USAGE`. |
 | `<n>J+ <k> <type> <task>`, `<n>J~ <k> <steps> <tool> <summary>`, `<n>J- <k> <status> <steps> <summary>` | A subagent started, moved on, ended (see Subagents). Only sent to a client that sent `!AGENTS`. |
 
 `<n>>` means only "ready for a new prompt". Unlike v1, the bridge sends no `>` for continuation lines.
@@ -286,7 +288,7 @@ B: 2>
 
 ## Subagents
 
-The capability word `agents` in `#OK` (`#OK se30bridge 2 files=rw resume ping models agents chat stream md`) means the bridge can report Claude's subagents (the Agent tool) as lines a client rewrites in place. A client that wants them answers with `!AGENTS` once, after the project list. Without `!AGENTS`, and for ZTerm and v1, the bridge sends ordinary lines instead: `<n>U Agent <type>: <task>` when a subagent starts and `<n>U Agent <type> <status>: <summary>` when it ends (tty mode prints them as `  [Agent] ...`). A subagent's own prose and tool lines are never sent; only its start, its progress and its end are.
+The capability word `agents` in `#OK` (`#OK se30bridge 2 files=rw resume ping models agents chat stream md usage`) means the bridge can report Claude's subagents (the Agent tool) as lines a client rewrites in place. A client that wants them answers with `!AGENTS` once, after the project list. Without `!AGENTS`, and for ZTerm and v1, the bridge sends ordinary lines instead: `<n>U Agent <type>: <task>` when a subagent starts and `<n>U Agent <type> <status>: <summary>` when it ends (tty mode prints them as `  [Agent] ...`). A subagent's own prose and tool lines are never sent; only its start, its progress and its end are.
 
 A client sends `!AGENTS` and the bridge then sends, per session:
 
@@ -302,7 +304,7 @@ When a turn ends, the bridge closes any subagent still open with `J-` and `stopp
 
 ## Chats
 
-The capability word `chat` in `#OK` (`#OK se30bridge 2 files=rw resume ping models agents chat stream md`) means a client can open a conversation that belongs to no project. The client sends `<n>O *` (or `<n>Y <token> *` to resume one); `*` is never in the project list, and a project folder with that name is left out of it. The bridge answers as for a project: `<n>O *`, `<n>Y <token> new`, `<n>M ...` and `<n>>`, with the same refusals (`already open`, `too many tabs`, `could not start: ...`). A client sends `*` only after it saw `chat`; a bridge without the word refuses it with `<n>X not available`.
+The capability word `chat` in `#OK` (`#OK se30bridge 2 files=rw resume ping models agents chat stream md usage`) means a client can open a conversation that belongs to no project. The client sends `<n>O *` (or `<n>Y <token> *` to resume one); `*` is never in the project list, and a project folder with that name is left out of it. The bridge answers as for a project: `<n>O *`, `<n>Y <token> new`, `<n>M ...` and `<n>>`, with the same refusals (`already open`, `too many tabs`, `could not start: ...`). A client sends `*` only after it saw `chat`; a bridge without the word refuses it with `<n>X not available`.
 
 A chat is a short-lived conversation:
 
@@ -316,7 +318,7 @@ tty mode and v1 have no chats. Unknown words and tags are ignored by both sides,
 
 ## Streaming answers (`stream`)
 
-The capability word `stream` in `#OK` (`#OK se30bridge 2 files=rw resume ping models agents chat stream md`) means a session can send Claude's prose while it is being written instead of when the whole message is done. A client that wants it sends `<n>V on`; `<n>V off` turns it off again. Like `<n>M` it is a preset when session `<n>` is not open yet and is applied when it opens; on an open session it takes effect at once, even in the middle of an answer, and affects only that session. A session starts with streaming off. Any other payload is ignored. A client sends `<n>V` only after it saw `stream`; a bridge without the word ignores the line like any unknown tag, so version 2 is unchanged.
+The capability word `stream` in `#OK` (`#OK se30bridge 2 files=rw resume ping models agents chat stream md usage`) means a session can send Claude's prose while it is being written instead of when the whole message is done. A client that wants it sends `<n>V on`; `<n>V off` turns it off again. Like `<n>M` it is a preset when session `<n>` is not open yet and is applied when it opens; on an open session it takes effect at once, even in the middle of an answer, and affects only that session. A session starts with streaming off. Any other payload is ignored. A client sends `<n>V` only after it saw `stream`; a bridge without the word ignores the line like any unknown tag, so version 2 is unchanged.
 
 With streaming off the bridge sends exactly the lines it sent before. With it on, the text of an answer goes out in pieces as it arrives, using tags that already exist: the first piece of a paragraph is a `<n>T` line and each later piece of that paragraph is a `<n>+` line, which the client joins to the line before it with one space (nothing after a `C` line). So a client that already handles `T`/`+` needs no new code.
 
@@ -333,6 +335,24 @@ The capability word `md` in `#OK` means the bridge can leave Markdown marks in C
 Without `!MD`, and for ZTerm, tty mode and v1, nothing changes: the bridge strips `**` and `__` from `T`, `+` and `C` lines. After `!MD` it keeps those marks in all three, and strips nothing else. Backticks, `#`, `-`, `>`, `|` and link marks were never stripped, so the client already received them. Streaming (`<n>V on`) cuts and joins the lines as before; a client that styles must treat a `+` as the continuation of the line before it, so a mark that opens in one piece and closes in a later one still pairs. Code inside a fence is sent as `C` lines and is not styled by the client.
 
 After `!MD` the bridge also tells Claude, in the line it adds to the system prompt (and in the chat prompt), which Markdown the screen draws; without it the prompt still asks for plain ASCII and no tables. A session opened before `!MD` keeps the plain prompt. What a client does with the marks is up to it. Claude30 draws `**bold**`, `*italic*`, `` `code` ``, links, headings, quotes, lists, rules and tables in Geneva and Monaco, and shows anything that is not well-formed Markdown as typed.
+
+## Context and cost (`usage`)
+
+The capability word `usage` in `#OK` (`#OK se30bridge 2 files=rw resume ping models agents chat stream md usage`) means the bridge can report how full each conversation's context is and what the conversation has cost. A client that wants it answers `!USAGE` once, after the project list; it applies to the whole call. Without `!USAGE`, and for ZTerm and v1, no `$` line is ever sent, so an older client sees nothing new.
+
+```
+<n>$ <used> <window> <cost>
+```
+
+`<used>` and `<window>` are whole token counts: the size of the conversation after Claude's latest answer, and the model's context window. `<cost>` is the conversation's running cost in dollars with four decimals (`0.4414`). Any field is `-` when the bridge does not know it. The bridge sends one:
+
+- after each turn's `<n>R` line and before `<n>>`, including a turn Claude starts by itself;
+- after `<n>Y` when the conversation it resumes has a saved reading;
+- not after `/new` or `/edits`. The conversation starts over with no reading, and the first `$` comes with its first turn. A client clears its own reading when it sees `<n>Y <token> new`.
+
+The cost is per conversation. It survives a redial, a resume and a model or effort change, and starts again at zero with a new conversation. The bridge keeps the total and the reading in the resume record. The figure is what the Claude CLI reports: on a subscription it is what the API would have charged, not a bill. The reading comes from the usage Claude already returns with each answer; the bridge makes no request to Claude for it. The percentage is measured against the window the model reports with each result. The typed `/usage` asks the Claude CLI for its own count, which can use a smaller window (the CLI may compact earlier than the model's maximum), so the two percentages can differ. Subagents' own answers are not counted in `<used>`, because compaction acts on the main conversation.
+
+`/usage` works in every client, as a command in `<n>P`, in v1 and in tty mode. It prints, as `I` lines (notices in tty mode), the context used out of the window, the largest context categories (this one asks the Claude CLI for its breakdown, a local request that spends no tokens) and the conversation's cost and number of turns. tty mode's end-of-turn line reads `(success, $0.0123, ctx 42%)`; v1's `R` line keeps its format.
 
 ## Files
 

@@ -9,6 +9,7 @@
 #include "permdlg.h"
 #include "picker.h"
 #include "prefs.h"
+#include "usage.h"
 #include "resources.h"
 #include "serial.h"
 #include "window.h"
@@ -35,6 +36,7 @@ static long gDamagedSeen;        /* gProto.lb.damaged already reported */
 static Boolean gLinkSendNext;
 static Boolean gLinkSession;    /* this call is a link test, until it ends */
 static Boolean gTabsChanged;     /* redraw the strip at the end of the pass */
+static Boolean gUsageChanged;    /* ... and the status line's context and cost */
 static Boolean gTokensChanged;   /* a resume token changed: save the prefs */
 
 enum { kAlertNone, kAlertFailed, kAlertNote };
@@ -365,6 +367,10 @@ static void tab_event(Tab *t, EventKind k, const char *s, long n)
         tn = n - (sp + 1 - s);
         copy_text(how, sizeof(how), s, sp - s);
         copy_text(token, sizeof(token), sp + 1, tn > 16 ? 16 : tn);
+        if (strcmp(how, "new") == 0 && usage_known(&t->usage)) {
+            usage_clear(&t->usage);      /* a new conversation starts with no reading */
+            gTabsChanged = gUsageChanged = true;
+        }
         if (strcmp(t->token, token) != 0) {
             memcpy(t->token, token, sizeof(token));
             gTokensChanged = true;
@@ -381,6 +387,14 @@ static void tab_event(Tab *t, EventKind k, const char *s, long n)
                     divider(t);
                 note(t, "That conversation could not be resumed; this is a new one.");
             }
+        }
+        break;
+    }
+    case EV_USAGE: {
+        Usage u;
+        if (usage_parse(&u, s, n)) {
+            t->usage = u;
+            gTabsChanged = gUsageChanged = true;
         }
         break;
     }
@@ -632,6 +646,11 @@ Boolean session_stream_available(void)
     return gProto.stream_cap && proto_sess_state(&gProto, t->sid) != SS_CLOSING;
 }
 
+Boolean session_usage_shown(void)
+{
+    return gProto.usage_cap != 0;
+}
+
 Boolean session_stream_on(void)
 {
     Tab *t = tabs_front();
@@ -867,6 +886,10 @@ void session_pump(void)
         window_draw_tabs();
     }
     update_status();
+    if (gUsageChanged) {
+        gUsageChanged = false;
+        window_status_redraw();      /* the message may be the same; the reading is not */
+    }
     SetPort(save);
 }
 
