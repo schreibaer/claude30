@@ -167,6 +167,8 @@ static void adjust_menus(void)
     enable(gSession, kNewChatItem, session_chat_available());
     enable(gSession, kCloseTabItem, t != NULL);
     enable(gSession, kModelItem, session_model_available());
+    enable(gSession, kStreamItem, session_stream_available());
+    CheckItem(gSession, kStreamItem, session_stream_on());
     enable(gSession, kLinkTestItem, s == ST_IDLE);
 
     enable(gEdit, kUndoItem, !fw && front != window_ptr());
@@ -320,6 +322,7 @@ static void do_menu(long choice)
         case kNewChatItem:    session_new_chat(); break;
         case kCloseTabItem:   session_close_tab(tabs_front()); break;
         case kModelItem:      session_model_dialog(); break;
+        case kStreamItem:     session_stream_toggle(); break;
         case kLinkTestItem:   linktest_run(); break;
         }
         break;

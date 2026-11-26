@@ -79,7 +79,7 @@ resource 'MENU' (kEditMenu) {
 };
 
 resource 'MENU' (kSessionMenu) {
-	kSessionMenu, textMenuProc, 0x7FFFD777, enabled, "Session",
+	kSessionMenu, textMenuProc, 0x7FFF9777, enabled, "Session",
 	{
 		"Connect", noIcon, "K", noMark, plain;
 		"Disconnect", noIcon, "D", noMark, plain;
@@ -94,6 +94,7 @@ resource 'MENU' (kSessionMenu) {
 		"Close Tab", noIcon, noKey, noMark, plain;
 		"-", noIcon, noKey, noMark, plain;
 		"Model and Effort\0xC9", noIcon, noKey, noMark, plain;
+		"Stream Answers", noIcon, noKey, noMark, plain;
 		"-", noIcon, noKey, noMark, plain;
 		"Link Test\0xC9", noIcon, noKey, noMark, plain
 	}

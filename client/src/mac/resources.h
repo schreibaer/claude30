@@ -45,7 +45,8 @@
 #define kNewChatItem    10
 #define kCloseTabItem   11
 #define kModelItem      13
-#define kLinkTestItem   15
+#define kStreamItem     14
+#define kLinkTestItem   16
 
 /* Window */
 #define kMainWindow     128
