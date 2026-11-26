@@ -25,7 +25,7 @@ execution: code
 
 ### Summary
 
-Claude30 renders the Markdown in Claude's prose. Emphasis becomes bold and italic, inline code switches to Monaco, headings lose their `#` and take heading faces, list dashes become bullets, quotes get a bar, `---` becomes a rule, tables switch to Monaco and links show their text underlined. Everything stays at 9 pt on one line height. A Settings checkbox turns it off. ZTerm and older builds see exactly what they see today.
+Claude30 renders the Markdown in Claude's prose. Emphasis becomes bold and italic, inline code switches to Monaco, headings lose their `#` and take heading faces, list dashes become bullets, quotes get a bar, `---` becomes a rule, tables switch to Monaco and links show their text underlined. Everything stays at 9 pt on one line height. ZTerm and older builds see exactly what they see today.
 
 ### Problem Frame
 
@@ -66,7 +66,6 @@ What the SE/30 can show, from System 7.5.5's QuickDraw and styled TextEdit on a 
 **Streaming and settings**
 
 - R12. With Stream Answers on, a finished answer looks the same as with it off. A styled phrase appears once its closing mark arrives.
-- R13. Settings gets a "Style answers" checkbox, on by default and remembered in prefs. Off, new prose looks as it does today: `**` and `__` removed, every other mark shown as typed. The change applies to text that arrives after it.
 
 **Compatibility**
 
@@ -86,6 +85,7 @@ What the SE/30 can show, from System 7.5.5's QuickDraw and styled TextEdit on a 
 - Font sizes larger than 9 pt for headings. Every line must keep one height (R11). Revisit only if the transcript's scroll and trim code moves to variable line heights.
 - Color, shading, strikethrough and background boxes for code. The SE/30 screen and QuickDraw faces cannot draw them.
 - Outline and shadow faces. They are hard to read at 9 pt on a 1-bit screen and change the line height.
+- A "Style answers" Settings checkbox. The person chose to leave it out, so there is no off switch, no prefs change and no strip-only mode.
 - Re-aligning table columns that Claude did not pad. The rows show as written (R9).
 - Keeping wide table rows on one line. About 80 Monaco columns fit the transcript, so a wider row soft-wraps to the left margin and its columns stop lining up. Rows over 200 bytes also arrive as `+` pieces, which join as usual. Considered and not built: truncating or scrolling sideways would hide text. Frequent wide tables in real answers would change this.
 - Hanging indents for wrapped list items. TextEdit has no paragraph indents, so a wrapped list line starts at the left margin.
@@ -114,7 +114,6 @@ What the SE/30 can show, from System 7.5.5's QuickDraw and styled TextEdit on a 
 - KTD7. **The style map.** Headings level 1: bold, extend, underline. Level 2: bold, extend. Levels 3 to 6: bold. Quote: italic. Link text and URLs: underline. Table rows: mono, no inline parsing. Inline flags OR onto the line's base flags (bold inside a heading stays bold). Today's per-kind faces in `kStyles` are untouched (R10). These pairings keep headings distinct from the divider (`RS_DIVIDER`, bold underline) and turn result (`RS_RESULT`, underline) lines, which also carry their own leading marks. Faces within this map may be adjusted after the emulator check, as long as KTD3 holds.
 - KTD8. **Tables are shown verbatim.** A table row keeps every byte, inside and out, in Monaco, so padding Claude added lines up in a 6-pixel-wide font. Inline marks inside rows are left as typed, because bold widens Monaco glyphs by a pixel and removing marks would shift Claude's padding. The separator row is redrawn with the same length: `|` between cells becomes `+`, `:` becomes `-`.
 - KTD9. **The rule is sized by the window, not the core.** `Batch` gets a rule length that `window.c` sets from the transcript width divided by the width of an em dash in Geneva 9, on open and on resize (the way `fold_ops` sets `width`). The core emits that many em dashes (0xD1). A rule already drawn is not refitted after a resize. This keeps `core/` free of QuickDraw.
-- KTD10. **The setting switches the styler to strip-only.** With "Style answers" off, the styler removes `**` and `__` and passes every other byte through unchanged, which is exactly what the bridge does today, so an opted-in link still looks like today. The flag is one global pref (prefs version 8, version 7 loads with it on) passed to each tab's `Batch`. It is global, not per tab, because it guards against misrendering, not a per-conversation choice.
 
 ### High-Level Technical Design
 
@@ -157,7 +156,7 @@ Inside a held span, nested emphasis (`**bold *and italic***`) is resolved when t
 |---|---|
 | More `TEStyleInsert` calls per paragraph slow drawing on a 16 MHz 68030. Each call recalculates line breaks from the insertion point. | Emulator check with a long styled answer against today's build. If slower in a way the person would notice, build the deferred multi-style scrap insert before shipping. |
 | A face pairing reads poorly at 9 pt on 1-bit, especially extended bold. | Emulator screenshots of the `styles` demo answer. Adjust faces within KTD7. |
-| The styler misreads prose that was not meant as Markdown. | Word-boundary rules and hold-until-closed (KTD5) make a misfire fall back to the typed text. The Settings switch (R13) turns styling off without a new build. |
+| The styler misreads prose that was not meant as Markdown. | Word-boundary rules and hold-until-closed (KTD5) make a misfire fall back to the typed text. A fix ships in a new build; there is no off switch (see Scope Boundaries). |
 | A span that never closes holds up to 512 bytes of streamed text until the paragraph ends. | Rare in Claude's output. The text appears at paragraph end, never lost. |
 | When another line goes out between two streamed pieces, the bridge sends the next piece as a fresh `T` (`Channel.stream_pieces`), so a mid-line fragment that happens to start with `- ` or `# ` reads as a new list item or heading. | Rare, and the bridge already shows that fragment on a new line. The look matches what the transcript shows today. |
 | An emphasis span crossing a line break is not styled, because the bridge sends each Markdown line as its own `T`. | Shows as typed (R7). Claude rarely wraps emphasis across lines. |
@@ -169,12 +168,12 @@ Inside a held span, nested emphasis (`**bold *and italic***`) is resolved when t
 ### U1. Protocol spec and docs
 
 - **Goal:** Document the `md` capability, `!MD`, and what the transcript now shows.
-- **Requirements:** R13, R14, R15
+- **Requirements:** R14, R15
 - **Dependencies:** none
 - **Files:** `PROTOCOL.md`, `README.md`, `client/README.md`
 - **Approach:**
   1. Add a "Markdown prose (`md`)" section to PROTOCOL.md after "Streaming answers", stating KTD2's wire rules: the word, `!MD`, what changes in `T`, `+` and `C` payloads, that a streamed `T` may be only a line marker, and that tty, v1 and apps that never send `!MD` are unchanged. Add `md` to the `#OK` example and `!MD` to the link-level client table.
-  2. In `client/README.md`, describe the styles with a short table taken from KTD7 and R5 to R9, the "Style answers" checkbox, and the Toolbox calls (TextEdit `TEStyleInsert`, QuickDraw `TextWidth`, faces `bold`, `italic`, `underline`, `extend`). Note that it needs no newer System and no notable memory.
+  2. In `client/README.md`, describe the styles with a short table taken from KTD7 and R5 to R9, and the Toolbox calls (TextEdit `TEStyleInsert`, QuickDraw `TextWidth`, faces `bold`, `italic`, `underline`, `extend`). Note that it needs no newer System and no notable memory.
   3. One line in `README.md`'s feature list.
 - **Patterns to follow:** the "Streaming answers (`stream`)" and "Subagents" sections of `PROTOCOL.md`.
 - **Test expectation:** none -- documentation only. U2 and U3 test what it describes.
@@ -205,8 +204,8 @@ Inside a held span, nested emphasis (`**bold *and italic***`) is resolved when t
 
 ### U3. Client core: the Markdown styler and the batcher
 
-- **Goal:** Turn prose into styled runs per KTD4 to KTD9, with a strip-only mode per KTD10.
-- **Requirements:** R1, R2, R3, R4, R5, R6, R7, R8, R9, R10, R12, R13
+- **Goal:** Turn prose into styled runs per KTD4 to KTD9.
+- **Requirements:** R1, R2, R3, R4, R5, R6, R7, R8, R9, R10, R12
 - **Dependencies:** none (U4 lets it see bold from the bridge, but the styler is testable without it)
 - **Files:** `client/src/core/mdstyle.h` (new), `client/src/core/mdstyle.c` (new), `client/src/core/batch.h`, `client/src/core/batch.c`, `client/tests/test_mdstyle.c` (new), `client/tests/test_batch.c`, `client/tests/CMakeLists.txt`, `client/CMakeLists.txt`
 - **Approach:**
@@ -214,7 +213,7 @@ Inside a held span, nested emphasis (`**bold *and italic***`) is resolved when t
   2. Line-kind detection per KTD6 runs on the first bytes of a new line. Marker rewrites use Mac Roman bytes, like `MR_BULLET` in `batch.c`.
   3. Inline parsing per KTD5 handles emphasis, backtick runs of one to three, links, autolinks, bare URLs and backslash escapes. Table rows skip it (KTD8).
   4. `Run` gains the flags byte. `put_byte` splits runs on a flags change. `EV_TEXT` and `EV_TEXT_CONT` call the styler instead of `put`. `block()` and `batch_marker` flush the styler first so held text lands before the next block.
-  5. `Batch` gains the rule length (KTD9) and the strip-only switch (KTD10), both set by the window.
+  5. `Batch` gains the rule length (KTD9), set by the window.
 - **Execution note:** Write the `test_mdstyle.c` cases from the Acceptance Examples first. The styler is the part most likely to misread real prose.
 - **Patterns to follow:** `permsum.c` and `agentline.c` for portable parsing with host tests, `fold.c`'s callback struct (`FoldOps`) for keeping the core free of window code, `test_batch.c` for checking runs and their styles.
 - **Test scenarios:**
@@ -236,7 +235,6 @@ Inside a held span, nested emphasis (`**bold *and italic***`) is resolved when t
   - The same split across two batches with `batch_clear` between them gives the same runs.
   - An unclosed `**` followed by a tool event: the held text is emitted as typed, `**` included, before the tool line's block.
   - A held span that grows past 512 bytes is emitted as typed at that point and the rest of the paragraph continues unstyled.
-  - Strip-only mode: `**a** *b* \`c\` # d` gives one plain run `a *b* \`c\` # d`, matching what the bridge produced before `!MD` (R13).
   - Line noise marker between `T` and `+` (the existing streaming case in `test_batch.c`) still starts the continuation on a new line, and a span held across it is flushed before the marker.
   - Existing `test_batch.c` and `test_fold.c` cases pass unchanged, so code, tool and prompt runs keep flags at zero (R10).
 - **Verification:** Host tests pass, including the new file and cases.
@@ -259,19 +257,19 @@ Inside a held span, nested emphasis (`**bold *and italic***`) is resolved when t
 
 ### U5. Client Mac: drawing the styles and the setting
 
-- **Goal:** Draw runs with their flags, size the rule, and add the "Style answers" checkbox.
-- **Requirements:** R1, R2, R3, R5, R6, R8, R9, R10, R11, R13
+- **Goal:** Draw runs with their flags and size the rule.
+- **Requirements:** R1, R2, R3, R5, R6, R8, R9, R10, R11
 - **Dependencies:** U3, U4
-- **Files:** `client/src/mac/window.c`, `client/src/mac/window.h`, `client/src/mac/modem.c`, `client/src/mac/tabs.c`, `client/src/mac/prefs.h`, `client/src/mac/prefs.c`, `client/src/mac/resources.h`, `client/claude30.r`
+- **Files:** `client/src/mac/window.c`, `client/src/mac/window.h`, `client/src/mac/tabs.c`
 - **Approach:**
   1. `insert_at` takes the run's flags and sets `scrpFont` to Monaco for mono and `scrpFace` to `kStyles[style].face` OR'd with the mapped faces (KTD4, KTD7). `fold_replace_cb` and the agent-line rewrite keep passing zero flags.
   2. `measure_fonts` measures every font and face pairing KTD7 draws and keeps the largest height and ascent (KTD3).
   3. On tab creation and on every `layout()`, set each tab's `Batch` rule length from the transcript width and `TextWidth` of an em dash in Geneva 9 (KTD9).
-  4. Prefs version 8 adds a "style answers" short, defaulting on for version 7 and older. The Settings dialog gets a "Style answers" checkbox under "Hide scroll bar". OK copies it to every open tab's `Batch` strip-only switch (KTD10). New tabs read it in `tabs.c`.
-- **Toolbox calls:** TextEdit (`TEStyleInsert` with `ScrpSTElement` font and face), QuickDraw (`TextFont`, `TextFace`, `TextSize`, `GetFontInfo`, `TextWidth`), Dialog Manager through the existing Settings code, Resource Manager through the existing prefs code. All are in System 7.0, so nothing new is needed on 7.5.5. Memory: one byte per run in the batch and a 512-byte hold buffer per tab.
-- **Patterns to follow:** the "Hide scroll bar" checkbox (`kSetHideBar`, `set_check`, `prefs_dialog`), the version 6 to 7 prefs upgrade in `prefs.c`, `fold_ops` for passing the window width into the core.
+  4. New tabs set their rule length in `tabs.c` before the first layout.
+- **Toolbox calls:** TextEdit (`TEStyleInsert` with `ScrpSTElement` font and face), QuickDraw (`TextFont`, `TextFace`, `TextSize`, `GetFontInfo`, `TextWidth`). All are in System 7.0, so nothing new is needed on 7.5.5. Memory: one byte per run in the batch and a 512-byte hold buffer per tab.
+- **Patterns to follow:** `fold_ops` for passing the window width into the core.
 - **Test scenarios:**
-  - Test expectation for automated tests: the Mac drawing and dialog code has no host test seam. U3 covers what runs and flags reach the window. The behaviors here are emulator rows E1 to E6.
+  - Test expectation for automated tests: the Mac drawing and dialog code has no host test seam. U3 covers what runs and flags reach the window. The behaviors here are the emulator rows in the Verification Contract.
 - **Verification:** The 68k build has no new warnings, and the emulator rows pass where an emulator is available.
 
 ### U6. Release files
@@ -294,7 +292,6 @@ Inside a held span, nested emphasis (`**bold *and italic***`) is resolved when t
 - **Emulator rows** (Basilisk II, tcpser and `run.sh --demo`, as `tools/emu/README.md` describes):
   - E1. A `styles` prompt: every element in R1 to R9 shows as the KTD7 map says, and the unclosed `*`, `snake_case` and `2 * 3` show as typed. Take a screenshot for the PR.
   - E2. The same prompt with Stream Answers on: the finished answer matches E1 (R12, AE3).
-  - E3. Settings, "Style answers" off, then `styles` again: the new answer looks like today's app (`**` removed, other marks shown). The E1 answer above it keeps its styles. Quit and relaunch: the box is still off (R13).
   - E4. Scroll through a transcript with styled answers, use Cmd-arrow prompt jumps, open and close a code fold, and fill the tab past 28 KB so it trims: lines stay evenly spaced, the view stays on the same text after a trim, and the log file has the trimmed text without marks (R10, R11).
   - E5. A long styled answer drawn by this build and by the current release: no drawing slowdown a person would notice (Risks).
   - E6. The current release app against the new bridge looks exactly as today. The new app against the new demo bridge with `md` left out of `#OK` (the same older-bridge stand-in U4 uses) shows the R15 result (R14, R15, AE5).
@@ -303,7 +300,7 @@ Inside a held span, nested emphasis (`**bold *and italic***`) is resolved when t
 
 ## Definition of Done
 
-- Every requirement R1 to R15 is met, and every test and check in the Verification Contract passes, except emulator or hardware rows that could not be run, which are reported as not run.
+- Every requirement R1 to R15 (R13 was dropped) is met, and every test and check in the Verification Contract passes, except emulator or hardware rows that could not be run, which are reported as not run.
 - PROTOCOL.md describes exactly what the bridge and app do.
 - No code from abandoned attempts is left in the diff.
 - The PR description says what was tested and what was not, as `CLAUDE.md` requires, and includes the E1 screenshot if an emulator was available.
@@ -320,5 +317,4 @@ Inside a held span, nested emphasis (`**bold *and italic***`) is resolved when t
 - `client/src/core/batch.c`: `put_byte`, `block`, `EV_TEXT_CONT` joining with one space, `prose_open`, `MR_BULLET`.
 - `client/src/core/fold.c`: `fold_append` treats `RS_CODE` runs as code and needs the bullet byte for tool runs.
 - `client/src/mac/window.c`: `kStyles`, `measure_fonts`, `insert_at`, `fold_measure_cb`, `line_of` and the comment above it ("Every transcript line has the same height").
-- `client/src/mac/prefs.c` and `client/claude30.r`: the Settings dialog and versioned prefs.
 - Prior plans: `docs/plans/2026-11-26-1428-feat-stream-answers-per-tab-plan.md` (capability word without a version bump, `T`/`+` pieces), `docs/plans/2026-11-25-1755-feat-transcript-folding-permission-summary-plan.md` (fold rules this plan must not disturb).
