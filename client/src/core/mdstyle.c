@@ -26,7 +26,7 @@ struct MdStyle {
     unsigned char tail[MD_TAIL_MAX];   /* text not drawn yet */
     unsigned char cls[MD_TAIL_MAX];    /* scan's verdict per byte */
     /* scan's * and _ runs */
-    short rpos[MD_RUNS], rlo[MD_RUNS], rhi[MD_RUNS], stk[MD_RUNS];
+    short rlo[MD_RUNS], rhi[MD_RUNS], stk[MD_RUNS];
     unsigned char rch[MD_RUNS], ropen[MD_RUNS], rclose[MD_RUNS];
 };
 
@@ -253,6 +253,8 @@ static long scan(MdStyle *m, int final, long lit)
                 for (k = i; k < x; k++)
                     c[k] |= BF_UNDER | C_PROT;
                 i = j;
+                if (skip_at >= 0 && i > skip_at)
+                    skip_at = -1;
                 continue;
             }
         }
@@ -269,7 +271,6 @@ static long scan(MdStyle *m, int final, long lit)
             pc = i > 0 ? t[i - 1] : m->prev;
             nc = j < n ? t[j] : 0;
             if (nr < MD_RUNS) {
-                m->rpos[nr] = (short)i;
                 m->rlo[nr] = (short)i;
                 m->rhi[nr] = (short)j;
                 m->rch[nr] = (unsigned char)ch;

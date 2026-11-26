@@ -64,6 +64,9 @@ static void test_inline(void)
     /* the acceptance example: code, bold, and marks that stay as typed */
     expect("Call `parse_line()` on **each** row; snake_case and 2 * 3 stay",
            "Call |M:parse_line()| on |B:each| row; snake_case and 2 * 3 stay");
+    expect("\xD1**x**\xD1", "\xD1|B:x|\xD1");
+    expect("a\x8E*x*", "a\x8E*x*");
+    expect("[https://a.com](https://a.com) and [b](https://c) end", "U:https://a.com| and |U:b| end");
     expect("***both***", "BI:both");
     expect("**bold *and italic***", "B:bold |BI:and italic");
     expect("*a **b** c*", "I:a |BI:b|I: c");
