@@ -126,6 +126,7 @@ static void block(Batch *b, RunStyle s)
     if (b->need_break)
         put(b, s, "\r", 1);
     b->need_break = 1;
+    b->prose_open = 0;
 }
 
 void batch_event(Batch *b, EventKind kind, const char *t, long n)
@@ -134,10 +135,17 @@ void batch_event(Batch *b, EventKind kind, const char *t, long n)
     case EV_TEXT:
         block(b, RS_PROSE);
         put(b, RS_PROSE, t, n);
+        b->prose_open = 1;
         break;
     case EV_TEXT_CONT:
-        put(b, RS_PROSE, " ", 1);
+        /* A streamed paragraph arrives over seconds, so a line the app drew
+           itself (line noise, lost output) can come between two pieces. */
+        if (b->prose_open)
+            put(b, RS_PROSE, " ", 1);
+        else
+            block(b, RS_PROSE);
         put(b, RS_PROSE, t, n);
+        b->prose_open = 1;
         break;
     case EV_CODE_BEGIN:
     case EV_CODE_END:

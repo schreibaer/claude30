@@ -98,6 +98,7 @@ static void divider(Tab *t)
 static void remember_tabs(void)
 {
     const char *names[MAX_TABS], *tokens[MAX_TABS], *models[MAX_TABS], *efforts[MAX_TABS];
+    char streams[MAX_TABS];
     short i, n = 0;
     for (i = 0; i < tabs_count(); i++) {
         Tab *t = tabs_at(i);
@@ -107,9 +108,10 @@ static void remember_tabs(void)
         tokens[n] = t->token;
         models[n] = t->model;
         efforts[n] = t->effort;
+        streams[n] = t->stream;
         n++;
     }
-    prefs_set_tabs(names, tokens, models, efforts, n);
+    prefs_set_tabs(names, tokens, models, efforts, streams, n);
     gTokensChanged = false;
 }
 
@@ -144,6 +146,9 @@ static void open_tab(Tab *t)
     /* The tab's model and effort go first, so Claude starts once with them. */
     if (gProto.models_cap && (t->model[0] || t->effort[0]))
         proto_set_model(&gProto, t->sid, t->model, t->effort);
+    /* Stream Answers is a preset too, sent only to a bridge that has it. */
+    if (t->stream && gProto.stream_cap)
+        proto_set_stream(&gProto, t->sid, 1);
     /* A tab with a resume token asks the bridge to continue that conversation. */
     t->token_sent = gProto.resume_cap && t->token[0];
     if (!proto_open_resume(&gProto, t->sid, t->chat ? CHAT_WIRE_NAME : t->project, t->token)) {
@@ -614,6 +619,37 @@ void session_model_dialog(void)
         proto_set_model(&gProto, t->sid, model, effort);   /* the bridge confirms with EV_MODEL */
 }
 
+/* Stream Answers is for the front tab. Offline it can be set (the tab
+   remembers it and sends it when it opens); online it needs a bridge with
+   the stream capability, and a tab that is not closing. */
+Boolean session_stream_available(void)
+{
+    Tab *t = tabs_front();
+    if (!t)
+        return false;
+    if (gProto.state != ST_ONLINE)
+        return gProto.state == ST_IDLE;
+    return gProto.stream_cap && proto_sess_state(&gProto, t->sid) != SS_CLOSING;
+}
+
+Boolean session_stream_on(void)
+{
+    Tab *t = tabs_front();
+    return t && t->stream && (gProto.state != ST_ONLINE || gProto.stream_cap);
+}
+
+void session_stream_toggle(void)
+{
+    Tab *t = tabs_front();
+    if (!t || !session_stream_available())
+        return;
+    t->stream = !t->stream;
+    /* An open session changes at once; one not yet open gets it from open_tab. */
+    if (gProto.state == ST_ONLINE && proto_sess_state(&gProto, t->sid) != SS_NONE)
+        proto_set_stream(&gProto, t->sid, t->stream);
+    remember_tabs();
+}
+
 void session_init(void)
 {
     short i;
@@ -632,6 +668,7 @@ void session_init(void)
         copy_text(t->token, sizeof(t->token), gPrefs.tokens[i], (long)strlen(gPrefs.tokens[i]));
         copy_text(t->model, sizeof(t->model), gPrefs.models[i], (long)strlen(gPrefs.models[i]));
         copy_text(t->effort, sizeof(t->effort), gPrefs.efforts[i], (long)strlen(gPrefs.efforts[i]));
+        t->stream = gPrefs.streams[i] != 0;
         if (!window_tab_init(t)) {
             tabs_remove(t);
             continue;

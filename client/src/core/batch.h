@@ -47,6 +47,7 @@ typedef struct {
     long line_len;      /* bytes since the last line break */
     int oom;            /* memory ran out; some text was dropped */
     long code_line;     /* the last line number given in the current code block */
+    int prose_open;     /* the last thing drawn was prose, so a + may continue it */
 } Batch;
 
 /* Code lines carry their line number in the block, right-aligned in 3

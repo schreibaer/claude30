@@ -19,6 +19,7 @@ static const unsigned char kPrefsName[] = "\pClaude30 Prefs";
 #define PREFS_V3_SIZE ((long)offsetof(Prefs, hide_scrollbar))
 #define PREFS_V4_SIZE ((long)offsetof(Prefs, tokens))
 #define PREFS_V5_SIZE ((long)offsetof(Prefs, models))
+#define PREFS_V6_SIZE ((long)offsetof(Prefs, streams))
 
 /* Folder Manager selectors; Multiversal has FindFolder but not these names. */
 #define kOnSystemDiskVol  ((short)0x8000)
@@ -61,6 +62,8 @@ void prefs_load(void)
         short i;
         if (((Prefs *)*h)->version == PREFS_VERSION && GetHandleSize(h) == sizeof(Prefs)) {
             memcpy(&gPrefs, *h, sizeof(Prefs));
+        } else if (((Prefs *)*h)->version == 6 && GetHandleSize(h) >= PREFS_V6_SIZE) {
+            memcpy(&gPrefs, *h, PREFS_V6_SIZE);   /* version 6: streaming off */
         } else if (((Prefs *)*h)->version == 5 && GetHandleSize(h) >= PREFS_V5_SIZE) {
             memcpy(&gPrefs, *h, PREFS_V5_SIZE);   /* version 5: every tab at the bridge default */
         } else if (((Prefs *)*h)->version == 4 && GetHandleSize(h) >= PREFS_V4_SIZE) {
@@ -85,6 +88,7 @@ void prefs_load(void)
             gPrefs.tokens[i][16] = 0;
             gPrefs.models[i][31] = 0;
             gPrefs.efforts[i][7] = 0;
+            gPrefs.streams[i] = gPrefs.streams[i] != 0;
         }
         if (gPrefs.speed < kSpeed57600 || gPrefs.speed > kSpeed19200)
             gPrefs.speed = kSpeed57600;
@@ -134,12 +138,14 @@ void prefs_save(void)
 }
 
 void prefs_set_tabs(const char *const *names, const char *const *tokens,
-                    const char *const *models, const char *const *efforts, short n)
+                    const char *const *models, const char *const *efforts,
+                    const char *streams, short n)
 {
     Str63 tabs[PREFS_TABS];
     char toks[PREFS_TABS][17];
     char mods[PREFS_TABS][32];
     char effs[PREFS_TABS][8];
+    char strs[PREFS_TABS];
     short i, k;
     if (n > PREFS_TABS)
         n = PREFS_TABS;
@@ -147,6 +153,7 @@ void prefs_set_tabs(const char *const *names, const char *const *tokens,
     memset(toks, 0, sizeof(toks));
     memset(mods, 0, sizeof(mods));
     memset(effs, 0, sizeof(effs));
+    memset(strs, 0, sizeof(strs));
     for (i = 0; i < n; i++) {
         k = (short)strlen(names[i]);
         if (k > 63)
@@ -165,16 +172,19 @@ void prefs_set_tabs(const char *const *names, const char *const *tokens,
         if (k > 7)
             k = 7;
         memcpy(effs[i], efforts[i], k);
+        strs[i] = streams[i] != 0;
     }
     if (n == gPrefs.ntabs && memcmp(tabs, gPrefs.tabs, sizeof(tabs)) == 0
             && memcmp(toks, gPrefs.tokens, sizeof(toks)) == 0
             && memcmp(mods, gPrefs.models, sizeof(mods)) == 0
-            && memcmp(effs, gPrefs.efforts, sizeof(effs)) == 0)
+            && memcmp(effs, gPrefs.efforts, sizeof(effs)) == 0
+            && memcmp(strs, gPrefs.streams, sizeof(strs)) == 0)
         return;                  /* unchanged: no disk write */
     memcpy(gPrefs.tabs, tabs, sizeof(tabs));
     memcpy(gPrefs.tokens, toks, sizeof(toks));
     memcpy(gPrefs.models, mods, sizeof(mods));
     memcpy(gPrefs.efforts, effs, sizeof(effs));
+    memcpy(gPrefs.streams, strs, sizeof(strs));
     gPrefs.ntabs = n;
     prefs_save();
 }

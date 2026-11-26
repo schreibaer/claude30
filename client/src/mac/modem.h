@@ -54,6 +54,11 @@ void session_note(const char *text);
 Boolean session_model_available(void);
 /* Session > Model and Effort...: asks, then tells the bridge. */
 void session_model_dialog(void);
+/* Stream Answers for the front tab: whether the menu item works, whether it is
+   checked, and flipping it (an open session at once, else when it opens). */
+Boolean session_stream_available(void);
+Boolean session_stream_on(void);
+void session_stream_toggle(void);
 
 /* New Tab: runs the project picker and opens the chosen project. */
 void session_new_tab(void);

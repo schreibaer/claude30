@@ -36,6 +36,7 @@ typedef struct {
     char said[512];            /* the first paragraph of the latest turn */
     int said_open;             /* ... still being continued */
     int kill_after_text;       /* SIGKILL the bridge after this many T lines */
+    long prose_bytes;          /* all T and + text, a + counted with its joining space */
 } SessRec;
 
 typedef struct {
@@ -115,6 +116,7 @@ static void on_event(void *ctx, int sid, EventKind k, const char *t, long n)
     switch (k) {
     case EV_TEXT:
         r->texts++;
+        r->prose_bytes += n;
         if (n > r->longest_text)
             r->longest_text = n;
         if (r->stop_after_text && r->texts == r->stop_after_text)
@@ -140,6 +142,7 @@ static void on_event(void *ctx, int sid, EventKind k, const char *t, long n)
         r->said_open = 0;
         break;
     case EV_TEXT_CONT:
+        r->prose_bytes += n + 1;
         if (r->said_open) {
             size_t have = strlen(r->said);
             if (have + n < sizeof(r->said)) {
@@ -469,6 +472,42 @@ static void test_demo_chat(void)
     finish_with_disconnect();
 }
 
+/* Streaming on in one tab: the same text arrives as many more pieces, and the
+   other tab's answer is the usual whole block. A tool line in the middle of a
+   streamed paragraph reopens it as a new paragraph. */
+static void test_demo_stream(void)
+{
+    start(demo_argv);
+    connect_two("alpha", "beta");
+    CHECK(proto_stream_cap(&P));
+    CHECK(proto_set_stream(&P, 1, 1));
+    CHECK(proto_send_prompt(&P, 1, "show a streaming answer", 23));
+    CHECK(proto_send_prompt(&P, 2, "show a streaming answer", 23));
+    CHECK(run(both_done, 30));
+    CHECK(S.s[1].counts[EV_TEXT_CONT] > S.s[2].counts[EV_TEXT_CONT] + 1);
+    CHECK_EQ_LONG(S.s[1].prose_bytes, S.s[2].prose_bytes);
+    CHECK_EQ_LONG(S.s[1].counts[EV_CODE_END], 1);
+    CHECK_EQ_LONG(S.s[2].counts[EV_CODE_END], 1);
+    CHECK(strcmp(S.s[1].result, "success $0.0000") == 0);
+
+    /* Turned off again, the tab gets whole blocks like the other one. */
+    memset(&S.s[1], 0, sizeof(S.s[1]));
+    CHECK(proto_set_stream(&P, 1, 0));
+    CHECK(proto_send_prompt(&P, 1, "show a streaming answer", 23));
+    CHECK(run(one_done, 30));
+    CHECK_EQ_LONG(S.s[1].counts[EV_TEXT_CONT], S.s[2].counts[EV_TEXT_CONT]);
+
+    /* A tool line in the middle starts a new paragraph for the rest. */
+    memset(&S.s[1], 0, sizeof(S.s[1]));
+    CHECK(proto_set_stream(&P, 1, 1));
+    CHECK(proto_send_prompt(&P, 1, "show a streaming answer with a tool", 35));
+    CHECK(run(one_done, 30));
+    CHECK_EQ_LONG(S.s[1].counts[EV_TOOL], 1);
+    CHECK(S.s[1].counts[EV_TEXT] >= S.s[2].counts[EV_TEXT] + 1);
+    CHECK_EQ_LONG(P.dropped, 0);
+    finish_with_disconnect();
+}
+
 /* A background subagent ends after its turn: its lines and Claude's own
    follow-up arrive while the session is ready, and nothing is dropped. */
 static int bg_done(void) { return S.s[1].counts[EV_AGENT_END] >= 2 && S.s[1].counts[EV_RESULT] >= 2; }
@@ -785,6 +824,7 @@ int main(void)
     test_demo_two_sessions();
     test_demo_agents();
     test_demo_chat();
+    test_demo_stream();
     test_demo_background();
     test_drop_and_resume();
     test_model_and_effort();

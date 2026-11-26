@@ -3,7 +3,7 @@
    folder. Version 1 prefs load with no remembered tabs, version 2 with
    the input box expanded, version 3 with the scroll bar shown, version 4
    with no resume tokens, version 5 with every tab at the bridge's model
-   and effort.
+   and effort, version 6 with Stream Answers off in every tab.
    Toolbox: Folder Manager (FindFolder), File Manager (FSMakeFSSpec),
    Resource Manager (FSpCreateResFile, FSpOpenResFile, Get1Resource,
    AddResource, ChangedResource, UpdateResFile), Dialog Manager. */
@@ -12,7 +12,7 @@
 
 #include <MacTypes.h>
 
-#define PREFS_VERSION 6
+#define PREFS_VERSION 7
 #define PREFS_TABS    6
 
 typedef struct {
@@ -27,6 +27,7 @@ typedef struct {
     char tokens[PREFS_TABS][17]; /* the tabs' resume tokens, C strings, same order */
     char models[PREFS_TABS][32]; /* the tabs' models, C strings ("" = bridge default) */
     char efforts[PREFS_TABS][8]; /* the tabs' efforts, C strings ("" = bridge default) */
+    char streams[PREFS_TABS];    /* 1 = Stream Answers on in the tab */
 } Prefs;
 
 extern Prefs gPrefs;
@@ -35,10 +36,11 @@ void prefs_load(void);
 void prefs_save(void);
 /* Shows the Settings dialog; returns true if the user clicked OK. */
 Boolean prefs_dialog(void);
-/* Remembers the open tabs' projects, resume tokens, models and efforts (C
-   strings, same order) and saves the prefs when they changed. */
+/* Remembers the open tabs' projects, resume tokens, models, efforts and
+   Stream Answers flags (C strings, same order) and saves the prefs when they changed. */
 void prefs_set_tabs(const char *const *names, const char *const *tokens,
-                    const char *const *models, const char *const *efforts, short n);
+                    const char *const *models, const char *const *efforts,
+                    const char *streams, short n);
 /* The dial string as a C string. */
 void prefs_dial_cstr(char *out, short max);
 

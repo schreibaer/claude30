@@ -38,6 +38,7 @@ typedef struct Tab {
     char token[17];              /* resume token of its conversation ("" = none) */
     char model[32];              /* its Claude model ("" = the bridge default) */
     char effort[8];              /* low, medium, high, xhigh or max ("" = default) */
+    Boolean stream;              /* Stream Answers is on for it */
     Boolean token_sent;          /* opened asking to resume: its <n>Y says how it went */
     Boolean opened_once;         /* a conversation ran in it this launch */
     Boolean reopened;            /* opened; waiting for its first > */

@@ -38,6 +38,10 @@ Claude30 redials by itself and its tabs pick up their conversations where they w
 
 Besides project tabs you can open a chat: a short-lived conversation that belongs to no project. Claude has no files or commands there, only web search and fetch (each asks for permission), and a short prompt that keeps turns cheap. A chat lives in an empty folder under `~/.se30bridge/chats/` and survives a Wi-Fi drop; closing its tab or quitting Claude30 deletes it from the host, and one the app never got to close is deleted at the next call after a week. ZTerm and tty mode have no chats.
 
+### Streaming answers
+
+Claude30's **Session > Stream Answers** switch (per tab, off by default) shows Claude's prose as it is written, in pieces of a few words, instead of after the whole message is done. Code blocks still arrive one finished line at a time. ZTerm and tty mode do not stream.
+
 ### Subagents
 
 When Claude starts a subagent (Explore, a project agent, or one it makes up), Claude30 shows one line for it, rewritten as it works (`» Explore: find tests · Grep · 3 tools`) and replaced by a one-line result when it ends. Its own output stays on the Mac. ZTerm gets a plain `[Agent]` line at the start and the end. Type `/agents` to list the subagents the project offers. To create one, ask Claude, or write a file in `.claude/agents/` (Claude30's Open Project File can edit it).
