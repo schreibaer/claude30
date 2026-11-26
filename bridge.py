@@ -32,6 +32,7 @@ import json
 import os
 import re
 import secrets
+import shutil
 import signal
 import stat
 import sys
@@ -605,6 +606,21 @@ SYSTEM_APPEND = (
 )
 
 
+# A chat (v2 only) is a conversation outside any project: its own empty
+# folder, web search and fetch as the only tools, and this short prompt in
+# place of Claude Code's own.
+CHAT_PROMPT = (
+    "You are chatting with someone on a 1989 Macintosh SE/30 over a slow serial "
+    "link: a small monochrome screen about {cols} columns wide. This is a casual "
+    "conversation, not a coding session. You can look things up with web search "
+    "and web fetch. You have no other tools: you cannot read or change files or "
+    "run commands. Keep replies short and conversational. Prefer short paragraphs; "
+    "avoid tables, emoji and decorative Unicode; plain ASCII is best. Don't repeat "
+    "large amounts of text back."
+)
+CHAT_TOOLS = ["WebSearch", "WebFetch"]
+
+
 AGENT_DIRS = (("project", None), ("user", "~/.claude/agents"))
 AGENT_FILES_MAX = 50
 
@@ -818,6 +834,7 @@ class SessionConfig:
         # to continue it (resume) or start it under that id.
         self.claude_id = None
         self.resume = False
+        self.chat = False     # v2 only: a chat, not a project (see CHAT_PROMPT)
         self.always = set()   # "Tool" or "Bash:<exact command>"
         self.turns = 0
 
@@ -837,17 +854,30 @@ class ClaudeSession:
         self.agents = AgentTracker(term)
         self.init_agents = []     # agent names from the CLI's init message
 
-    async def start(self):
-        from claude_agent_sdk import ClaudeAgentOptions, ClaudeSDKClient
-        opts = ClaudeAgentOptions(
-            cwd=self.cfg.cwd,
-            permission_mode="acceptEdits" if self.cfg.accept_edits else "default",
-            allowed_tools=["Read", "Glob", "Grep", "TodoWrite"],
-            can_use_tool=self._can_use_tool,
-            system_prompt={"type": "preset", "preset": "claude_code",
-                           "append": SYSTEM_APPEND.format(cols=self.term.cols)},
-            setting_sources=["user", "project", "local"],
-        )
+    def options(self):
+        """What the SDK starts the Claude CLI with. A chat gets no tools but
+        the web ones, no settings or MCP servers, and its own short prompt."""
+        from claude_agent_sdk import ClaudeAgentOptions
+        if self.cfg.chat:
+            opts = ClaudeAgentOptions(
+                cwd=self.cfg.cwd,
+                permission_mode="default",
+                tools=list(CHAT_TOOLS),
+                can_use_tool=self._can_use_tool,
+                system_prompt=CHAT_PROMPT.format(cols=self.term.cols),
+                setting_sources=[],
+                strict_mcp_config=True,
+            )
+        else:
+            opts = ClaudeAgentOptions(
+                cwd=self.cfg.cwd,
+                permission_mode="acceptEdits" if self.cfg.accept_edits else "default",
+                allowed_tools=["Read", "Glob", "Grep", "TodoWrite"],
+                can_use_tool=self._can_use_tool,
+                system_prompt={"type": "preset", "preset": "claude_code",
+                               "append": SYSTEM_APPEND.format(cols=self.term.cols)},
+                setting_sources=["user", "project", "local"],
+            )
         if self.cfg.model:
             opts.model = self.cfg.model
         if self.cfg.effort:
@@ -857,6 +887,11 @@ class ClaudeSession:
                 opts.resume = self.cfg.claude_id
             else:
                 opts.session_id = self.cfg.claude_id
+        return opts
+
+    async def start(self):
+        from claude_agent_sdk import ClaudeSDKClient
+        opts = self.options()
         self.client = ClaudeSDKClient(options=opts)
         await self.client.connect()
         self._msgs = asyncio.Queue()
@@ -1150,6 +1185,24 @@ class DemoSession:
         await t.result("success", 0.0)
 
 
+    async def _chat_turn(self, prompt):
+        """A chat: a short answer, and a web search when asked to look
+        something up, which needs a permission like the real thing."""
+        t = self.term
+        turn = f"turn {self.cfg.turns}, " if self.cfg.turns else ""
+        picked = f"model {self.cfg.model}, " if self.cfg.model != self.cfg.default_model else ""
+        await t.text(f"You said: “{prompt}” — demo chat, {picked}{turn}no tokens spent.")
+        if "search" in prompt.lower().split():
+            summary, detail = describe_tool("WebSearch", {"query": prompt}, self.cfg.cwd)
+            if "WebSearch" in self.cfg.always:
+                ans = "y"
+            else:
+                ans = await t.ask_permission(1, "WebSearch", summary, detail)
+                if ans == "a":
+                    self.cfg.always.add("WebSearch")
+            await t.tool("WebSearch", summary + (" (allowed)" if ans in "ya" else " (denied)"))
+        await t.result("success", 0.0)
+
     async def set_model(self, model):
         pass   # the demo reads cfg.model each turn
 
@@ -1162,6 +1215,8 @@ class DemoSession:
             return await self._agents_turn()
         if "background" in prompt.lower().split():
             return await self._background_turn()
+        if self.cfg.chat:
+            return await self._chat_turn(prompt)
         where = os.path.basename(self.cfg.cwd.rstrip("/")) or self.cfg.cwd
         edits = "auto" if self.cfg.accept_edits else "ask"
         turn = f"turn {self.cfg.turns}, " if self.cfg.turns else ""
@@ -1272,6 +1327,16 @@ Type a prompt and press return. End a line with \\ to continue it.
 While Claude works: ctrl-C stops it. At --More--: space, return or q."""
 
 
+CHAT_HELP = """Commands:
+  /new         start a fresh conversation
+  /model NAME  the model for the next turn (alone: show choices)
+  /effort LVL  low, medium, high, xhigh or max (alone: show choices)
+  /help        this text
+  /quit        close this chat
+This is a chat: Claude can search the web but has no files or tools.
+A chat is deleted when you close its tab or quit."""
+
+
 # --------------------------------------------------------------------------
 # Projects
 # --------------------------------------------------------------------------
@@ -1364,6 +1429,9 @@ def list_projects(args):
     out, seen = [], set()
     for path in found:
         name = os.path.basename(path.rstrip("/")) or path
+        if name == CHAT_NAME:
+            log(f"skipping project {path}: {CHAT_NAME!r} is the name a chat is opened with")
+            continue
         if not project_name_ok(name):
             log(f"skipping project {path!r}: its name can't be sent in Mac Roman")
             continue
@@ -1867,8 +1935,92 @@ V2_FILE_TAGS = ("L", "G", "F", "S[", "S", "S]", "S.")
 
 RESUME_TOKEN = re.compile(r"[0-9a-f]{16}")
 RESUME_MAX_AGE = 30 * 86400      # Claude Code's default transcript retention
+CHAT_NAME = "*"                  # opens a chat: never a project's name
+CHAT_MAX_AGE = 7 * 86400         # an unused chat is deleted at the next call
+CHAT_DIR = re.compile(r"[0-9a-f]{16}")
+CLAUDE_ID = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")
 CUT_NOTE = ("[The link to the SE/30 dropped during your previous turn, which was "
             "stopped there. The person did not see the end of it.]")
+
+
+def chats_root(state_dir):
+    return os.path.join(state_dir, "chats")
+
+
+def chat_folder_ok(state_dir, path):
+    """Is path a chat folder this bridge made: a direct child of the chats
+    folder with a generated name, and not a symlink?"""
+    if not isinstance(path, str):
+        return False
+    root = chats_root(state_dir)
+    return (os.path.dirname(path) == root and bool(CHAT_DIR.fullmatch(os.path.basename(path)))
+            and not os.path.islink(path))
+
+
+def delete_transcript(claude_id):
+    """Removes Claude Code's saved transcript of one conversation: the
+    <id>.jsonl (and <id> folder) inside whichever direct child of its
+    projects folder holds it, then that child if it is now empty. Nothing
+    is followed through a symlink, and a failure is logged, not raised."""
+    if not isinstance(claude_id, str) or not CLAUDE_ID.fullmatch(claude_id):
+        return
+    base = os.path.join(os.environ.get("CLAUDE_CONFIG_DIR") or os.path.expanduser("~/.claude"),
+                        "projects")
+    try:
+        children = [e.path for e in os.scandir(base) if e.is_dir(follow_symlinks=False)]
+    except OSError:
+        return
+    for child in children:
+        file = os.path.join(child, claude_id + ".jsonl")
+        folder = os.path.join(child, claude_id)
+        try:
+            removed = False
+            if os.path.lexists(file):
+                if os.path.islink(file) or not os.path.isfile(file):
+                    log(f"not deleting {file}: it is not a plain file")
+                else:
+                    os.unlink(file)
+                    removed = True
+            if os.path.lexists(folder) and not os.path.islink(folder) and os.path.isdir(folder):
+                shutil.rmtree(folder, ignore_errors=True)
+                removed = True
+            if removed and not os.listdir(child):
+                os.rmdir(child)
+        except OSError as e:
+            log(f"could not delete the transcript {claude_id}: {e}")
+
+
+def forget_chat(state_dir, folder, claude_id):
+    """Deletes a chat's folder and Claude's transcript of it."""
+    if chat_folder_ok(state_dir, folder):
+        shutil.rmtree(folder, ignore_errors=True)
+    delete_transcript(claude_id)
+
+
+def sweep_chats(store, state_dir):
+    """At the start of a call: deletes chats nobody used for CHAT_MAX_AGE
+    (the app crashed, or quit offline) and any chat folder no record names."""
+    cutoff = time.time() - CHAT_MAX_AGE
+    changed = False
+    for token, rec in list(store.recs.items()):
+        if rec.get("project") == CHAT_NAME and rec.get("used", 0) < cutoff:
+            forget_chat(state_dir, rec.get("cwd"), rec.get("claude_id"))
+            del store.recs[token]
+            changed = True
+    named = {os.path.basename(r.get("cwd") or "") for r in store.recs.values()
+             if r.get("project") == CHAT_NAME}
+    try:
+        folders = [e for e in os.scandir(chats_root(state_dir))]
+    except OSError:
+        folders = []
+    for e in folders:
+        if e.name not in named:
+            if chat_folder_ok(state_dir, e.path):
+                shutil.rmtree(e.path, ignore_errors=True)
+            else:
+                log(f"leaving {e.path}: it is not a chat folder")
+    if changed:
+        store.save()
 
 
 class ResumeStore:
@@ -1888,7 +2040,8 @@ class ResumeStore:
         cutoff = time.time() - RESUME_MAX_AGE
         if isinstance(recs, dict):
             self.recs = {t: r for t, r in recs.items()
-                         if isinstance(r, dict) and r.get("used", 0) >= cutoff}
+                         if isinstance(r, dict)
+                         and (r.get("project") == CHAT_NAME or r.get("used", 0) >= cutoff)}
 
     def get(self, token, project):
         rec = self.recs.get(token) if RESUME_TOKEN.fullmatch(token or "") else None
@@ -1925,8 +2078,11 @@ class Channel:
         self.term = v2.term
         self.sid = sid
         self.name = name
+        self.chat = name == CHAT_NAME
+        self.chat_dir = None      # a chat's own folder, once it has one
         self.cols = self.term.cols
         self.cfg = SessionConfig(path, args.accept_edits, args.model)
+        self.cfg.chat = self.chat
         # The tab's own model and effort (None: the bridge default). The
         # client owns them and presets them before opening; a change made
         # during a turn waits in `pending` for the turn to end.
@@ -1947,7 +2103,8 @@ class Channel:
         self.task = None
         self.edited = []
         self._in_fence = False
-        self.files = FileService(self, path, args.files)
+        # A chat has no project folder to show: its file service refuses.
+        self.files = FileService(self, path, "off" if self.chat else args.files)
         # A line and its "+" continuations go out together: the client
         # routes "+" by the session's last line, and prose and file pieces
         # come from different tasks.
@@ -2032,6 +2189,8 @@ class Channel:
         not start; the session is then closed, which frees its slot."""
         await self.session.stop()
         self.v2.store.delete(self.token)
+        if self.chat:
+            delete_transcript(self.cfg.claude_id)   # nothing can resume it now
         self._new_conversation()
         self.session = make_session(self.v2.args, self, self.cfg)
         try:
@@ -2039,7 +2198,7 @@ class Channel:
         except Exception as e:  # noqa: BLE001
             first = (str(e).strip().splitlines() or ["error"])[0]
             await self.tool_error(f"Could not start a new conversation: {first}")
-            asyncio.ensure_future(self.v2.close(self.sid))
+            self.v2.close_later(self.sid)
             return False
         await self.tag("Y", f"{self.token} new")
         return True
@@ -2090,7 +2249,7 @@ class Channel:
         except Exception as e:  # noqa: BLE001
             first = (str(e).strip().splitlines() or ["error"])[0]
             await self.tool_error(f"Could not change model or effort: {first}")
-            asyncio.ensure_future(self.v2.close(self.sid))
+            self.v2.close_later(self.sid)
             return False
         return True
 
@@ -2116,8 +2275,24 @@ class Channel:
 
     # ---- resume records ----------------------------------------------------
 
+    def _chat_folder(self, folder=None):
+        """A chat's own folder: the one its record names, else a new one."""
+        root = chats_root(self.v2.args.state_dir)
+        os.makedirs(root, mode=0o700, exist_ok=True)
+        if folder is None:
+            folder = os.path.join(root, secrets.token_hex(8))
+        os.makedirs(folder, mode=0o700, exist_ok=True)
+        self.chat_dir = self.cfg.cwd = folder
+
+    def discard_chat(self):
+        """Deletes a closed chat's folder and Claude's transcript of it."""
+        if self.chat:
+            forget_chat(self.v2.args.state_dir, self.chat_dir, self.cfg.claude_id)
+
     def _new_conversation(self):
         self.token = secrets.token_hex(8)
+        if self.chat and not self.chat_dir:
+            self._chat_folder()
         self.cfg.claude_id = str(uuid.uuid4())
         self.cfg.resume = False
         self.cfg.always = set()
@@ -2126,10 +2301,13 @@ class Channel:
         self._save(turn_running=False)
 
     def _save(self, turn_running):
-        self.v2.store.put(self.token, {
+        rec = {
             "project": self.name, "claude_id": self.cfg.claude_id,
             "accept_edits": self.cfg.accept_edits, "always": sorted(self.cfg.always),
-            "turns": self.cfg.turns, "turn_running": turn_running})
+            "turns": self.cfg.turns, "turn_running": turn_running}
+        if self.chat:
+            rec["cwd"] = self.chat_dir
+        self.v2.store.put(self.token, rec)
 
     def _take_record(self):
         """Sets up the conversation the app asked for. Returns "resumed",
@@ -2137,6 +2315,13 @@ class Channel:
         rec = self.v2.store.get(self.want_token, self.name)
         if not rec:
             return None
+        if self.chat:
+            if not chat_folder_ok(self.v2.args.state_dir, rec.get("cwd")):
+                return None
+            # Recreated when it was deleted: the conversation may still be
+            # saved under that path, and when it is not, the resume fails
+            # and a new one starts.
+            self._chat_folder(rec["cwd"])
         self.token = self.want_token
         self.cfg.claude_id = rec.get("claude_id") or str(uuid.uuid4())
         self.cfg.accept_edits = bool(rec.get("accept_edits"))
@@ -2206,6 +2391,7 @@ class Channel:
             self.v2.forget(self)
             if self.token:
                 self.v2.store.delete(self.token)
+            self.discard_chat()
             await self.tag("X", clip(f"could not start: {first}", 200))
             return
         try:
@@ -2233,11 +2419,14 @@ class Channel:
                     continue
                 cmd = prompt.lower().split()
                 if cmd[0] == "/quit":
-                    asyncio.ensure_future(self.v2.close(self.sid))
+                    self.v2.close_later(self.sid)
                     return
                 if cmd[0] == "/help":
-                    for line in HELP.split("\n"):
+                    for line in (CHAT_HELP if self.chat else HELP).split("\n"):
                         await self.notice(line)
+                    continue
+                if self.chat and cmd[0] in ("/agents", "/edits"):
+                    await self.notice(f"{cmd[0]} does not apply in a chat.")
                     continue
                 if cmd[0] == "/agents":
                     for line in agents_lines(self.cfg.cwd, getattr(self.session, "init_agents", [])):
@@ -2358,6 +2547,8 @@ class V2:
         self.presets = {}   # sid -> (model, effort) for a tab not open yet
         self.store = ResumeStore(args.state_dir)
         self.agents_optin = False   # the app sent !AGENTS: it draws subagent lines
+        self.closing = set()        # close() tasks still running
+        sweep_chats(self.store, args.state_dir)
 
     def forget(self, ch):
         if self.channels.get(ch.sid) is ch:
@@ -2376,6 +2567,11 @@ class V2:
             await self.term.send_line(transliterate(f"P {name}", "macroman"))
         await self.term.send_line(b"P]")
 
+    def close_later(self, sid):
+        task = asyncio.ensure_future(self.close(sid))
+        self.closing.add(task)
+        task.add_done_callback(self.closing.discard)
+
     async def close(self, sid):
         ch = self.channels.get(sid)
         if ch is None or ch.closing:
@@ -2383,6 +2579,8 @@ class V2:
         await ch.shutdown()
         self.forget(ch)
         self.store.delete(ch.token)
+        # Before the answer: after !QUIT the link may be gone by then.
+        ch.discard_chat()
         await ch.tag("X", "closed")
 
     async def open(self, sid, name, token=None):
@@ -2390,7 +2588,8 @@ class V2:
             return await self.term.send_line(f"{sid}X already open".encode())
         if len(self.channels) >= self.args.max_sessions:
             return await self.term.send_line(f"{sid}X too many tabs".encode())
-        path = dict(list_projects(self.args)).get(name)
+        path = chats_root(self.args.state_dir) if name == CHAT_NAME \
+            else dict(list_projects(self.args)).get(name)
         if path is None:
             return await self.term.send_line(f"{sid}X not available".encode())
         ch = Channel(self, sid, name, path, token, self.presets.pop(sid, None))
@@ -2408,7 +2607,7 @@ class V2:
             return await self.open(sid, name, token)
         if tag == "X":
             if sid in self.channels:
-                asyncio.ensure_future(self.close(sid))
+                self.close_later(sid)
             else:
                 await self.term.send_line(f"{sid}X closed".encode())
             return
@@ -2435,7 +2634,7 @@ class V2:
 
     async def run(self):
         try:
-            await self.term.send_line(f"#OK se30bridge 2 files={self.args.files} resume ping models agents".encode(),
+            await self.term.send_line(f"#OK se30bridge 2 files={self.args.files} resume ping models agents chat".encode(),
                                       counted=False)
             await self.send_models()
             await self.send_list()
@@ -2453,6 +2652,9 @@ class V2:
         except EOFError:
             pass
         finally:
+            # A close the app asked for before it quit finishes first: it
+            # deletes a chat, which a plain shutdown keeps for the next call.
+            await asyncio.gather(*self.closing, return_exceptions=True)
             chans = list(self.channels.values())
             self.channels.clear()
             await asyncio.gather(*(c.shutdown() for c in chans), return_exceptions=True)
