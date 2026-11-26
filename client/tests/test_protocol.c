@@ -959,8 +959,44 @@ static void test_chat_capability(void)
     CHECK(!proto_chat_cap(&P));
 }
 
+static void test_stream_capability(void)
+{
+    /* The word comes with #OK and is forgotten at the next one. */
+    reset();
+    proto_connect(&P, "ATDTbridge", now);
+    feed("AT\r\nOK\r\nCONNECT 57600\r\n");
+    feed("#OK se30bridge 2 files=rw resume ping models agents chat stream\r\n"
+         "M[\r\nM opus\r\nM] - -\r\nP[\r\nP alpha\r\nP]\r\n");
+    CHECK_EQ_LONG(P.state, ST_ONLINE);
+    CHECK(proto_stream_cap(&P));
+
+    /* The setting goes out for any session number, open or not. */
+    clear_rec();
+    CHECK(proto_set_stream(&P, 3, 1));
+    CHECK_MEM(R.sent, R.nsent, "3V on\r");
+    clear_rec();
+    CHECK(proto_set_stream(&P, 3, 0));
+    CHECK_MEM(R.sent, R.nsent, "3V off\r");
+    CHECK(!proto_set_stream(&P, 0, 1));
+    CHECK(!proto_set_stream(&P, 7, 1));
+    CHECK_EQ_LONG(P.dropped, 0);
+
+    /* A bridge without the word is never sent the line. */
+    reset();
+    connect_online();
+    CHECK(!proto_stream_cap(&P));
+    clear_rec();
+    CHECK(!proto_set_stream(&P, 1, 1));
+    CHECK_EQ_LONG(R.nsent, 0);
+
+    /* Not online: nothing is sent. */
+    reset();
+    CHECK(!proto_set_stream(&P, 1, 1));
+}
+
 int main(void)
 {
+    test_stream_capability();
     test_chat_capability();
     test_dial_and_handshake();
     test_handshake_words_and_old_bridge();

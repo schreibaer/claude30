@@ -175,8 +175,56 @@ static void test_trim(void)
     CHECK(20000 - cut + 10000 <= TRIM_KEEP_BYTES);
 }
 
+/* A + continues the paragraph only when prose was the last thing drawn: a
+   marker or tool line the app drew in between starts the next piece on its
+   own line, and a pause between batches does not. */
+static void test_continuation_after_other_lines(void)
+{
+    Batch b;
+    long n;
+    const char *t;
+    batch_init(&b);
+
+    batch_event(&b, EV_TEXT, "one", 3);
+    batch_marker(&b, RS_NOISE, "Line noise");
+    batch_event(&b, EV_TEXT_CONT, "two", 3);
+    CHECK_EQ_LONG(b.nruns, 3);
+    t = run_text(&b, 1, &n);
+    CHECK_MEM(t, n, "\rLine noise");
+    t = run_text(&b, 2, &n);
+    CHECK_MEM(t, n, "\rtwo");
+    batch_event(&b, EV_TEXT_CONT, "three", 5);
+    t = run_text(&b, 2, &n);
+    CHECK_MEM(t, n, "\rtwo three");
+
+    /* After a tool line, as an older bridge could send it. */
+    batch_clear(&b);
+    batch_event(&b, EV_TEXT, "a", 1);
+    batch_event(&b, EV_TOOL, "Read x", 6);
+    batch_event(&b, EV_TEXT_CONT, "b", 1);
+    t = run_text(&b, 2, &n);
+    CHECK_MEM(t, n, "\rb");
+
+    /* The first batch was drawn and cleared: the paragraph is still open. */
+    batch_clear(&b);
+    batch_event(&b, EV_TEXT, "first", 5);
+    batch_clear(&b);
+    batch_event(&b, EV_TEXT_CONT, "second", 6);
+    t = run_text(&b, 0, &n);
+    CHECK_MEM(t, n, " second");
+
+    /* A prompt closes the paragraph too. */
+    batch_clear(&b);
+    batch_prompt(&b, "hi", 2);
+    batch_event(&b, EV_TEXT_CONT, "late", 4);
+    t = run_text(&b, 1, &n);
+    CHECK_MEM(t, n, "\rlate");
+    batch_free(&b);
+}
+
 int main(void)
 {
+    test_continuation_after_other_lines();
     test_runs();
     test_styles_distinct();
     test_long_line_split();

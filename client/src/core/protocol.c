@@ -103,6 +103,7 @@ static void reset_link(Proto *p)
     p->agents_cap = 0;
     p->chat_cap = 0;
     p->models_cap = 0;
+    p->stream_cap = 0;
     p->nmodels = 0;
     p->def_model[0] = 0;
     p->def_effort[0] = 0;
@@ -320,6 +321,7 @@ static void read_ok(Proto *p, const char *line, long n)
     p->agents_cap = 0;
     p->chat_cap = 0;
     p->models_cap = 0;
+    p->stream_cap = 0;
     while (i < n) {
         long w;
         while (i < n && line[i] == ' ')
@@ -341,6 +343,8 @@ static void read_ok(Proto *p, const char *line, long n)
             p->chat_cap = 1;
         else if (equals(line + w, i - w, "models"))
             p->models_cap = 1;
+        else if (equals(line + w, i - w, "stream"))
+            p->stream_cap = 1;
     }
 }
 
@@ -926,6 +930,19 @@ int proto_chat_cap(const Proto *p)
 int proto_models_cap(const Proto *p)
 {
     return p->models_cap;
+}
+
+int proto_stream_cap(const Proto *p)
+{
+    return p->stream_cap;
+}
+
+int proto_set_stream(Proto *p, int sid, int on)
+{
+    if (p->state != ST_ONLINE || !p->stream_cap || sid < 1 || sid > MAX_SESS)
+        return 0;
+    send_sess(p, sid, on ? "V on" : "V off");
+    return 1;
 }
 
 int proto_nmodels(const Proto *p)

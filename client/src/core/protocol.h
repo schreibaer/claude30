@@ -159,6 +159,7 @@ struct Proto {
     int agents_cap;              /* the bridge sends J lines to an app that sent !AGENTS */
     int chat_cap;                /* a session can be opened as a chat with the name "*" */
     int models_cap;              /* the bridge sends a model list and takes <n>M */
+    int stream_cap;              /* the bridge takes <n>V on|off and can stream answers */
 
     /* The models a session may pick, from the handshake's M lines. */
     char models[MAX_MODELS][MODEL_LEN];
@@ -237,6 +238,13 @@ int proto_open_resume(Proto *p, int sid, const char *project, const char *token)
 /* The bridge offers chats: proto_open(p, sid, "*") opens one (PROTOCOL.md, Chats). */
 int proto_chat_cap(const Proto *p);
 int proto_models_cap(const Proto *p);
+/* The bridge can stream a session's answers (PROTOCOL.md, Streaming answers). */
+int proto_stream_cap(const Proto *p);
+/* Turns streaming on or off for session sid, open or not; the bridge keeps
+   it for the next open of that number. Streamed prose arrives as the usual
+   EV_TEXT and EV_TEXT_CONT, in more and smaller pieces. Returns 0 when it
+   was not sent (not online, no stream capability, a bad id). */
+int proto_set_stream(Proto *p, int sid, int on);
 int proto_nmodels(const Proto *p);
 const char *proto_model(const Proto *p, int i);
 const char *proto_default_model(const Proto *p);
