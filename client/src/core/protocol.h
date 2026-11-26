@@ -160,6 +160,7 @@ struct Proto {
     int chat_cap;                /* a session can be opened as a chat with the name "*" */
     int models_cap;              /* the bridge sends a model list and takes <n>M */
     int stream_cap;              /* the bridge takes <n>V on|off and can stream answers */
+    int md_cap;                  /* the bridge leaves ** and __ in prose for an app that sent !MD */
 
     /* The models a session may pick, from the handshake's M lines. */
     char models[MAX_MODELS][MODEL_LEN];

@@ -104,6 +104,7 @@ static void reset_link(Proto *p)
     p->chat_cap = 0;
     p->models_cap = 0;
     p->stream_cap = 0;
+    p->md_cap = 0;
     p->nmodels = 0;
     p->def_model[0] = 0;
     p->def_effort[0] = 0;
@@ -322,6 +323,7 @@ static void read_ok(Proto *p, const char *line, long n)
     p->chat_cap = 0;
     p->models_cap = 0;
     p->stream_cap = 0;
+    p->md_cap = 0;
     while (i < n) {
         long w;
         while (i < n && line[i] == ' ')
@@ -345,6 +347,8 @@ static void read_ok(Proto *p, const char *line, long n)
             p->models_cap = 1;
         else if (equals(line + w, i - w, "stream"))
             p->stream_cap = 1;
+        else if (equals(line + w, i - w, "md"))
+            p->md_cap = 1;
     }
 }
 
@@ -418,6 +422,8 @@ static int link_line(Proto *p, const char *line, long n)
             set_state(p, ST_ONLINE);
             if (p->agents_cap)
                 sends(p, "!AGENTS\r");   /* draw subagents as live lines */
+            if (p->md_cap)
+                sends(p, "!MD\r");       /* style ** and __ in prose ourselves */
             emit(p, 0, EV_CONNECTED, "", 0);
         } else {
             emit(p, 0, EV_PROJECTS, "", 0);

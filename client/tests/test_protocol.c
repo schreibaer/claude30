@@ -926,6 +926,27 @@ static void test_agent_lines(void)
     CHECK_EQ_LONG(count_sent("!AGENTS"), 0);
 }
 
+static void test_md_capability(void)
+{
+    /* The word turns on !MD, sent once after the project list. */
+    reset();
+    proto_connect(&P, "ATDTbridge", now);
+    feed("AT\r\nOK\r\n");
+    feed("CONNECT 57600\r\n");
+    feed("> \r\n> #HELLO SE30 2\r\n#OK se30bridge 2 files=rw resume ping agents chat stream md\r\n"
+         "P[\r\nP alpha\r\nP]\r\n");
+    CHECK(P.md_cap);
+    CHECK_EQ_LONG(count_sent("!MD\r"), 1);
+    feed("P[\r\nP alpha\r\nP]\r\n");     /* a new list is not a new call */
+    CHECK_EQ_LONG(count_sent("!MD\r"), 1);
+
+    /* After a redial it is sent again; without the word it never is. */
+    reset();
+    connect_online();
+    CHECK(!P.md_cap);
+    CHECK_EQ_LONG(count_sent("!MD"), 0);
+}
+
 static void test_chat_capability(void)
 {
     /* The word is read from #OK and forgotten at the next one. */
@@ -997,6 +1018,7 @@ static void test_stream_capability(void)
 int main(void)
 {
     test_stream_capability();
+    test_md_capability();
     test_chat_capability();
     test_dial_and_handshake();
     test_handshake_words_and_old_bridge();
