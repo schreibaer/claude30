@@ -217,6 +217,7 @@ Retro68 leaves the Finder's "has bundle" flag clear. A post-build step (`cmake/s
   - file transfers (`files.c`): listings, piece reads and block saves with CRC-32 checks (`crc32.c`) and retries
   - the prompt encoder (backslash continuation lines with the session prefix)
   - the transcript batcher and trim plan
+  - the Markdown styler (`mdstyle.c`): turns prose lines into styled runs
 
   It is compiled into the app and, separately, into the host tests.
 - `src/mac/` is the Toolbox shell:
@@ -232,5 +233,22 @@ Retro68 leaves the Finder's "has bundle" flag clear. A post-build step (`cmake/s
   - `prefs.c`: settings and remembered tabs in a resource in the Preferences folder.
   - `log.c`: per-tab session logs.
   - `linktest.c`: the link test.
+
+Styles in the transcript: Claude's Markdown is shown with the faces System 7 has, in Geneva and Monaco 9 point. The bridge sends the marks after the app's `!MD` (see PROTOCOL.md).
+
+| Markdown | Shown as |
+|---|---|
+| `**bold**`, `__bold__` | bold |
+| `*italic*`, `_italic_` | italic |
+| `***both***` | bold italic |
+| `` `code` `` | Monaco |
+| `[text](url)`, `<https://…>`, a bare address | underlined; the address of `[text](url)` is dropped |
+| `# Title` to `###### Title` | bold; level 1 also extended and underlined, level 2 extended |
+| `- item`, `* item`, `+ item` | a bullet (a nested item gets an en dash) |
+| `> quote` | `\| quote` in italics |
+| `---`, `***`, `___` | a rule of em dashes the width of the transcript |
+| `\| a \| b \|` tables | Monaco, as typed; the separator row is redrawn as `\|---+---\|` |
+
+A mark with no partner on the line, `snake_case`, `2 * 3` and `~~strike~~` show as typed. While an answer streams, a styled phrase appears when its closing mark arrives. The faces need styled TextEdit (`TEStyleInsert`, `TESetStyle`) and `TextFace` with bold, italic, underline and extend, all in System 7.0 and later. No extra memory beyond the style runs TextEdit already keeps.
 
 Toolbox managers used: QuickDraw, Font Manager, Window Manager, Menu Manager, TextEdit (styled and plain), Dialog Manager, Control Manager, List Manager (standard LDEF), Event Manager, Device Manager and Serial Driver, File Manager, Resource Manager, Folder Manager (`FindFolder`), Process Manager (`GetProcessInformation`), Text Utilities (`TruncString`), Scrap Manager and Memory Manager. All of them are in System 7.0 and later. The app uses no floating point.

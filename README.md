@@ -42,6 +42,8 @@ Besides project tabs you can open a chat: a short-lived conversation that belong
 
 Claude30's **Session > Stream Answers** switch (per tab, off by default) shows Claude's prose as it is written, in pieces of a few words, instead of after the whole message is done. Code blocks still arrive one finished line at a time. ZTerm and tty mode do not stream.
 
+Claude's Markdown shows as styled text in the transcript: bold, italic, code in Monaco, headings, lists, quotes, links, rules and tables. ZTerm and tty mode see plain text.
+
 ### Subagents
 
 When Claude starts a subagent (Explore, a project agent, or one it makes up), Claude30 shows one line for it, rewritten as it works (`» Explore: find tests · Grep · 3 tools`) and replaced by a one-line result when it ends. Its own output stays on the Mac. ZTerm gets a plain `[Agent]` line at the start and the end. Type `/agents` to list the subagents the project offers. To create one, ask Claude, or write a file in `.claude/agents/` (Claude30's Open Project File can edit it).
