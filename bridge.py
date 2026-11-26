@@ -193,6 +193,153 @@ def app_text_lines(md, fence):
     return out
 
 
+class StreamChunker:
+    """One streamed text block: its deltas in, app-mode (tag, payload) pairs
+    out, so that the app draws the same text as app_text_lines gives for the
+    whole block. Prose goes out in pieces ending at a space (a T, then +
+    pieces the app joins with one space) once about MIN bytes of whole words
+    wait, or after WAIT seconds when a whole word does. A line that is or may
+    become a code fence, and every line inside a fence, waits for its newline
+    so code stays one complete line per C. fence is an object with an
+    _in_fence attribute, as for app_text_lines."""
+
+    MIN = 100
+    WAIT = 0.5
+
+    def __init__(self, fence, clock=time.monotonic):
+        self.fence = fence
+        self.clock = clock
+        self.line = ""          # the current line's text not sent yet
+        self.opened = False     # the T of the current line is out
+        self.last = clock()     # when a piece last went out
+
+    def feed(self, delta, force=False):
+        """The pieces that are ready now. force sends every whole word."""
+        out = []
+        while True:
+            nl = delta.find("\n")
+            if nl < 0:
+                break
+            self.line += delta[:nl]
+            delta = delta[nl + 1:]
+            self._end_line(out)
+        self.line += delta
+        self._partial(out, force)
+        return out
+
+    def finish(self):
+        """The block ended: the rest, as a last line without a newline."""
+        out = []
+        self._end_line(out)
+        return out
+
+    @staticmethod
+    def _plain(s):
+        return s.replace("**", "").replace("__", "")
+
+    def _end_line(self, out):
+        line, opened = self.line, self.opened
+        self.line, self.opened = "", False
+        if line.strip().startswith("```"):
+            self.fence._in_fence = not self.fence._in_fence
+            out.append(("C[" if self.fence._in_fence else "C]", ""))
+        elif self.fence._in_fence:
+            out += split_payload("C", self._plain(line))
+        else:
+            text = self._plain(line)
+            if not opened:
+                out += split_payload("T", text)
+            elif text.strip():
+                out += split_payload("+", text.lstrip())
+        self.last = self.clock()
+
+    def _partial(self, out, force):
+        if self.fence._in_fence:
+            return
+        head = self.line.lstrip()
+        if not self.opened and (not head or "```".startswith(head) or head.startswith("```")):
+            return      # a fence line, or one that may become one
+        i = self.line.rfind(" ")
+        if i <= 0:
+            return
+        ready = self.line[:i]
+        now = self.clock()
+        if not (force or len(ready) >= self.MIN or (now - self.last >= self.WAIT and ready.strip())):
+            return
+        self.line = self.line[i:].lstrip()
+        while ready:
+            if len(ready) > 200:
+                cut = ready.rfind(" ", 0, 200)
+                cut = 200 if cut <= 0 else cut
+                piece, ready = ready[:cut], ready[cut:].lstrip()
+            else:
+                piece, ready = ready, ""
+            piece = self._plain(piece)
+            if piece.strip():
+                out.append(("+" if self.opened else "T", piece))
+                self.opened = True
+        self.last = now
+
+
+class BlockStream:
+    """One text block of Claude's answer, from its first delta to the
+    AssistantMessage that carries it whole. While the term's stream switch
+    is on, the block goes out as pieces as it grows; with it off, the whole
+    block goes out when it ends. Turning the switch off mid-block leaves the
+    block streamed: the rest is sent at its end. Turning it on mid-block
+    sends what has been written so far at once."""
+
+    def __init__(self, term, clock=time.monotonic):
+        self.term = term
+        self.chunker = StreamChunker(term, clock)
+        self.text = ""
+        self.fed = 0            # how much of text the chunker has seen
+        self.streamed = False   # some of it went out as pieces
+        self.flushed = False    # the chunker was finished
+        self.claimed = False    # its AssistantMessage came
+
+    def _on(self):
+        return bool(getattr(self.term, "stream", False))
+
+    async def _feed(self, force=False):
+        if self.flushed or self.fed >= len(self.text):
+            return
+        new, self.fed = self.text[self.fed:], len(self.text)
+        pairs = self.chunker.feed(new, force)
+        if pairs:
+            await self.term.stream_pieces(pairs)
+
+    async def delta(self, d):
+        self.text += d
+        if self._on() and self.text.strip():
+            was = self.streamed
+            self.streamed = True
+            await self._feed(force=not was)
+
+    async def switched(self):
+        """The stream switch just changed."""
+        if self._on() and self.text.strip():
+            self.streamed = True
+            await self._feed(force=True)
+
+    async def flush(self):
+        if not self.streamed or self.flushed:
+            return
+        await self._feed()
+        self.flushed = True
+        pairs = self.chunker.finish()
+        if pairs:
+            await self.term.stream_pieces(pairs)
+
+    async def end(self, whole):
+        """Its AssistantMessage came, carrying the whole text."""
+        self.claimed = True
+        if self.streamed:
+            await self.flush()
+        else:
+            await self.term.text(whole)
+
+
 class Terminal:
     """tty mode and v1 app mode, plus the input routing and the one writer
     that v2 sessions share."""
@@ -835,6 +982,7 @@ class SessionConfig:
         self.claude_id = None
         self.resume = False
         self.chat = False     # v2 only: a chat, not a project (see CHAT_PROMPT)
+        self.partial = False  # v2 only: ask for partial messages, to stream answers
         self.always = set()   # "Tool" or "Bash:<exact command>"
         self.turns = 0
 
@@ -853,6 +1001,12 @@ class ClaudeSession:
         self._perm_lock = asyncio.Lock()
         self.agents = AgentTracker(term)
         self.init_agents = []     # agent names from the CLI's init message
+        # Text blocks of the message being streamed, by the API's block
+        # index. Their deltas are only sent while the term's stream switch is
+        # on (see BlockStream); the lock keeps a switch change from running
+        # in the middle of a delta.
+        self._blocks = {}
+        self._slock = asyncio.Lock()
 
     def options(self):
         """What the SDK starts the Claude CLI with. A chat gets no tools but
@@ -882,6 +1036,8 @@ class ClaudeSession:
             opts.model = self.cfg.model
         if self.cfg.effort:
             opts.effort = self.cfg.effort
+        if self.cfg.partial:
+            opts.include_partial_messages = True
         if self.cfg.claude_id:
             if self.cfg.resume:
                 opts.resume = self.cfg.claude_id
@@ -988,7 +1144,7 @@ class ClaudeSession:
         """Shows what arrived between turns. Background subagents' progress
         and ends are applied as they come; when Claude starts a turn by
         itself, it runs to its result. Returns whether there was a turn."""
-        from claude_agent_sdk import AssistantMessage, ResultMessage, UserMessage
+        from claude_agent_sdk import AssistantMessage, ResultMessage, StreamEvent, UserMessage
         ag = self.agents
         turned = False
         self._in_turn = True
@@ -996,7 +1152,7 @@ class ClaudeSession:
             while turned or not self._msgs.empty():
                 msg = await self._next()
                 if not turned and (isinstance(msg, ResultMessage) or (
-                        isinstance(msg, (AssistantMessage, UserMessage))
+                        isinstance(msg, (AssistantMessage, UserMessage, StreamEvent))
                         and not getattr(msg, "parent_tool_use_id", None))):
                     turned = True
                     ag.interrupted = False
@@ -1013,14 +1169,17 @@ class ClaudeSession:
 
     async def _handle(self, msg):
         """One message from Claude. Returns True at the end of a turn."""
-        from claude_agent_sdk import (AssistantMessage, ResultMessage, SystemMessage,
-                                      TextBlock, ToolUseBlock, UserMessage)
+        from claude_agent_sdk import (AssistantMessage, ResultMessage, StreamEvent,
+                                      SystemMessage, TextBlock, ToolUseBlock, UserMessage)
         try:
             from claude_agent_sdk import ToolResultBlock
         except ImportError:
             ToolResultBlock = None
         ag = self.agents
-        if isinstance(msg, AssistantMessage):
+        if isinstance(msg, StreamEvent):
+            if not getattr(msg, "parent_tool_use_id", None):
+                await self._stream_event(msg.event)
+        elif isinstance(msg, AssistantMessage):
             parent = getattr(msg, "parent_tool_use_id", None)
             for block in msg.content:
                 if parent:
@@ -1029,7 +1188,7 @@ class ClaudeSession:
                         s, _ = describe_tool(block.name, block.input or {}, self.cfg.cwd)
                         await ag.step(parent, block.name, s)
                 elif isinstance(block, TextBlock) and block.text.strip():
-                    await self.term.text(block.text)
+                    await self._text_block(block.text)
                 elif isinstance(block, ToolUseBlock):
                     if block.name in ("Agent", "Task"):
                         await ag.start(block.id, block.input or {})
@@ -1051,6 +1210,7 @@ class ClaudeSession:
         elif isinstance(msg, SystemMessage):
             await self._system(msg)
         elif isinstance(msg, ResultMessage):
+            await self._end_blocks()
             await ag.close_all()
             if getattr(msg, "session_id", None):
                 self.cfg.claude_id = msg.session_id
@@ -1059,6 +1219,56 @@ class ClaudeSession:
             await self.term.result(status, getattr(msg, "total_cost_usd", None))
             return True
         return False
+
+    # ---- streamed text -------------------------------------------------
+
+    async def _stream_event(self, ev):
+        """One raw API stream event of the main conversation. Only text
+        blocks matter; the AssistantMessage that follows each carries the
+        same text whole, and decides (in _text_block) whether it was sent."""
+        kind = ev.get("type")
+        async with self._slock:
+            if kind == "message_start":
+                await self._end_blocks_locked()
+            elif kind == "content_block_start":
+                if (ev.get("content_block") or {}).get("type") == "text":
+                    self._blocks[ev.get("index")] = BlockStream(self.term)
+            elif kind == "content_block_delta":
+                b = self._blocks.get(ev.get("index"))
+                d = ev.get("delta") or {}
+                if b and d.get("type") == "text_delta":
+                    await b.delta(d.get("text") or "")
+            elif kind == "content_block_stop":
+                b = self._blocks.get(ev.get("index"))
+                if b:
+                    await b.flush()
+
+    async def _text_block(self, text):
+        """A text block of the main conversation, whole. Prints it unless
+        its deltas already went out."""
+        async with self._slock:
+            for b in self._blocks.values():
+                if not b.claimed and b.text == text:
+                    return await b.end(text)
+        await self.term.text(text)
+
+    async def _end_blocks(self):
+        async with self._slock:
+            await self._end_blocks_locked()
+
+    async def _end_blocks_locked(self):
+        """The message or turn ended: send what a streamed block still holds
+        (an interrupt can end a turn before its blocks end)."""
+        blocks, self._blocks = list(self._blocks.values()), {}
+        for b in blocks:
+            await b.flush()
+
+    async def stream_changed(self):
+        """The tab's stream switch changed: a block being written starts
+        streaming at once when it was switched on."""
+        async with self._slock:
+            for b in self._blocks.values():
+                await b.switched()
 
     async def _system(self, msg):
         data = msg.data if isinstance(msg.data, dict) else {}
@@ -1082,6 +1292,21 @@ class ClaudeSession:
             await ag.end(tid, status, " ".join(str(data.get("summary") or "").split()))
 
 
+# What the demo's "streaming" prompt sends (a few paragraphs and a code block).
+LONG_DEMO = (
+    "The SE/30 has a 512x342 pixel display and a 68030 running at 16 MHz, which is a lot of "
+    "machine for a console that only has to show text. Claude writes its answer a few words at "
+    "a time, and with streaming on those words appear here while it is still being written, so "
+    "there is something to read long before the whole answer is done. With streaming off, the "
+    "same paragraph arrives in one piece when Claude has finished writing it.\n\n"
+    "A second paragraph follows, a little shorter, so that a pause between paragraphs shows "
+    "too: every blank line is part of the text and is kept.\n"
+    "```python\ndef parse(s):\n    return [t for t in s.split() if t]\n```\n"
+    "`parse()` splits the text on white space and drops the empty pieces, which is all the "
+    "parser needs for now, and this last paragraph starts with inline code to check that it "
+    "streams like any other text.")
+
+
 class DemoSession:
     """Fake Claude, for testing the serial link and the client."""
 
@@ -1094,6 +1319,7 @@ class DemoSession:
         self.agents = AgentTracker(term)
         self._bg = None           # the background subagent's timer
         self._bg_done = False     # ... which ended between turns
+        self._block = None        # the text block a "long" turn is streaming
 
     async def start(self):
         # Test hook: a slow start with a child process that, like the real
@@ -1206,11 +1432,38 @@ class DemoSession:
     async def set_model(self, model):
         pass   # the demo reads cfg.model each turn
 
+    async def stream_changed(self):
+        if self._block:
+            await self._block.switched()
+
+    async def _long_turn(self, prompt):
+        """One long text block (the prompt has the word "streaming"), fed in
+        small slices so that streaming shows.
+        With the word "tool" a tool line comes in the middle of it."""
+        t = self.term
+        delay = float(os.environ.get("SE30_DEMO_STREAM_DELAY", "0.005") or 0)
+        self._block = block = BlockStream(t)
+        try:
+            for n, i in enumerate(range(0, len(LONG_DEMO), 12)):
+                if self._stop:
+                    await block.flush()
+                    return await t.result("interrupted", 0.0)
+                await asyncio.sleep(delay)
+                await block.delta(LONG_DEMO[i:i + 12])
+                if n == 30 and "tool" in prompt.lower().split():
+                    await t.tool("Read", "src/parser.py")
+            await block.end(LONG_DEMO)
+        finally:
+            self._block = None
+        await t.result("success", 0.0)
+
     async def turn(self, prompt):
         self._stop = False
         t = self.term
         if self._bg_done:
             await self.follow()
+        if "streaming" in prompt.lower().split():
+            return await self._long_turn(prompt)
         if "agents" in prompt.lower().split():
             return await self._agents_turn()
         if "background" in prompt.lower().split():
@@ -2083,6 +2336,9 @@ class Channel:
         self.cols = self.term.cols
         self.cfg = SessionConfig(path, args.accept_edits, args.model)
         self.cfg.chat = self.chat
+        self.cfg.partial = True       # so answers can stream when the tab asks
+        self.stream = False           # the tab's switch (see BlockStream)
+        self._para_open = False       # the last line sent was a paragraph the app can continue
         # The tab's own model and effort (None: the bridge default). The
         # client owns them and presets them before opening; a change made
         # during a turn waits in `pending` for the turn to end.
@@ -2113,11 +2369,32 @@ class Channel:
     # ---- output ------------------------------------------------------------
 
     async def tag(self, t, payload=""):
+        self._para_open = False
         line = f"{self.sid}{t}" + (f" {payload}" if payload else "")
         await self.term.send_line(transliterate(line, "macroman"), counted=t != ">")
 
+    async def stream_pieces(self, pairs):
+        """Pieces of a streamed paragraph (see StreamChunker). The app joins
+        a + to the session's last T, C or B line, so a + goes out only when
+        nothing else was sent since the paragraph's last piece; otherwise
+        it opens a new paragraph with a T."""
+        async with self.group:
+            for t, payload in pairs:
+                if t == "+" and not self._para_open:
+                    t = "T"
+                await self.tag(t, payload)
+                self._para_open = t in ("T", "+")
+
+    def set_stream(self, on):
+        """The app turned this tab's streaming on or off."""
+        self.stream = on
+        change = getattr(self.session, "stream_changed", None)
+        if change:
+            asyncio.ensure_future(change())   # never hold up the input router
+
     async def send_split(self, t, data: bytes):
         """Raw Mac Roman bytes as one line plus "+" continuations of 200 bytes."""
+        self._para_open = False
         async with self.group:
             for i in range(0, max(len(data), 1), 200):
                 chunk = data[i:i + 200]
@@ -2545,6 +2822,7 @@ class V2:
         self.args = args
         self.channels = {}
         self.presets = {}   # sid -> (model, effort) for a tab not open yet
+        self.stream_presets = {}   # sid -> whether it streams, for a tab not open yet
         self.store = ResumeStore(args.state_dir)
         self.agents_optin = False   # the app sent !AGENTS: it draws subagent lines
         self.closing = set()        # close() tasks still running
@@ -2584,6 +2862,7 @@ class V2:
         await ch.tag("X", "closed")
 
     async def open(self, sid, name, token=None):
+        stream = self.stream_presets.pop(sid, False)
         if sid in self.channels:
             return await self.term.send_line(f"{sid}X already open".encode())
         if len(self.channels) >= self.args.max_sessions:
@@ -2593,6 +2872,7 @@ class V2:
         if path is None:
             return await self.term.send_line(f"{sid}X not available".encode())
         ch = Channel(self, sid, name, path, token, self.presets.pop(sid, None))
+        ch.stream = stream
         self.channels[sid] = ch
         ch.files.start()
         ch.task = asyncio.ensure_future(ch.run())
@@ -2619,6 +2899,14 @@ class V2:
             elif not ch.closing:
                 await ch.change(*words)
             return
+        if tag == "V":
+            if payload in ("on", "off"):
+                ch = self.channels.get(sid)
+                if ch is None:
+                    self.stream_presets[sid] = payload == "on"
+                elif not ch.closing:
+                    ch.set_stream(payload == "on")
+            return
         ch = self.channels.get(sid)
         if ch is None or ch.closing:
             return
@@ -2634,7 +2922,7 @@ class V2:
 
     async def run(self):
         try:
-            await self.term.send_line(f"#OK se30bridge 2 files={self.args.files} resume ping models agents chat".encode(),
+            await self.term.send_line(f"#OK se30bridge 2 files={self.args.files} resume ping models agents chat stream".encode(),
                                       counted=False)
             await self.send_models()
             await self.send_list()
