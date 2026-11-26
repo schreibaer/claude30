@@ -28,3 +28,4 @@ cmake -S client/tests -B build-host && cmake --build build-host && ctest --test-
 - Keep bridge changes compatible with `PROTOCOL.md`, or bump the protocol version and update the spec.
 - Classic Mac code targets System 7 on a 68030 with little RAM: name the Toolbox calls you rely on and flag anything that needs a newer System or more memory.
 - Say what you tested and what you didn't.
+- Before changing the protocol, menus or other areas with past mistakes, check `docs/solutions/` for recorded lessons.

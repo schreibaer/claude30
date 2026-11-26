@@ -79,7 +79,7 @@ resource 'MENU' (kEditMenu) {
 };
 
 resource 'MENU' (kSessionMenu) {
-	kSessionMenu, textMenuProc, 0x7FFF9777, enabled, "Session",
+	kSessionMenu, textMenuProc, 0x7FFFB777, enabled, "Session",
 	{
 		"Connect", noIcon, "K", noMark, plain;
 		"Disconnect", noIcon, "D", noMark, plain;
