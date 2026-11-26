@@ -44,6 +44,8 @@ Claude30's **Session > Stream Answers** switch (per tab, off by default) shows C
 
 Claude's Markdown shows as styled text in the transcript: bold, italic, code in Monaco, headings, lists, quotes, links, rules and tables. ZTerm and tty mode see plain text.
 
+Each Claude30 tab shows how full its context is as a small bar in its label (solid black from 80%, when Claude Code will soon compact the conversation), and the status line shows the front tab's `ctx 42% $0.31`. The dollar figure is the conversation's running cost as the Claude CLI reports it: on a subscription it is what the API would have charged, not a bill, and **Settings > Hide cost** removes it. Type `/usage` in any client for the context breakdown and the cost. The numbers come from the usage Claude already returns, so they cost no tokens; `/usage` asks Claude Code for its context breakdown, a local request. ZTerm's end-of-turn line gains `ctx 42%`.
+
 ### Subagents
 
 When Claude starts a subagent (Explore, a project agent, or one it makes up), Claude30 shows one line for it, rewritten as it works (`» Explore: find tests · Grep · 3 tools`) and replaced by a one-line result when it ends. Its own output stays on the Mac. ZTerm gets a plain `[Agent]` line at the start and the end. Type `/agents` to list the subagents the project offers. To create one, ask Claude, or write a file in `.claude/agents/` (Claude30's Open Project File can edit it).

@@ -99,6 +99,15 @@ Each tab has its own Claude model and effort, so a quick question can run on a c
 - New tabs and chats start with it off. A project tab remembers it when you relaunch Claude30 (a chat does not outlive its tab).
 - It is dimmed while online against a bridge without streaming (the `stream` capability word), and the tab keeps its choice for a newer bridge.
 
+### Context and cost
+
+Each tab label ends in a small upright bar that fills as the conversation's context fills: gray below 80%, solid black from 80%, when Claude Code is close to compacting the conversation. A tab with no reading yet shows an empty frame. The status line shows the front tab's reading at its right end, left of the scroll position: `ctx 42% $0.31`, or `$0.31` when only the cost is known. When the message is too long to fit, its middle is cut so the `[model, effort]` bracket and the warnings after it stay visible.
+
+- The cost is the conversation's running total as the Claude CLI reports it. It survives redials, resumes and model or effort changes, and starts again with `/new`. The result line in the transcript shows that turn's own cost. On a subscription the dollars are what the API would have charged, not a bill.
+- **Edit > Settings… > Hide cost** removes the dollar figure from the status line. The bars and the percentage stay.
+- Type `/usage` in a tab for the context used out of the window, the biggest categories and the cost with its number of turns.
+- This needs a bridge with the `usage` capability word; against an older one there are no bars and the status line looks as before.
+
 ### Project files
 
 **File > Open Project File…** (Cmd-O) browses the front tab's project, folders first. Double-click a folder to go into it, and **Up** (or Cmd-up arrow) to go back. Typing selects by name. The list hides `.git`, secrets such as `.env` and keys, and anything the project's git ignore rules exclude.
