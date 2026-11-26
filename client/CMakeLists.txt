@@ -24,6 +24,7 @@ add_application(Claude30
     src/core/permsum.c
     src/core/fold.c
     src/core/chatlabel.c
+    src/core/usage.c
     src/mac/main.c
     src/mac/serial.c
     src/mac/modem.c

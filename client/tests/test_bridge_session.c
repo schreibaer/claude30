@@ -10,6 +10,7 @@
 #include "protocol.h"
 #include "files.h"
 #include "permsum.h"
+#include "usage.h"
 #include <signal.h>
 #include <sys/select.h>
 #include <sys/stat.h>
@@ -33,6 +34,8 @@ typedef struct {
     char opened[64];
     char how[16], token[24];   /* from EV_RESUMED: "<how> <token>" */
     char model[48];            /* the latest EV_MODEL text */
+    char usage[64];            /* the latest EV_USAGE text */
+    int usages;
     char said[512];            /* the first paragraph of the latest turn */
     int said_open;             /* ... still being continued */
     int kill_after_text;       /* SIGKILL the bridge after this many T lines */
@@ -193,6 +196,10 @@ static void on_event(void *ctx, int sid, EventKind k, const char *t, long n)
         break;
     case EV_LIST_ENTRY:
         S.list_entries++;
+        break;
+    case EV_USAGE:
+        copy_text(r->usage, sizeof(r->usage), t, n);
+        r->usages++;
         break;
     case EV_LIST_END:
         S.list_done = 1;
@@ -391,8 +398,8 @@ static void test_demo_two_sessions(void)
     CHECK_EQ_LONG(S.s[1].counts[EV_PERM_ASK], 1);
     CHECK_EQ_LONG(S.s[2].counts[EV_PERM_ASK], 1);
     CHECK_EQ_LONG(S.s[1].counts[EV_PERM_LINE], 4);
-    CHECK(strcmp(S.s[1].result, "success $0.0000") == 0);
-    CHECK(strcmp(S.s[2].result, "success $0.0000") == 0);
+    CHECK(strcmp(S.s[1].result, "success $0.0123") == 0);
+    CHECK(strcmp(S.s[2].result, "success $0.0123") == 0);
     CHECK_EQ_LONG(S.s[1].counts[EV_CODE_BEGIN], 1);
     CHECK_EQ_LONG(S.s[2].counts[EV_CODE_BEGIN], 1);
     CHECK_EQ_LONG(P.dropped, 0);
@@ -422,7 +429,7 @@ static void test_demo_agents(void)
     CHECK(S.s[1].counts[EV_AGENT_STEP] >= 2);
     CHECK_EQ_LONG(S.s[1].counts[EV_PERM_ASK], 1);
     CHECK_EQ_LONG(S.s[1].counts[EV_TOOL], 1);   /* only the main conversation's own tool line */
-    CHECK(strcmp(S.s[1].result, "success $0.0000") == 0);
+    CHECK(strcmp(S.s[1].result, "success $0.0123") == 0);
     CHECK_EQ_LONG(P.dropped, 0);
     finish_with_disconnect();
 }
@@ -488,7 +495,7 @@ static void test_demo_stream(void)
     CHECK_EQ_LONG(S.s[1].prose_bytes, S.s[2].prose_bytes);
     CHECK_EQ_LONG(S.s[1].counts[EV_CODE_END], 1);
     CHECK_EQ_LONG(S.s[2].counts[EV_CODE_END], 1);
-    CHECK(strcmp(S.s[1].result, "success $0.0000") == 0);
+    CHECK(strcmp(S.s[1].result, "success $0.0123") == 0);
 
     /* Turned off again, the tab gets whole blocks like the other one. */
     memset(&S.s[1], 0, sizeof(S.s[1]));
@@ -504,6 +511,48 @@ static void test_demo_stream(void)
     CHECK(run(one_done, 30));
     CHECK_EQ_LONG(S.s[1].counts[EV_TOOL], 1);
     CHECK(S.s[1].counts[EV_TEXT] >= S.s[2].counts[EV_TEXT] + 1);
+    CHECK_EQ_LONG(P.dropped, 0);
+    finish_with_disconnect();
+}
+
+/* The bridge reports context and cost after every turn: the demo adds 4000
+   tokens and $0.0123 a turn, jumps to 85% for a prompt with the word full,
+   and a new conversation starts over with no reading. */
+static void test_demo_usage(void)
+{
+    Usage u;
+    start(demo_argv);
+    connect_two("alpha", "beta");
+    CHECK(proto_usage_cap(&P));
+    CHECK(proto_send_prompt(&P, 1, "show a streaming answer", 23));
+    CHECK(run(one_done, 30));
+    CHECK_EQ_LONG(S.s[1].usages, 1);
+    CHECK(strcmp(S.s[1].usage, "12000 200000 0.0123") == 0);
+    CHECK_EQ_LONG(S.s[2].usages, 0);                       /* the other tab is untouched */
+    usage_clear(&u);
+    CHECK(usage_parse(&u, S.s[1].usage, (long)strlen(S.s[1].usage)));
+    CHECK_EQ_LONG(usage_percent(&u), 6);
+
+    S.s[1].readies = 0;
+    CHECK(proto_send_prompt(&P, 1, "show a streaming answer", 23));
+    CHECK(run(one_done, 30));
+    CHECK(strcmp(S.s[1].usage, "16000 200000 0.0246") == 0);
+
+    S.s[1].readies = 0;
+    CHECK(proto_send_prompt(&P, 1, "show a streaming answer full", 28));
+    CHECK(run(one_done, 30));
+    CHECK(strcmp(S.s[1].usage, "170000 200000 0.0369") == 0);
+    CHECK(usage_parse(&u, S.s[1].usage, (long)strlen(S.s[1].usage)));
+    CHECK(usage_near_full(&u));
+
+    S.s[1].readies = 0;
+    CHECK(proto_send_prompt(&P, 1, "/new", 4));
+    CHECK(run(one_done, 30));
+    CHECK_EQ_LONG(S.s[1].usages, 3);                       /* nothing new for /new */
+    S.s[1].readies = 0;
+    CHECK(proto_send_prompt(&P, 1, "show a streaming answer", 23));
+    CHECK(run(one_done, 30));
+    CHECK(strcmp(S.s[1].usage, "12000 200000 0.0123") == 0);
     CHECK_EQ_LONG(P.dropped, 0);
     finish_with_disconnect();
 }
@@ -825,6 +874,7 @@ int main(void)
     test_demo_agents();
     test_demo_chat();
     test_demo_stream();
+    test_demo_usage();
     test_demo_background();
     test_drop_and_resume();
     test_model_and_effort();

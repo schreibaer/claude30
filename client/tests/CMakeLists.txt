@@ -23,11 +23,12 @@ add_library(core STATIC
     ${CORE}/agentline.c
     ${CORE}/permsum.c
     ${CORE}/fold.c
-    ${CORE}/chatlabel.c)
+    ${CORE}/chatlabel.c
+    ${CORE}/usage.c)
 target_include_directories(core PUBLIC ${CORE})
 
 enable_testing()
-foreach(t test_linebuf_prompt test_protocol test_batch test_mdstyle test_files test_mascot test_promptmarks test_heartbeat test_agentline test_permsum test_fold test_chatlabel)
+foreach(t test_linebuf_prompt test_protocol test_batch test_mdstyle test_files test_mascot test_promptmarks test_heartbeat test_agentline test_permsum test_fold test_chatlabel test_usage)
     add_executable(${t} ${t}.c)
     target_link_libraries(${t} core)
     target_compile_definitions(${t} PRIVATE FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures")

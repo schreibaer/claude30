@@ -73,6 +73,8 @@ typedef enum {
                         "* stopped" when the turn ended with subagent lines open */
     EV_MODEL,        /* the model and effort a session runs with (or will from
                         its next turn): text is "<model|-> <effort|->" */
+    EV_USAGE,        /* the conversation's context and cost: the $ payload
+                        "<used> <window> <cost>" (usage.h parses it) */
     /* Files (files.h). During these, proto_xfer() names the transfer. */
     EV_LIST_BEGIN,   /* text is the folder's path */
     EV_LIST_ENTRY,   /* text is "d|f <size> <name>": see files_parse_entry */
@@ -161,6 +163,7 @@ struct Proto {
     int models_cap;              /* the bridge sends a model list and takes <n>M */
     int stream_cap;              /* the bridge takes <n>V on|off and can stream answers */
     int md_cap;                  /* the bridge leaves ** and __ in prose for an app that sent !MD */
+    int usage_cap;               /* the bridge sends $ lines to an app that sent !USAGE */
 
     /* The models a session may pick, from the handshake's M lines. */
     char models[MAX_MODELS][MODEL_LEN];
@@ -241,6 +244,9 @@ int proto_chat_cap(const Proto *p);
 int proto_models_cap(const Proto *p);
 /* The bridge can stream a session's answers (PROTOCOL.md, Streaming answers). */
 int proto_stream_cap(const Proto *p);
+/* The bridge reports each session's context and cost (PROTOCOL.md, Context
+   and cost). The core asks for it by itself after the handshake. */
+int proto_usage_cap(const Proto *p);
 /* Turns streaming on or off for session sid, open or not; the bridge keeps
    it for the next open of that number. Streamed prose arrives as the usual
    EV_TEXT and EV_TEXT_CONT, in more and smaller pieces. Returns 0 when it
