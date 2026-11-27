@@ -1048,7 +1048,9 @@ class UsageMeter:
         if self._answer:
             self.used, model = self._answer
             self._answer = None
-            self.window = self._window_for(model, model_usage)
+            window = self._window_for(model, model_usage)
+            # A reading with no model (the one /compact leaves) keeps the window.
+            self.window = window if window or model else self.window
 
     @staticmethod
     def _window_for(model, model_usage):
@@ -1371,7 +1373,10 @@ class ClaudeSession:
         async with self._perm_lock:
             # Checked inside the lock: an "always" given to the request ahead
             # of this one may already cover it.
-            if key in self.always:
+            # While plan mode is on, a standing grant does not apply: every
+            # request is asked again, so a tool allowed earlier cannot edit
+            # files behind a plan.
+            if key in self.always and not self.cfg.plan:
                 return PermissionResultAllow(updated_input=input_data)
             summary, detail = describe_tool(tool_name, input_data, self.cfg.cwd)
             label = self.agents.label_for(getattr(context, "agent_id", None))
@@ -2942,6 +2947,8 @@ class Channel:
     async def _apply_pending(self):
         """Applies a waiting change. False when the session could not be
         restarted (it is then closed)."""
+        if self.pending_plan is not None:
+            await self._apply_plan(self.pending_plan)
         if not self.pending:
             return True
         model, effort = self.pending

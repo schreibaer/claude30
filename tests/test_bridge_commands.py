@@ -180,5 +180,78 @@ class WireTests(Base):
         c.close()
 
 
+class FakeTerm:
+    cols = 80
+
+    def __init__(self, answer="y"):
+        self.answer = answer
+        self.asked = []
+        self.exited = 0
+        self.agents = None
+
+    async def ask_permission(self, pid, tool, summary, detail):
+        self.asked.append(tool)
+        return self.answer
+
+    async def plan_exited(self):
+        self.exited += 1
+
+
+class PermissionTests(unittest.IsolatedAsyncioTestCase):
+    def make(self, plan, answer="y", accept_edits=False):
+        cfg = bridge.SessionConfig("/tmp", accept_edits=accept_edits)
+        cfg.plan = plan
+        term = FakeTerm(answer)
+        sess = bridge.ClaudeSession.__new__(bridge.ClaudeSession)
+        bridge.ClaudeSession.__init__(sess, type("T", (FakeTerm,), {"agents": None})(answer), cfg)
+        sess.term = term
+        sess.agents = type("A", (), {"label_for": lambda self, i: None})()
+        return sess, term, cfg
+
+    async def test_a_standing_grant_is_asked_again_in_plan_mode(self):
+        sess, term, cfg = self.make(plan=True)
+        sess.always.add("Edit")
+        await sess._can_use_tool("Edit", {"file_path": "/tmp/x"}, None)
+        self.assertEqual(term.asked, ["Edit"])
+        cfg.plan = False
+        await sess._can_use_tool("Edit", {"file_path": "/tmp/x"}, None)
+        self.assertEqual(term.asked, ["Edit"])   # the grant counts again
+
+    async def test_approving_the_plan_leaves_plan_mode_without_an_always(self):
+        sess, term, cfg = self.make(plan=True, answer="a", accept_edits=True)
+        res = await sess._can_use_tool("ExitPlanMode", {"plan": "1. do it"}, None)
+        self.assertFalse(cfg.plan)
+        self.assertEqual(term.exited, 1)
+        self.assertNotIn("ExitPlanMode", sess.always)
+        self.assertEqual(res.updated_permissions[0].mode, "acceptEdits")
+
+    async def test_denying_the_plan_stays_in_plan_mode(self):
+        sess, term, cfg = self.make(plan=True, answer="n")
+        res = await sess._can_use_tool("ExitPlanMode", {"plan": "x"}, None)
+        self.assertTrue(cfg.plan)
+        self.assertEqual(term.exited, 0)
+        self.assertEqual(type(res).__name__, "PermissionResultDeny")
+
+    def test_options_start_in_plan_mode_when_asked(self):
+        sess, _, cfg = self.make(plan=True)
+        self.assertEqual(sess.options().permission_mode, "plan")
+        cfg.plan = False
+        self.assertEqual(sess.options().permission_mode, "default")
+        cfg.accept_edits = True
+        self.assertEqual(sess.options().permission_mode, "acceptEdits")
+
+
+class MeterTests(unittest.TestCase):
+    def test_a_compact_result_without_model_usage_keeps_the_window(self):
+        m = bridge.UsageMeter()
+        m.answer({"input_tokens": 1000}, "opus")
+        m.result(0.1, {"opus": {"contextWindow": 200000}})
+        self.assertEqual(m.window, 200000)
+        m.answer({"input_tokens": 100}, None)
+        m.result(0.1, None)
+        self.assertEqual(m.window, 200000)
+        self.assertEqual(m.used, 100)
+
+
 if __name__ == "__main__":
     unittest.main()
