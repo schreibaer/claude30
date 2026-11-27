@@ -5,6 +5,11 @@ mask written as if bit 0 were the menu's own flag (File > Quit stayed grey,
 PR #7), and an item added without shifting the mask or the item constants
 (PR #13 review). Rez's 31-bit MENU field has bit 0 = item 1; separators are
 off and every other item is on, because adjust_menus() decides the rest.
+
+It also checks every dialog item list: a StaticText, EditText or UserItem whose
+rect overlaps a button erases that button when it is redrawn (SetDialogItemText
+or an update), so the button shows as a stray line. The permission dialog's key
+hint covered its Rule... button that way (PR #22).
 """
 import os
 import re
@@ -63,6 +68,32 @@ def menus():
     return out
 
 
+def dialog_items(src=None):
+    """{DITL id name: [(kind, (top, left, bottom, right))]}"""
+    if src is None:
+        src = open(RSRC, encoding="mac_roman").read()
+    out = {}
+    for m in re.finditer(r"resource 'DITL' \((\w+)\)\s*\{\s*\{(.*?)\n\t\}\s*\};", src, re.S):
+        out[m.group(1)] = [
+            (kind, tuple(int(n) for n in rect))
+            for *rect, kind in re.findall(
+                r"\{\s*(-?\d+),\s*(-?\d+),\s*(-?\d+),\s*(-?\d+)\s*\},\s*(\w+)",
+                m.group(2))]
+    return out
+
+
+def overlaps(a, b):
+    return a[0] < b[2] and b[0] < a[2] and a[1] < b[3] and b[1] < a[3]
+
+
+def button_overlaps(items):
+    """Pairs (text item, button) whose rects intersect."""
+    buttons = [r for k, r in items if k == "Button"]
+    return [(k, r, b) for k, r in items
+            if k in ("StaticText", "EditText", "UserItem")
+            for b in buttons if overlaps(r, b)]
+
+
 class MenuResourceTests(unittest.TestCase):
     def test_masks_have_separators_off_and_items_on(self):
         found = menus()
@@ -93,6 +124,22 @@ class MenuResourceTests(unittest.TestCase):
                 f"{const} = {n} but {text!r} is item "
                 f"{next((i + 1 for i, t in enumerate(items) if t.startswith(text)), '?')}"
                 f" of {menu}: shift the constants after inserting a menu item")
+
+
+    def test_no_dialog_item_covers_a_button(self):
+        found = dialog_items()
+        self.assertIn("kPermDialog", found)
+        self.assertGreaterEqual(len(found["kPermDialog"]), 8)
+        for name, items in found.items():
+            self.assertEqual(
+                button_overlaps(items), [],
+                f"{name}: an item overlaps a button and will erase it when redrawn")
+
+    def test_overlap_check_catches_the_old_permission_hint(self):
+        src = open(RSRC, encoding="mac_roman").read()
+        old = src.replace("{ 280, 10, 298, 200 }, StaticText", "{ 280, 10, 298, 274 }, StaticText")
+        self.assertNotEqual(old, src)
+        self.assertTrue(button_overlaps(dialog_items(old)["kPermDialog"]))
 
 
 if __name__ == "__main__":
