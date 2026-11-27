@@ -175,8 +175,34 @@ static pascal void draw_list(DialogPtr d, short item)
     first = GetControlValue(gBar);
     y = inner.top + gRowAscent + 1;
     if (gNRows == 0) {
-        MoveTo(inner.left + 4, y);
-        DrawString("\p(no details)");
+        /* Nothing more to show: say what each button does instead. */
+        static const char *const kHelp[] = {
+            "Nothing more to show for this request.",
+            "",
+            "Allow    lets it run, this once.",
+            "Deny     refuses it; Claude is told and goes on.",
+            "Always   allows the same request for the rest of",
+            "         this conversation.",
+            NULL
+        };
+        short k;
+        for (k = 0; kHelp[k] && y < inner.bottom; k++) {
+            MoveTo(inner.left + 4, y);
+            DrawText((Ptr)kHelp[k], 0, (short)strlen(kHelp[k]));
+            y += gRowH;
+        }
+        if (gReq->can_rule && !gReq->incomplete) {
+            static const char *const kRuleHelp[] = {
+                "Rule...  saves a rule in the project, so Claude",
+                "         may do this again without asking.",
+                NULL
+            };
+            for (k = 0; kRuleHelp[k] && y < inner.bottom; k++) {
+                MoveTo(inner.left + 4, y);
+                DrawText((Ptr)kRuleHelp[k], 0, (short)strlen(kRuleHelp[k]));
+                y += gRowH;
+            }
+        }
     }
     if (gNRows > 0) {
         if (gReq->body) {

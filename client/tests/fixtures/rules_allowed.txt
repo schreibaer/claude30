@@ -14,3 +14,6 @@ Glob
 Grep
 WebSearch
 NotebookEdit(notebooks/*.ipynb)
+Bash(npm test *)
+Bash(git status *)
+Bash(npm run build *)

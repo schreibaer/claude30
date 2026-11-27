@@ -58,3 +58,8 @@ MultiEdit
 NotebookEdit
 _
 Read
+Bash( *)
+Bash(sh *)
+Bash(npm *test *)
+Bash(npm test *x)
+Bash(a | b *)

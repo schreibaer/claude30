@@ -1,5 +1,6 @@
 #include "filewin.h"
 #include "files.h"
+#include "find.h"
 #include "modem.h"
 #include "resources.h"
 #include "window.h"
@@ -1415,4 +1416,61 @@ void filewin_edit(WindowPtr w, short item)
         set_title(f);
     }
     sync_bar(f);
+}
+
+/* ---- Find ------------------------------------------------------------------ */
+
+/* Searches the window's text: downward from the caret (dir > 0) or upward
+   from its start (dir < 0), the way a file is read. A read-only file is
+   searched only as far as its lines are loaded. True when a match is
+   selected and in view. */
+Boolean filewin_find(WindowPtr w, const char *pat, short dir)
+{
+    FileWin *f = find(w);
+    TEHandle te;
+    long plen = (long)strlen(pat), a, len, line;
+    char state;
+    if (!f || f->phase != FW_READY || plen == 0)
+        return false;
+    te = f->te;
+    len = (*te)->teLength;
+    state = HGetState((*te)->hText);
+    HLock((*te)->hText);
+    a = dir > 0 ? find_forward(*(*te)->hText, len, (*te)->selEnd, pat, plen)
+                : find_backward(*(*te)->hText, len, (*te)->selStart, pat, plen);
+    HSetState((*te)->hText, state);
+    if (a < 0)
+        return false;
+    SetPort(w);
+    TESetSelect(a, a + plen, te);
+    {
+        short lo = 0, hi = (short)((*te)->nLines - 1), m;
+        while (lo < hi) {
+            m = (short)((lo + hi + 1) / 2);
+            if ((*te)->lineStarts[m] <= a)
+                lo = m;
+            else
+                hi = (short)(m - 1);
+        }
+        line = lo;
+    }
+    if (f->editable) {
+        long px = line * (long)f->line_h;
+        if (px < scrolled_px(f) || px + f->line_h > scrolled_px(f) + (f->view.bottom - f->view.top))
+            scroll_px_to(f, px - (f->view.bottom - f->view.top) / 3);
+        sync_bar(f);
+    } else {
+        long fileline = f->slice_first + line;
+        if (fileline < f->top || fileline >= f->top + visible_lines(f))
+            ro_set_top(f, fileline - visible_lines(f) / 3);
+    }
+    InvalRect(&f->view);
+    return true;
+}
+
+/* True when a read-only window holds only part of its file. */
+Boolean filewin_find_partial(WindowPtr w)
+{
+    FileWin *f = find(w);
+    return f && !f->editable && f->slice_n < f->total;
 }

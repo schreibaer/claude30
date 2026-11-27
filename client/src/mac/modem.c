@@ -1,4 +1,5 @@
 #include "modem.h"
+#include "logwin.h"
 #include "batch.h"
 #include "chatlabel.h"
 #include "files.h"
@@ -635,6 +636,20 @@ Boolean session_model_available(void)
         && proto_sess_state(&gProto, t->sid) != SS_CLOSING;
 }
 
+const char *session_model_reason(void)
+{
+    Tab *t = tabs_front();
+    if (session_model_available())
+        return "";
+    if (gProto.state != ST_ONLINE)
+        return "Model and Effort needs a connected tab.";
+    if (!t)
+        return "Model and Effort needs an open tab.";
+    if (!gProto.models_cap || gProto.nmodels == 0)
+        return "The bridge offers no models.";
+    return "Model and Effort is not available for this tab yet.";
+}
+
 void session_model_dialog(void)
 {
     Tab *t = tabs_front();
@@ -964,10 +979,12 @@ static void drop_refused_tabs(void)
     for (i = tabs_count() - 1; i >= 0; i--) {
         t = tabs_at(i);
         if (t->refused) {
+            logwin_tab_closed(t->sid);
             window_tab_free(t);
             tabs_remove(t);
             window_show_tab(tabs_front());
             filewin_show_tab(tabs_front() ? tabs_front()->sid : 0);
+            logwin_show_tab(tabs_front() ? tabs_front()->sid : 0);
             remember_tabs();
             gTabsChanged = true;
         }
@@ -1084,6 +1101,7 @@ void session_select_tab(Tab *t)
         tabs_set_front(t);
         window_show_tab(t);
         filewin_show_tab(t->sid);
+        logwin_show_tab(t->sid);
     }
     if (FrontWindow() != window_ptr())
         SelectWindow(window_ptr());
@@ -1205,10 +1223,12 @@ Boolean session_close_tab(Tab *t)
         proto_close(&gProto, t->sid);
     permdlg_request_close(&t->perm);
     window_append(t);                /* the last lines reach its log */
+    logwin_tab_closed(t->sid);
     window_tab_free(t);
     tabs_remove(t);
     window_show_tab(tabs_front());
     filewin_show_tab(tabs_front() ? tabs_front()->sid : 0);
+    logwin_show_tab(tabs_front() ? tabs_front()->sid : 0);
     remember_tabs();
     window_draw_tabs();
     update_status();
