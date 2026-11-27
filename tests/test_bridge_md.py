@@ -51,7 +51,7 @@ class OfferTests(unittest.TestCase):
 
     def test_ok_carries_md(self):
         c = self.client()
-        self.assertIn("#OK se30bridge 2 files=rw resume ping models agents chat stream md usage", c.text())
+        self.assertIn("#OK se30bridge 2 files=rw resume ping models agents chat stream md usage cmds", c.text())
 
     def test_without_md_the_lines_are_todays(self):
         c = self.client()
@@ -92,7 +92,7 @@ class OfferTests(unittest.TestCase):
 
     def test_no_md_option_leaves_the_word_out_and_ignores_the_line(self):
         c = self.client("--no-md", md=True)
-        self.assertIn("#OK se30bridge 2 files=rw resume ping models agents chat stream usage", c.text())
+        self.assertIn("#OK se30bridge 2 files=rw resume ping models agents chat stream usage cmds", c.text())
         self.assertNotIn(" md", [l[-3:] for l in c.text() if l.startswith("#OK")][0])
         self.assertEqual(self.answer(c), prose_lines(bridge.STYLES_DEMO, False))
 

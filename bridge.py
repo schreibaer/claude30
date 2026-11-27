@@ -744,6 +744,8 @@ def describe_tool(name, inp, cwd):
         return inp.get("url", ""), []
     if name in ("WebSearch",):
         return inp.get("query", ""), []
+    if name == "ExitPlanMode":
+        return "Approve plan", str(inp.get("plan") or "").split("\n")
     if name in ("Task", "Agent"):
         return inp.get("description", ""), []
     if name == "TodoWrite":
@@ -986,6 +988,7 @@ def new_conversation(cfg):
     cfg.claude_id = None
     cfg.resume = False
     cfg.always = set()
+    cfg.plan = False
     cfg.turns = 0
     cfg.meter = UsageMeter()
 
@@ -1045,7 +1048,9 @@ class UsageMeter:
         if self._answer:
             self.used, model = self._answer
             self._answer = None
-            self.window = self._window_for(model, model_usage)
+            window = self._window_for(model, model_usage)
+            # A reading with no model (the one /compact leaves) keeps the window.
+            self.window = window if window or model else self.window
 
     @staticmethod
     def _window_for(model, model_usage):
@@ -1139,6 +1144,93 @@ async def usage_report(session, meter):
     return lines
 
 
+# Claude Code commands (PROTOCOL.md, "Commands and plan mode"). The bridge
+# passes /compact, project and user commands and skills to Claude Code and
+# refuses every other built-in: a typed line must never reach a command that
+# changes permissions, directories, hooks, MCP servers or memory.
+CMD_HINTS = {
+    "permissions": "Permissions stay on the host.",
+    "add-dir": "Directories stay on the host.",
+    "hooks": "Hooks stay on the host.",
+    "mcp": "MCP servers stay on the host.",
+    "memory": "Memory files stay on the host.",
+    "config": "Claude Code settings stay on the host.",
+    "login": "It needs the terminal.", "logout": "It needs the terminal.",
+    "resume": "It needs the terminal; Claude30 resumes a conversation by itself.",
+    "model": "Use /model.", "effort": "Use /effort.", "usage": "Use /usage.",
+    "agents": "Use /agents.", "context": "Use /usage.", "init": "Ask Claude to write CLAUDE.md.",
+}
+
+
+def command_files(cwd):
+    """Names of the project's and the user's own commands (.claude/commands)."""
+    names = set()
+    for root in (os.path.join(cwd or ".", ".claude", "commands"),
+                 os.path.expanduser("~/.claude/commands")):
+        for dirpath, _dirs, files in os.walk(root):
+            rel = os.path.relpath(dirpath, root)
+            for f in files:
+                if f.endswith(".md"):
+                    stem = f[:-3]
+                    names.add(stem if rel == "." else rel.replace(os.sep, ":") + ":" + stem)
+    return names
+
+
+def set_session_commands(session, names, skills, cwd, terminal=()):
+    """Records which slash commands a session passes to Claude Code. The CLI
+    lists every command, built-ins included, so the pass-through is an
+    allowlist: /compact, the project's and user's command files, the CLI's
+    skills (its init message names them) and plugin commands (`plugin:name`).
+    Everything else the CLI lists is refused."""
+    names = [str(n) for n in names or [] if n]
+    session.known_commands = sorted(set(names) | set(terminal or ()))
+    allowed = {"compact"} | {n for n in command_files(cwd) if n in names}
+    allowed |= {n for n in names if ":" in n}
+    allowed |= {str(n) for n in skills or [] if str(n) in names}
+    allowed -= set(terminal or ())
+    session.allowed_commands = allowed
+
+
+def route_prompt(prompt, allowed, known):
+    """What a typed line is. Returns (kind, text): "send" (a prompt, text
+    is what to send), "command" (a Claude Code command, sent as it is),
+    "clear", "commands", "plan" (text: the words after /plan) or "refuse"
+    (text: the notice). Only a first word that starts with / is a command;
+    /usr/bin is missing is a prompt."""
+    words = prompt.split()
+    if not words or not words[0].startswith("/") or len(words[0]) < 2:
+        return "send", prompt
+    name = words[0][1:]
+    low = name.lower()
+    if low == "clear":
+        return "clear", ""
+    if low == "commands":
+        return "commands", ""
+    if low == "plan":
+        return "plan", " ".join(words[1:]).lower()
+    if name in allowed:
+        return "command", prompt
+    if low in CMD_HINTS or name in known:
+        hint = CMD_HINTS.get(low, "Claude30 does not pass it on.")
+        return "refuse", f"/{name} is not available here. {hint}"
+    return "send", " " + prompt     # text that merely starts with a slash
+
+
+def commands_lines(session):
+    own = "/new /clear /edits /agents /usage /model /effort /plan /commands /help /quit"
+    lines = ["Bridge: " + own]
+    names = sorted(getattr(session, "allowed_commands", ()))
+    if not names:
+        return lines + ["Claude Code: none listed yet."]
+    cur = "Claude Code:"
+    for n in names:
+        if len(cur) + len(n) + 2 > 74:
+            lines.append(cur)
+            cur = "  "
+        cur += f" /{n}"
+    return lines + [cur]
+
+
 class SessionConfig:
     """What one conversation runs with. Each v2 session has its own, so a
     /edits in one tab never changes another."""
@@ -1156,6 +1248,7 @@ class SessionConfig:
         self.chat = False     # v2 only: a chat, not a project (see CHAT_PROMPT)
         self.partial = False  # v2 only: ask for partial messages, to stream answers
         self.always = set()   # "Tool" or "Bash:<exact command>"
+        self.plan = False     # plan mode is on (kept across restarts of the CLI)
         self.turns = 0
         self.meter = UsageMeter()   # what the conversation used and cost
 
@@ -1174,6 +1267,8 @@ class ClaudeSession:
         self._perm_lock = asyncio.Lock()
         self.agents = AgentTracker(term)
         self.init_agents = []     # agent names from the CLI's init message
+        self.known_commands = []  # every slash command the CLI lists
+        self.allowed_commands = set()   # the ones passed through (see set_commands)
         # Text blocks of the message being streamed, by the API's block
         # index. Their deltas are only sent while the term's stream switch is
         # on (see BlockStream); the lock keeps a switch change from running
@@ -1199,7 +1294,8 @@ class ClaudeSession:
         else:
             opts = ClaudeAgentOptions(
                 cwd=self.cfg.cwd,
-                permission_mode="acceptEdits" if self.cfg.accept_edits else "default",
+                permission_mode=("plan" if self.cfg.plan else
+                                 "acceptEdits" if self.cfg.accept_edits else "default"),
                 allowed_tools=["Read", "Glob", "Grep", "TodoWrite"],
                 can_use_tool=self._can_use_tool,
                 system_prompt={"type": "preset", "preset": "claude_code",
@@ -1226,6 +1322,12 @@ class ClaudeSession:
         self.cfg.meter.new_process()
         self.client = ClaudeSDKClient(options=opts)
         await self.client.connect()
+        try:
+            info = await self.client.get_server_info() or {}
+            self.set_commands([c.get("name") for c in info.get("commands") or []
+                               if isinstance(c, dict)], None, self.cfg.cwd)
+        except Exception:  # noqa: BLE001
+            pass   # the init message of the first turn fills the list
         self._msgs = asyncio.Queue()
         self._in_turn = False
         self._pump = asyncio.ensure_future(self._pump_messages())
@@ -1251,6 +1353,14 @@ class ClaudeSession:
         if self.client:
             await self.client.set_model(model)
 
+    async def set_permission_mode(self, mode):
+        """Switches the running conversation's permission mode (plan, ...)."""
+        if self.client:
+            await self.client.set_permission_mode(mode)
+
+    def set_commands(self, names, skills, cwd, terminal=()):
+        set_session_commands(self, names, skills, cwd, terminal)
+
     async def context_usage(self):
         """Claude Code's own context breakdown (a local request to the CLI)."""
         if not self.client:
@@ -1263,7 +1373,10 @@ class ClaudeSession:
         async with self._perm_lock:
             # Checked inside the lock: an "always" given to the request ahead
             # of this one may already cover it.
-            if key in self.always:
+            # While plan mode is on, a standing grant does not apply: every
+            # request is asked again, so a tool allowed earlier cannot edit
+            # files behind a plan.
+            if key in self.always and not self.cfg.plan:
                 return PermissionResultAllow(updated_input=input_data)
             summary, detail = describe_tool(tool_name, input_data, self.cfg.cwd)
             label = self.agents.label_for(getattr(context, "agent_id", None))
@@ -1272,8 +1385,19 @@ class ClaudeSession:
             pid = self.next_pid
             self.next_pid += 1
             ans = await self.term.ask_permission(pid, tool_name, summary, detail)
-            if ans == "a":
+            if ans == "a" and tool_name != "ExitPlanMode":
                 self.always.add(key)
+        if ans in ("y", "a") and tool_name == "ExitPlanMode" and self.cfg.plan:
+            # Approving the plan leaves plan mode inside this turn, so Claude
+            # can carry it out now.
+            from claude_agent_sdk.types import PermissionUpdate
+            mode = "acceptEdits" if self.cfg.accept_edits else "default"
+            self.cfg.plan = False
+            hook = getattr(self.term, "plan_exited", None)
+            if hook:
+                await hook()
+            return PermissionResultAllow(updated_input=input_data, updated_permissions=[
+                PermissionUpdate(type="setMode", mode=mode, destination="session")])
         if ans in ("y", "a"):
             return PermissionResultAllow(updated_input=input_data)
         return PermissionResultDeny(message="The user denied this action.", interrupt=False)
@@ -1469,6 +1593,16 @@ class ClaudeSession:
             names = data.get("agents")
             if isinstance(names, list):
                 self.init_agents = [str(n) for n in names]
+            if isinstance(data.get("slash_commands"), list):
+                self.set_commands(data["slash_commands"], data.get("skills"), self.cfg.cwd,
+                                  data.get("terminal_slash_commands") or ())
+            return
+        if msg.subtype == "compact_boundary":
+            post = (data.get("compact_metadata") or {}).get("post_tokens")
+            if isinstance(post, int) and post > 0:
+                self.cfg.meter.answer({"input_tokens": post}, None)
+            await self.term.notice("Conversation compacted.")
+            await self.term.usage(self.cfg.meter)
             return
         tid = data.get("tool_use_id")
         if not tid:
@@ -1538,6 +1672,8 @@ class DemoSession:
         self._stop = False
         self._child = None
         self.init_agents = ["Explore", "general-purpose", "Plan"]
+        self.known_commands = ["clear", "compact", "config", "hello", "permissions"]
+        self.allowed_commands = {"compact", "hello"}
         self.agents = AgentTracker(term)
         self._bg = None           # the background subagent's timer
         self._bg_done = False     # ... which ended between turns
@@ -1709,9 +1845,42 @@ class DemoSession:
             self._block = None
         await self._result()
 
+    async def set_permission_mode(self, mode):
+        pass   # the demo reads cfg.plan each turn
+
+    async def _plan_turn(self, prompt):
+        """Plan mode: a plan, then the request to leave plan mode."""
+        t = self.term
+        await t.text(f"Plan for “{prompt}”: 1. read src/parser.py 2. add a test 3. fix parse().")
+        summary, detail = describe_tool("ExitPlanMode", {
+            "plan": "1. Read src/parser.py\n2. Add a test\n3. Fix parse()"}, self.cfg.cwd)
+        ans = await t.ask_permission(1, "ExitPlanMode", summary, detail)
+        if ans in ("y", "a"):
+            self.cfg.plan = False
+            hook = getattr(t, "plan_exited", None)
+            if hook:
+                await hook()
+            await t.text("Plan approved. Carrying it out.")
+        else:
+            await t.text("Staying in plan mode.")
+        await self._result()
+
     async def turn(self, prompt):
         self._stop = False
         t = self.term
+        words = prompt.split()
+        if words[:1] == ["/compact"]:
+            m = self.cfg.meter
+            m.answer({"input_tokens": max((m.used or 8000) // 2, 2000)}, "demo")
+            await t.notice("Conversation compacted.")
+            await self._result()
+            return
+        if words[:1] == ["/hello"]:
+            await t.text("HELLO (a project command).")
+            await self._result()
+            return
+        if self.cfg.plan and not self.cfg.chat:
+            return await self._plan_turn(prompt)
         self._full = "full" in prompt.lower().split()
         if self._bg_done:
             await self.follow()
@@ -1827,6 +1996,9 @@ HELP = """Commands:
   /new         start a fresh conversation
   /edits on    auto-accept file edits (off asks each time)
   /agents      list the subagents this project offers
+  /clear       same as /new
+  /plan on     plan mode: Claude plans and asks before it edits (off to leave)
+  /commands    the commands Claude Code offers here (/compact and your own)
   /usage       context used and what this conversation cost
   /model NAME  the model for the next turn (alone: show choices)
   /effort LVL  low, medium, high, xhigh or max (alone: show choices)
@@ -2604,6 +2776,7 @@ class Channel:
         self.cfg.model = self.pick_model or args.model
         self.cfg.effort = self.pick_effort
         self.pending = None
+        self.pending_plan = None   # a plan mode change waiting for the turn to end
         self.prompts = asyncio.Queue()
         self._wake_queued = False
         self.answers = asyncio.Queue()
@@ -2746,6 +2919,7 @@ class Channel:
             self.v2.close_later(self.sid)
             return False
         await self.tag("Y", f"{self.token} new")
+        await self.send_plan()
         return True
 
     # ---- model and effort --------------------------------------------------
@@ -2773,6 +2947,8 @@ class Channel:
     async def _apply_pending(self):
         """Applies a waiting change. False when the session could not be
         restarted (it is then closed)."""
+        if self.pending_plan is not None:
+            await self._apply_plan(self.pending_plan)
         if not self.pending:
             return True
         model, effort = self.pending
@@ -2818,6 +2994,44 @@ class Channel:
             await self.notice(f"{'Model' if words[0] == '/model' else 'Effort'} set.")
         return True
 
+    # ---- plan mode ---------------------------------------------------------
+
+    async def send_plan(self):
+        """The confirmed mode, for an app that sent !CMDS."""
+        if self.v2.cmds_optin:
+            await self.tag("@", "plan" if self.cfg.plan else "default")
+
+    async def plan_exited(self):
+        """The person approved Claude's plan: the tab leaves plan mode now."""
+        self._save(turn_running=True)
+        await self.send_plan()
+        await self.notice("Plan approved. Plan mode is off.")
+
+    async def set_plan(self, on):
+        if self.chat:
+            await self.notice("Plan mode does not apply in a chat.")
+        elif self.busy:
+            self.pending_plan = on
+            await self.notice("Plan mode changes after this turn.")
+        else:
+            await self._apply_plan(on)
+
+    async def _apply_plan(self, on):
+        self.pending_plan = None
+        if on != self.cfg.plan:
+            mode = "plan" if on else ("acceptEdits" if self.cfg.accept_edits else "default")
+            try:
+                await self.session.set_permission_mode(mode)
+            except Exception as e:  # noqa: BLE001
+                first = (str(e).strip().splitlines() or ["error"])[0]
+                await self.tool_error(f"Could not change plan mode: {first}")
+                return
+            self.cfg.plan = on
+            self._save(turn_running=False)
+            if not self.v2.cmds_optin:
+                await self.notice(f"Plan mode {'on' if on else 'off'}.")
+        await self.send_plan()
+
     # ---- resume records ----------------------------------------------------
 
     def _chat_folder(self, folder=None):
@@ -2841,6 +3055,7 @@ class Channel:
         self.cfg.claude_id = str(uuid.uuid4())
         self.cfg.resume = False
         self.cfg.always = set()
+        self.cfg.plan = False
         self.cfg.turns = 0
         self.cfg.meter = UsageMeter()
         self.cut = False
@@ -2850,7 +3065,7 @@ class Channel:
         rec = {
             "project": self.name, "claude_id": self.cfg.claude_id,
             "accept_edits": self.cfg.accept_edits, "always": sorted(self.cfg.always),
-            "turns": self.cfg.turns, "turn_running": turn_running,
+            "turns": self.cfg.turns, "turn_running": turn_running, "plan": self.cfg.plan,
             "usage": self.cfg.meter.to_record()}
         if self.chat:
             rec["cwd"] = self.chat_dir
@@ -2873,6 +3088,7 @@ class Channel:
         self.cfg.claude_id = rec.get("claude_id") or str(uuid.uuid4())
         self.cfg.accept_edits = bool(rec.get("accept_edits"))
         self.cfg.always = set(rec.get("always") or [])
+        self.cfg.plan = bool(rec.get("plan")) and not self.chat
         self.cfg.turns = int(rec.get("turns") or 0)
         self.cfg.meter = UsageMeter.from_record(rec.get("usage"))
         # A conversation that never ran a turn has nothing saved to resume:
@@ -2945,6 +3161,7 @@ class Channel:
         try:
             await self.tag("O", self.name)
             await self.tag("Y", f"{self.token} {how}")
+            await self.send_plan()
             await self.usage(self.cfg.meter)   # a resumed conversation's reading
             for p in self.preset_problems:
                 await self.tool_error(p)
@@ -2954,6 +3171,8 @@ class Channel:
                 prompt = await self._read_prompt(announce)
                 announce = True
                 if prompt is CHANGE:
+                    if self.pending_plan is not None:
+                        await self._apply_plan(self.pending_plan)
                     if not await self._apply_pending():
                         return
                     await self.send_settings(self.pick_model, self.pick_effort)
@@ -3001,14 +3220,43 @@ class Channel:
                     if not await self._settings_command(cmd):
                         return
                     continue
+                kind, text = route_prompt(prompt, getattr(self.session, "allowed_commands", ()),
+                                          getattr(self.session, "known_commands", ()))
+                if kind == "commands":
+                    for line in commands_lines(self.session):
+                        await self.notice(line)
+                    continue
+                if kind == "plan":
+                    if text in ("on", "off"):
+                        await self.set_plan(text == "on")
+                    elif self.chat:
+                        await self.notice("Plan mode does not apply in a chat.")
+                    else:
+                        await self.notice(f"Plan mode is {'on' if self.cfg.plan else 'off'}. "
+                                          "Use /plan on or /plan off.")
+                    continue
+                if kind == "clear":
+                    if not await self._restart():
+                        return
+                    await self.notice("New conversation.")
+                    continue
+                if kind == "refuse" or (kind == "command" and self.chat
+                                        and prompt.split()[0] != "/compact"):
+                    await self.notice(text if kind == "refuse"
+                                      else f"{prompt.split()[0]} does not apply in a chat.")
+                    continue
                 if not await self._apply_pending():
                     return
-                if self.edited:
+                if kind == "send":
+                    prompt = text
+                if kind == "command":
+                    pass   # sent alone: an edited-files or cut note waits for the next prompt
+                elif self.edited:
                     prompt = ("[The person edited these files from the SE/30 since your "
                               f"last turn: {', '.join(self.edited)}. Re-read them before "
                               "you edit them.]\n" + prompt)
                     self.edited = []
-                if self.cut:
+                if self.cut and kind != "command":
                     prompt = CUT_NOTE + "\n" + prompt
                 self.busy = True
                 self.idle.clear()
@@ -3026,8 +3274,11 @@ class Channel:
                 finally:
                     self.busy = False
                     self.idle.set()
+                if self.pending_plan is not None:
+                    self.prompts.put_nowait(CHANGE)
                 if not self.term.eof and not self.closing:
-                    self.cut = False
+                    if kind != "command":
+                        self.cut = False
                     self.cfg.resume = True
                     self._save(turn_running=False)
         except EOFError:
@@ -3104,6 +3355,7 @@ class V2:
         self.agents_optin = False   # the app sent !AGENTS: it draws subagent lines
         self.md_optin = False       # the app sent !MD: it styles ** and __ itself
         self.usage_optin = False    # the app sent !USAGE: it draws context and cost
+        self.cmds_optin = False     # the app sent !CMDS: it takes <n>@ lines
         self.no_md = bool(getattr(args, "no_md", False))   # --no-md: do not offer it
         self.closing = set()        # close() tasks still running
         sweep_chats(self.store, args.state_dir)
@@ -3178,6 +3430,11 @@ class V2:
             elif not ch.closing:
                 await ch.change(*words)
             return
+        if tag == "@":
+            ch = self.channels.get(sid)
+            if ch is not None and not ch.closing and payload in ("plan", "default"):
+                await ch.set_plan(payload == "plan")
+            return
         if tag == "V":
             if payload in ("on", "off"):
                 ch = self.channels.get(sid)
@@ -3201,7 +3458,7 @@ class V2:
 
     async def run(self):
         try:
-            words = "resume ping models agents chat stream" + ("" if self.no_md else " md") + " usage"
+            words = "resume ping models agents chat stream" + ("" if self.no_md else " md") + " usage cmds"
             await self.term.send_line(f"#OK se30bridge 2 files={self.args.files} {words}".encode(),
                                       counted=False)
             await self.send_models()
@@ -3218,6 +3475,9 @@ class V2:
                     continue
                 if line == "!USAGE":
                     self.usage_optin = True
+                    continue
+                if line == "!CMDS":
+                    self.cmds_optin = True
                     continue
                 if line == "!LIST":
                     await self.send_list()
@@ -3334,6 +3594,38 @@ async def main_async(args):
                         await session.set_model(cfg.model)
                     await term.notice(f"{'Model' if cmd[0] == '/model' else 'Effort'} set.")
                 continue
+            kind, text = route_prompt(prompt, getattr(session, "allowed_commands", ()),
+                                      getattr(session, "known_commands", ()))
+            if kind == "commands":
+                for line in commands_lines(session):
+                    await term.notice(line)
+                continue
+            if kind == "plan":
+                if text in ("on", "off"):
+                    on = text == "on"
+                    mode = "plan" if on else ("acceptEdits" if cfg.accept_edits else "default")
+                    try:
+                        await session.set_permission_mode(mode)
+                        cfg.plan = on
+                        await term.notice(f"Plan mode {'on' if on else 'off'}.")
+                    except Exception as e:  # noqa: BLE001
+                        await term.notice(f"Could not change plan mode: {e}")
+                else:
+                    await term.notice(f"Plan mode is {'on' if cfg.plan else 'off'}. "
+                                      "Use /plan on or /plan off.")
+                continue
+            if kind == "clear":
+                await session.stop()
+                new_conversation(cfg)
+                session = make_session(args, term, cfg)
+                await session.start()
+                await term.notice("New conversation.")
+                continue
+            if kind == "refuse":
+                await term.notice(text)
+                continue
+            if kind == "send":
+                prompt = text
             if cmd[0] == "/edits" and len(cmd) == 2:
                 cfg.accept_edits = cmd[1] == "on"
                 new_conversation(cfg)

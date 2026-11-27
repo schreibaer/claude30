@@ -288,7 +288,7 @@ B: 2>
 
 ## Subagents
 
-The capability word `agents` in `#OK` (`#OK se30bridge 2 files=rw resume ping models agents chat stream md usage`) means the bridge can report Claude's subagents (the Agent tool) as lines a client rewrites in place. A client that wants them answers with `!AGENTS` once, after the project list. Without `!AGENTS`, and for ZTerm and v1, the bridge sends ordinary lines instead: `<n>U Agent <type>: <task>` when a subagent starts and `<n>U Agent <type> <status>: <summary>` when it ends (tty mode prints them as `  [Agent] ...`). A subagent's own prose and tool lines are never sent; only its start, its progress and its end are.
+The capability word `agents` in `#OK` (`#OK se30bridge 2 files=rw resume ping models agents chat stream md usage cmds`) means the bridge can report Claude's subagents (the Agent tool) as lines a client rewrites in place. A client that wants them answers with `!AGENTS` once, after the project list. Without `!AGENTS`, and for ZTerm and v1, the bridge sends ordinary lines instead: `<n>U Agent <type>: <task>` when a subagent starts and `<n>U Agent <type> <status>: <summary>` when it ends (tty mode prints them as `  [Agent] ...`). A subagent's own prose and tool lines are never sent; only its start, its progress and its end are.
 
 A client sends `!AGENTS` and the bridge then sends, per session:
 
@@ -304,7 +304,7 @@ When a turn ends, the bridge closes any subagent still open with `J-` and `stopp
 
 ## Chats
 
-The capability word `chat` in `#OK` (`#OK se30bridge 2 files=rw resume ping models agents chat stream md usage`) means a client can open a conversation that belongs to no project. The client sends `<n>O *` (or `<n>Y <token> *` to resume one); `*` is never in the project list, and a project folder with that name is left out of it. The bridge answers as for a project: `<n>O *`, `<n>Y <token> new`, `<n>M ...` and `<n>>`, with the same refusals (`already open`, `too many tabs`, `could not start: ...`). A client sends `*` only after it saw `chat`; a bridge without the word refuses it with `<n>X not available`.
+The capability word `chat` in `#OK` (`#OK se30bridge 2 files=rw resume ping models agents chat stream md usage cmds`) means a client can open a conversation that belongs to no project. The client sends `<n>O *` (or `<n>Y <token> *` to resume one); `*` is never in the project list, and a project folder with that name is left out of it. The bridge answers as for a project: `<n>O *`, `<n>Y <token> new`, `<n>M ...` and `<n>>`, with the same refusals (`already open`, `too many tabs`, `could not start: ...`). A client sends `*` only after it saw `chat`; a bridge without the word refuses it with `<n>X not available`.
 
 A chat is a short-lived conversation:
 
@@ -318,7 +318,7 @@ tty mode and v1 have no chats. Unknown words and tags are ignored by both sides,
 
 ## Streaming answers (`stream`)
 
-The capability word `stream` in `#OK` (`#OK se30bridge 2 files=rw resume ping models agents chat stream md usage`) means a session can send Claude's prose while it is being written instead of when the whole message is done. A client that wants it sends `<n>V on`; `<n>V off` turns it off again. Like `<n>M` it is a preset when session `<n>` is not open yet and is applied when it opens; on an open session it takes effect at once, even in the middle of an answer, and affects only that session. A session starts with streaming off. Any other payload is ignored. A client sends `<n>V` only after it saw `stream`; a bridge without the word ignores the line like any unknown tag, so version 2 is unchanged.
+The capability word `stream` in `#OK` (`#OK se30bridge 2 files=rw resume ping models agents chat stream md usage cmds`) means a session can send Claude's prose while it is being written instead of when the whole message is done. A client that wants it sends `<n>V on`; `<n>V off` turns it off again. Like `<n>M` it is a preset when session `<n>` is not open yet and is applied when it opens; on an open session it takes effect at once, even in the middle of an answer, and affects only that session. A session starts with streaming off. Any other payload is ignored. A client sends `<n>V` only after it saw `stream`; a bridge without the word ignores the line like any unknown tag, so version 2 is unchanged.
 
 With streaming off the bridge sends exactly the lines it sent before. With it on, the text of an answer goes out in pieces as it arrives, using tags that already exist: the first piece of a paragraph is a `<n>T` line and each later piece of that paragraph is a `<n>+` line, which the client joins to the line before it with one space (nothing after a `C` line). So a client that already handles `T`/`+` needs no new code.
 
@@ -338,7 +338,7 @@ After `!MD` the bridge also tells Claude, in the line it adds to the system prom
 
 ## Context and cost (`usage`)
 
-The capability word `usage` in `#OK` (`#OK se30bridge 2 files=rw resume ping models agents chat stream md usage`) means the bridge can report how full each conversation's context is and what the conversation has cost. A client that wants it answers `!USAGE` once, after the project list; it applies to the whole call. Without `!USAGE`, and for ZTerm and v1, no `$` line is ever sent, so an older client sees nothing new.
+The capability word `usage` in `#OK` (`#OK se30bridge 2 files=rw resume ping models agents chat stream md usage cmds`) means the bridge can report how full each conversation's context is and what the conversation has cost. A client that wants it answers `!USAGE` once, after the project list; it applies to the whole call. Without `!USAGE`, and for ZTerm and v1, no `$` line is ever sent, so an older client sees nothing new.
 
 ```
 <n>$ <used> <window> <cost>
@@ -353,6 +353,24 @@ The capability word `usage` in `#OK` (`#OK se30bridge 2 files=rw resume ping mod
 The cost is per conversation. It survives a redial, a resume and a model or effort change, and starts again at zero with a new conversation. The bridge keeps the total and the reading in the resume record. The figure is what the Claude CLI reports: on a subscription it is what the API would have charged, not a bill. The reading comes from the usage Claude already returns with each answer; the bridge makes no request to Claude for it. The percentage is measured against the window the model reports with each result. The typed `/usage` asks the Claude CLI for its own count, which can use a smaller window (the CLI may compact earlier than the model's maximum), so the two percentages can differ. Subagents' own answers are not counted in `<used>`, because compaction acts on the main conversation.
 
 `/usage` works in every client, as a command in `<n>P`, in v1 and in tty mode. It prints, as `I` lines (notices in tty mode), the context used out of the window, the largest context categories (this one asks the Claude CLI for its breakdown, a local request that spends no tokens) and the conversation's cost and number of turns. tty mode's end-of-turn line reads `(success, $0.0123, ctx 42%)`; v1's `R` line keeps its format.
+
+## Commands and plan mode (`cmds`)
+
+The capability word `cmds` in `#OK` (`#OK se30bridge 2 files=rw resume ping models agents chat stream md usage cmds`) means the bridge passes Claude Code's own slash commands through and can switch a session into plan mode. A client that wants the plan mode line answers `!CMDS` once, after the project list; it applies to the whole call. Without `!CMDS`, and for ZTerm and v1, no `@` line is ever sent (see `docs/solutions/`, "New bridge-to-client lines in PROTOCOL v2 need a client opt-in"), but the typed commands below work in every client.
+
+Typed commands (a prompt line whose first word is the command; any other text that starts with `/`, like `/usr/bin is missing`, still goes to Claude as a prompt, with one leading space so the CLI cannot read it as a command):
+
+- `/compact [instructions]` and every command or skill Claude Code offers from the project's or the user's `.claude/commands`, plugins and skills are sent to Claude Code on their own, with no edited-files or cut note in front (those wait for the next ordinary prompt). The bridge learns the list from the CLI (`get_server_info` at connect, refreshed from each init message). `/compact` ends with `<n>I Conversation compacted.` and, for a client that sent `!USAGE`, a fresh `<n>$` line.
+- `/clear` does what `/new` does. `/commands` lists the bridge's commands and the Claude Code commands that pass through, as `I` lines.
+- Every other Claude Code built-in is refused with `<n>I /<name> is not available here. <hint>`. This covers anything that changes permissions, directories, hooks, MCP servers or memory (`/permissions`, `/add-dir`, `/hooks`, `/mcp`, `/memory`) and the terminal-only ones (`/config`, `/login`, `/resume`).
+- In a chat, project commands and plan mode answer `<n>I ... does not apply in a chat.` (`/compact` works).
+- `/plan on`, `/plan off` switch plan mode; `/plan` alone shows it.
+
+Plan mode is per session. A client sends `<n>@ plan` or `<n>@ default` to switch (only after it saw `cmds`: an older bridge ignores the unknown tag). During a turn the switch waits for the turn to end and the bridge says `<n>I Plan mode changes after this turn.` The bridge confirms every change, and sends the current mode after `<n>Y` and after `/new` or `/clear`, as `<n>@ plan` or `<n>@ default` (`default` also stands for accept-edits). The client shows the mode only from this line.
+
+When Claude asks to leave plan mode (the `ExitPlanMode` tool) the request is an ordinary `Q` request named `ExitPlanMode`, with `Approve plan` as its summary and the whole plan as its `D` detail lines. `A <id> a` is the same as `y` for it and never makes a standing grant. Allowing it leaves plan mode at once, inside the turn, so Claude can carry the plan out: the bridge records the new mode and sends `<n>@ default`. Plan mode survives a redial, a resume and an effort change. `/new`, `/clear` and `/edits` start a new conversation in default mode, and the bridge says so with an `@ default` line.
+
+Tools: the bridge sets `permission_mode="plan"` when it starts the CLI and uses the SDK's `set_permission_mode` otherwise, then allows `ExitPlanMode` with a `setMode` update.
 
 ## Files
 

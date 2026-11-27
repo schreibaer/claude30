@@ -106,6 +106,7 @@ static void reset_link(Proto *p)
     p->stream_cap = 0;
     p->md_cap = 0;
     p->usage_cap = 0;
+    p->cmds_cap = 0;
     p->nmodels = 0;
     p->def_model[0] = 0;
     p->def_effort[0] = 0;
@@ -326,6 +327,7 @@ static void read_ok(Proto *p, const char *line, long n)
     p->stream_cap = 0;
     p->md_cap = 0;
     p->usage_cap = 0;
+    p->cmds_cap = 0;
     while (i < n) {
         long w;
         while (i < n && line[i] == ' ')
@@ -353,6 +355,8 @@ static void read_ok(Proto *p, const char *line, long n)
             p->md_cap = 1;
         else if (equals(line + w, i - w, "usage"))
             p->usage_cap = 1;
+        else if (equals(line + w, i - w, "cmds"))
+            p->cmds_cap = 1;
     }
 }
 
@@ -430,6 +434,8 @@ static int link_line(Proto *p, const char *line, long n)
                 sends(p, "!MD\r");       /* style ** and __ in prose ourselves */
             if (p->usage_cap)
                 sends(p, "!USAGE\r");    /* draw each tab's context and cost */
+            if (p->cmds_cap)
+                sends(p, "!CMDS\r");     /* confirm plan mode with @ lines */
             emit(p, 0, EV_CONNECTED, "", 0);
         } else {
             emit(p, 0, EV_PROJECTS, "", 0);
@@ -690,6 +696,11 @@ static void session_line(Proto *p, int sid, const char *line, long n)
         emit(p, sid, EV_MODEL, pay, plen);
     } else if (TAG("$")) {
         emit(p, sid, EV_USAGE, pay, plen);
+    } else if (TAG("@")) {
+        if (plen == 4 && memcmp(pay, "plan", 4) == 0)
+            emit(p, sid, EV_MODE, "plan", 4);
+        else if (plen == 7 && memcmp(pay, "default", 7) == 0)
+            emit(p, sid, EV_MODE, "default", 7);
     } else if (TAG("O")) {
         /* Stay in SS_OPENING until the first >, so that > cannot end a
            turn the shell starts in between. */
@@ -954,6 +965,19 @@ int proto_stream_cap(const Proto *p)
 int proto_usage_cap(const Proto *p)
 {
     return p->usage_cap;
+}
+
+int proto_cmds_cap(const Proto *p)
+{
+    return p->cmds_cap;
+}
+
+int proto_set_plan(Proto *p, int sid, int on)
+{
+    if (p->state != ST_ONLINE || !p->cmds_cap || sid < 1 || sid > MAX_SESS)
+        return 0;
+    send_sess(p, sid, on ? "@ plan" : "@ default");
+    return 1;
 }
 
 int proto_set_stream(Proto *p, int sid, int on)

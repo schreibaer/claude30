@@ -45,6 +45,7 @@ ITEMS = {
     "kCloseTabItem": ("kSessionMenu", "Close Tab"),
     "kModelItem": ("kSessionMenu", "Model and Effort"),
     "kStreamItem": ("kSessionMenu", "Stream Answers"),
+    "kPlanItem": ("kSessionMenu", "Plan Mode"),
     "kLinkTestItem": ("kSessionMenu", "Link Test"),
 }
 

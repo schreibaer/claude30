@@ -63,6 +63,11 @@ Boolean session_stream_on(void);
 /* The bridge reports context and cost, so the tabs and the status line show them. */
 Boolean session_usage_shown(void);
 void session_stream_toggle(void);
+/* Session > Plan Mode: dimmed without the cmds word, in a chat or offline;
+   checked from the mode the bridge confirmed (EV_MODE). */
+Boolean session_plan_available(void);
+Boolean session_plan_on(void);
+void session_plan_toggle(void);
 
 /* New Tab: runs the project picker and opens the chosen project. */
 void session_new_tab(void);

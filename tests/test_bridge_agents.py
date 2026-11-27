@@ -445,7 +445,7 @@ class WireTests(unittest.TestCase):
 
     def test_ok_advertises_agents(self):
         c = self.client(False)
-        self.assertIn("#OK se30bridge 2 files=rw resume ping models agents chat stream md usage", c.text())
+        self.assertIn("#OK se30bridge 2 files=rw resume ping models agents chat stream md usage cmds", c.text())
 
     def test_background_result_arrives_after_the_turn(self):
         c = self.client(True)

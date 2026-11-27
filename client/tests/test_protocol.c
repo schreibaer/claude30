@@ -1061,8 +1061,50 @@ static void test_stream_capability(void)
     CHECK(!proto_set_stream(&P, 1, 1));
 }
 
+static void test_cmds_capability(void)
+{
+    reset();
+    proto_connect(&P, "ATDTbridge", now);
+    feed("AT\r\nOK\r\nCONNECT 57600\r\n");
+    clear_rec();
+    feed("#OK se30bridge 2 files=rw usage cmds\r\nP[\r\nP alpha\r\nP]\r\n");
+    CHECK_EQ_LONG(P.state, ST_ONLINE);
+    CHECK(proto_cmds_cap(&P));
+    CHECK_EQ_LONG(count_sent("!CMDS\r"), 1);
+
+    open_ready(2, "alpha");
+    CHECK(proto_set_plan(&P, 2, 1));
+    CHECK_MEM(R.sent, R.nsent, "2@ plan\r");
+    clear_rec();
+    feed("2@ plan\r\n");
+    CHECK_EQ_LONG(count_sid(EV_MODE, 2), 1);
+    CHECK_MEM(R.text[find(EV_MODE)], R.len[find(EV_MODE)], "plan");
+    clear_rec();
+    feed("2@ default\r\n");
+    CHECK_EQ_LONG(count_sid(EV_MODE, 2), 1);
+    CHECK_EQ_LONG(R.len[find(EV_MODE)], 7);
+    clear_rec();
+    feed("2@ bogus\r\n");
+    CHECK_EQ_LONG(count(EV_MODE), 0);
+    CHECK(!proto_set_plan(&P, 0, 1));
+    CHECK(!proto_set_plan(&P, 7, 1));
+
+    /* A bridge without the word is never sent the opt-in or the line. */
+    reset();
+    connect_online();
+    CHECK(!proto_cmds_cap(&P));
+    CHECK_EQ_LONG(count_sent("!CMDS"), 0);
+    clear_rec();
+    CHECK(!proto_set_plan(&P, 1, 1));
+    CHECK_EQ_LONG(R.nsent, 0);
+
+    reset();
+    CHECK(!proto_set_plan(&P, 1, 1));
+}
+
 int main(void)
 {
+    test_cmds_capability();
     test_usage_capability();
     test_stream_capability();
     test_md_capability();
