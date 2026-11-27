@@ -14,6 +14,9 @@
 static short gIn = 0, gOut = 0;
 static Ptr gBuf = NULL;
 static SpeedRoute gRoute = SPEED_ROUTE_NONE;
+static short gOpenSpeed = kSpeed57600;      /* the speed the open port really uses */
+static long gWhyRefused = 0;                /* driver error from the last refused 115,200 open */
+static long gWhyMachine = 0;                /* and the Gestalt machine type */
 static Boolean gChipSwitched = false;   /* the chip's clock is ours until the next SerReset */
 
 /* Serial driver control and status codes (Inside Macintosh: Devices). */
@@ -75,6 +78,17 @@ const char *serial_speed_name(short speed)
     }
 }
 
+short serial_open_speed(short chosen)
+{
+    return gIn ? gOpenSpeed : chosen;
+}
+
+void serial_refusal(long *driver_err, long *machine)
+{
+    *driver_err = gWhyRefused;
+    *machine = gWhyMachine;
+}
+
 const char *serial_route_name(void)
 {
     switch (gRoute) {
@@ -108,7 +122,8 @@ const char *serial_route_name(void)
 static unsigned short ints_off(void)
 {
     unsigned short sr;
-    __asm__ volatile ("move.w %%sr,%0\n\tmove.w #0x2700,%%sr" : "=d"(sr) : : "memory", "cc");
+    /* ori raises only the interrupt mask; the other SR bits stay as they were. */
+    __asm__ volatile ("move.w %%sr,%0\n\tori.w #0x0700,%%sr" : "=d"(sr) : : "memory", "cc");
     return sr;
 }
 
@@ -144,16 +159,23 @@ static volatile unsigned char *scc_base(void)
     return (volatile unsigned char *)*where;
 }
 
-static void set_chip_clock(short port)
+/* False, with nothing written, if SCCWr doesn't look like a chip address. */
+static Boolean set_chip_clock(short port)
 {
-    volatile unsigned char *ctl = scc_base() + (port == kPortPrinter ? kSCCCtlB : kSCCCtlA);
-    unsigned short sr = ints_off();
+    volatile unsigned char *base = scc_base();
+    volatile unsigned char *ctl;
+    unsigned short sr;
+    if (!base || ((unsigned long)base & 1))
+        return false;
+    ctl = base + (port == kPortPrinter ? kSCCCtlB : kSCCCtlA);
+    sr = ints_off();
     *ctl = 0;           /* RR0 selected: the pointer is known */
     scc_wait();
     ints_restore(sr);
     scc_write(ctl, 4, 0x84);
     scc_write(ctl, 11, 0x00);
     scc_write(ctl, 14, 0x00);
+    return true;
 }
 
 Boolean serial_is_open(void)
@@ -210,7 +232,13 @@ OSErr serial_open(short port, short speed)
         if (Gestalt(gestaltMachineType, &machine) != noErr)
             machine = 0;
         gRoute = speed_route(1, fast, machine);
+        if (gRoute == SPEED_ROUTE_DIRECT && !set_chip_clock(port))
+            gRoute = SPEED_ROUTE_REFUSE;       /* SCCWr isn't an address we trust */
+        else if (gRoute == SPEED_ROUTE_DIRECT)
+            gChipSwitched = true;
         if (gRoute == SPEED_ROUTE_REFUSE) {
+            gWhyRefused = fast;
+            gWhyMachine = machine;
             gRoute = SPEED_ROUTE_NONE;
             setbuf.buf = NULL;
             setbuf.len = 0;
@@ -220,11 +248,8 @@ OSErr serial_open(short port, short speed)
             gIn = gOut = 0;
             return kSpeedUnavailableErr;
         }
-        if (gRoute == SPEED_ROUTE_DIRECT) {
-            set_chip_clock(port);
-            gChipSwitched = true;
-        }
     }
+    gOpenSpeed = speed;
 
     serial_errors();    /* clear anything left from before */
     return noErr;

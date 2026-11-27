@@ -31,5 +31,9 @@ const char *serial_speed_name(short speed);
 /* How the open port reached its speed, for the status line: "" for the
    driver's own speeds, " (driver)" or " (chip clock)" at 115,200. */
 const char *serial_route_name(void);
+/* The speed the open port really uses (the chosen one while it is closed). */
+short serial_open_speed(short chosen);
+/* After kSpeedUnavailableErr: the driver's error and the Gestalt machine type. */
+void serial_refusal(long *driver_err, long *machine);
 
 #endif
