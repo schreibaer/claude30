@@ -122,6 +122,35 @@ static OSErr open_log(LogFile *lf)
     return SetFPos(lf->ref, fsFromLEOF, 0);
 }
 
+OSErr log_open_read(const LogFile *lf, short *ref)
+{
+    short vRef;
+    long dirID, logDir;
+    FSSpec spec;
+    CInfoPBRec pb;
+    OSErr err;
+    Str63 folder;
+
+    if (!lf->have_name)
+        return fnfErr;
+    err = app_folder(&vRef, &dirID);
+    if (err)
+        return err;
+    memcpy(folder, "\pClaude30 Logs", 15);
+    memset(&pb, 0, sizeof(pb));
+    pb.dirInfo.ioNamePtr = folder;
+    pb.dirInfo.ioVRefNum = vRef;
+    pb.dirInfo.ioDrDirID = dirID;
+    err = PBGetCatInfoSync(&pb);
+    if (err)
+        return err;
+    logDir = pb.dirInfo.ioDrDirID;
+    err = FSMakeFSSpec(vRef, logDir, lf->name, &spec);
+    if (err)
+        return err;
+    return FSpOpenDF(&spec, fsRdPerm, ref);
+}
+
 OSErr log_append(LogFile *lf, const char *text, long len)
 {
     OSErr err;

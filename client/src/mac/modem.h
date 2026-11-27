@@ -52,6 +52,8 @@ void session_note(const char *text);
 /* The front tab can take a model and effort now: online, its session is open
    and the bridge advertised models. */
 Boolean session_model_available(void);
+/* Why Model and Effort is dimmed, as a status line ("" when it is not). */
+const char *session_model_reason(void);
 /* Session > Model and Effort...: asks, then tells the bridge. */
 void session_model_dialog(void);
 /* Stream Answers for the front tab: whether the menu item works, whether it is

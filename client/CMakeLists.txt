@@ -24,6 +24,7 @@ add_application(Claude30
     src/core/permsum.c
     src/core/fold.c
     src/core/chatlabel.c
+    src/core/find.c
     src/core/usage.c
     src/core/rules.c
     src/mac/main.c
@@ -37,6 +38,8 @@ add_application(Claude30
     src/mac/tabs.c
     src/mac/picker.c
     src/mac/modeldlg.c
+    src/mac/finddlg.c
+    src/mac/logwin.c
     src/mac/opendlg.c
     src/mac/filewin.c
     claude30.r

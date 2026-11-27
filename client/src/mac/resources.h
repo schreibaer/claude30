@@ -33,7 +33,10 @@
 #define kPasteItem      5
 #define kClearItem      6
 #define kSelectAllItem  7
-#define kSettingsItem   9
+#define kFindItem       9
+#define kFindAgainItem  10
+#define kFindNewerItem  11
+#define kSettingsItem   13
 
 #define kConnectItem    1
 #define kDisconnectItem 2
@@ -68,6 +71,7 @@
 #define kConflictAlert  141     /* 1 Cancel, 2 Replace */
 #define kRevertAlert    142     /* 1 Revert, 2 Cancel */
 #define kModelDialog    143
+#define kFindDialog     144
 #define kRuleDialog     145     /* 144 is the Find dialog */
 
 #define kRedialButton   1
@@ -126,5 +130,10 @@
 #define kModelEffortLabel 5
 #define kModelEffort0   6       /* six radio buttons: default, low, medium, high, xhigh, max */
 #define kModelEffort5   11
+
+#define kFindOK         1
+#define kFindCancel     2
+#define kFindText       3
+#define kFindLabel      4
 
 #endif

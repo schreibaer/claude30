@@ -56,7 +56,7 @@ resource 'MENU' (kFileMenu) {
 		"Save", noIcon, "S", noMark, plain;
 		"Revert to Saved", noIcon, noKey, noMark, plain;
 		"-", noIcon, noKey, noMark, plain;
-		"Full Screen", noIcon, "F", noMark, plain;
+		"Full Screen (Cmd-Shift-F)", noIcon, noKey, noMark, plain;
 		"Compact Input", noIcon, "E", noMark, plain;
 		"-", noIcon, noKey, noMark, plain;
 		"Quit", noIcon, "Q", noMark, plain
@@ -64,7 +64,7 @@ resource 'MENU' (kFileMenu) {
 };
 
 resource 'MENU' (kEditMenu) {
-	kEditMenu, textMenuProc, 0x7FFFFF7D, enabled, "Edit",
+	kEditMenu, textMenuProc, 0x7FFFF77D, enabled, "Edit",
 	{
 		"Undo", noIcon, "Z", noMark, plain;
 		"-", noIcon, noKey, noMark, plain;
@@ -73,6 +73,10 @@ resource 'MENU' (kEditMenu) {
 		"Paste", noIcon, "V", noMark, plain;
 		"Clear", noIcon, noKey, noMark, plain;
 		"Select All", noIcon, noKey, noMark, plain;
+		"-", noIcon, noKey, noMark, plain;
+		"Find\0xC9", noIcon, "F", noMark, plain;
+		"Find Again", noIcon, "G", noMark, plain;
+		"Find Newer (Cmd-Shift-G)", noIcon, noKey, noMark, plain;
 		"-", noIcon, noKey, noMark, plain;
 		"Settings\0xC9", noIcon, noKey, noMark, plain
 	}
@@ -93,7 +97,7 @@ resource 'MENU' (kSessionMenu) {
 		"New Chat", noIcon, "N", noMark, plain;
 		"Close Tab", noIcon, noKey, noMark, plain;
 		"-", noIcon, noKey, noMark, plain;
-		"Model and Effort\0xC9", noIcon, noKey, noMark, plain;
+		"Model and Effort\0xC9", noIcon, "M", noMark, plain;
 		"Stream Answers", noIcon, noKey, noMark, plain;
 		"Plan Mode", noIcon, noKey, noMark, plain;
 		"-", noIcon, noKey, noMark, plain;
@@ -457,5 +461,21 @@ resource 'ICN#' (128) {
 		$"03FFFFC003FFFFC003FFFFC003FFFFC0"
 		$"03FFFFC003FFFFC003FFFFC003FFFFC0"
 		$"03FFFFC003FFFFC00000000000000000"
+	}
+};
+
+/* ---- Find ---------------------------------------------------------------- */
+
+resource 'DLOG' (kFindDialog) {
+	{ 90, 120, 180, 392 },
+	dBoxProc, invisible, noGoAway, 0,
+	kFindDialog, "", alertPositionMainScreen
+};
+resource 'DITL' (kFindDialog) {
+	{
+		{ 58, 192, 78, 262 }, Button { enabled, "Find" };
+		{ 58, 110, 78, 180 }, Button { enabled, "Cancel" };
+		{ 30, 14, 46, 258 }, EditText { enabled, "" };
+		{ 8, 14, 26, 258 }, StaticText { disabled, "Find in this window:" };
 	}
 };
