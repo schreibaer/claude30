@@ -1885,10 +1885,16 @@ Boolean window_find(const char *pat, short dir)
     te = t->trans;
     len = (*te)->teLength;
     if (window_find_restarts()) {
-        short ln = (short)(scrolled_px(te) / gLineH);
+        /* From the view: toward older text the search starts below the
+           last visible line, so a match the person can see is found
+           first; toward newer text it starts at the top line. */
+        long px = scrolled_px(te);
+        long ln = dir < 0 ? (px + (gTransView.bottom - gTransView.top)) / gLineH
+                          : px / gLineH;
         if (ln >= (*te)->nLines)
-            ln = (short)((*te)->nLines - 1);
-        start = ln < 0 ? 0 : (*te)->lineStarts[ln];
+            start = len;
+        else
+            start = ln < 0 ? 0 : (*te)->lineStarts[ln];
     } else
         start = dir < 0 ? (*te)->selStart : (*te)->selEnd;
 
