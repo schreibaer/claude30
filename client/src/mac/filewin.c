@@ -44,6 +44,8 @@ typedef struct {
     char label[96];              /* title text: the name, or "Changes" / "<name> diff" */
     Boolean virt;                /* :changes or :diff/..., a snapshot the bridge makes */
     Boolean changes;             /* the :changes list: lines open diffs */
+    unsigned long click_tick;    /* the last click in the list, for the double-click */
+    long click_start;            /* the text offset of that line, or -1 */
     TEHandle te;
     ControlHandle bar;
     Rect view, status_rect;
@@ -135,6 +137,12 @@ static void plain_reason(const char *t, long n, char *out, short max)
         strcpy(out, "The bridge is busy with other saves. Try again.");
     else if (starts(t, n, "files off"))
         strcpy(out, "The bridge does not allow file access (--files off).");
+    else if (starts(t, n, "not git"))
+        strcpy(out, "This project is not a git repository, or git is missing on the host.");
+    else if (starts(t, n, "changed"))
+        strcpy(out, "The snapshot is gone. Revert to Saved takes a new one.");
+    else if (starts(t, n, "failed timeout"))
+        strcpy(out, "Git took too long on the host.");
     else if (starts(t, n, "failed "))
         snprintf(out, max, "The host reported an error: %.*s", (int)(n - 7), t + 7);
     else
@@ -563,6 +571,14 @@ static void edit_piece(FileWin *f, const FileXfer *x, const char *t, long n)
 
 static void on_piece(FileWin *f, const FileXfer *x, const char *t, long n)
 {
+    /* A snapshot window only ever shows one snapshot: a later piece that
+       carries another token (the bridge took a new one) is not spliced in. */
+    if (f->virt && f->phase == FW_READY && f->fetch != FETCH_NONE
+            && strcmp(x->token, f->token) != 0) {
+        f->fetch = FETCH_NONE;
+        set_status(f, "The host changed since this snapshot. Revert to Saved refreshes.");
+        return;
+    }
     if (f->phase == FW_LOADING && f->next_line == 0 && (f->fetch == FETCH_REPLACE)) {
         /* The first piece decides how the window works. */
         strcpy(f->token, x->token);
@@ -637,7 +653,11 @@ void filewin_event(short sid, EventKind k, const char *t, long n)
         if (f->phase == FW_LOADING && f->total == 0 && f->next_line == 0 && !f->offline
                 && !starts(t, n, "The link was lost")) {
             f->open_failed = true;      /* filewin_deferred closes it */
-            snprintf(f->alert, sizeof(f->alert), "%.60s could not be opened. %.180s", f->name, s);
+            {
+            char nm[64];
+            snprintf(nm, sizeof(nm), "%.60s", f->label);
+            snprintf(f->alert, sizeof(f->alert), "%s could not be opened. %.180s", nm, s);
+        }
         } else {
             snprintf(f->status, sizeof(f->status), "Could not load: %.100s", s);
             draw_status(f);
@@ -673,7 +693,11 @@ void filewin_event(short sid, EventKind k, const char *t, long n)
         f->save_state = SAVE_FAILED;
         f->conflict = false;
         plain_reason(t, n, s, sizeof(s));
-        snprintf(f->alert, sizeof(f->alert), "%.60s was not saved. %.180s", f->name, s);
+        {
+            char nm[64];
+            snprintf(nm, sizeof(nm), "%.60s", f->label);
+            snprintf(f->alert, sizeof(f->alert), "%s was not saved. %.180s", nm, s);
+        }
         set_status(f, "Not saved.");
         break;
     default:
@@ -722,6 +746,8 @@ void filewin_open(Tab *t, const char *path)
             open++;
             if (gWins[i].sid == t->sid && strcmp(gWins[i].path, path) == 0) {
                 SelectWindow(gWins[i].w);
+                if (gWins[i].virt)          /* a snapshot: open again takes a new one */
+                    filewin_revert(gWins[i].w);
                 return;
             }
         } else if (slot < 0) {
@@ -742,6 +768,7 @@ void filewin_open(Tab *t, const char *path)
     snprintf(f->path, sizeof(f->path), "%s", path);
     slash = strrchr(f->path, '/');
     f->name = slash ? slash + 1 : f->path;
+    f->click_start = -1;
     f->virt = f->path[0] == ':';
     f->changes = strcmp(f->path, CHANGES_PATH) == 0;
     if (f->changes)
@@ -834,6 +861,10 @@ static void open_selected_diff(FileWin *f)
     long a = (*f->te)->selStart, b = (*f->te)->selEnd;
     char path[200], full[256];
     Tab *tab = tabs_by_sid(f->sid);
+    if (f->offline || f->phase != FW_READY) {
+        SysBeep(1);
+        return;
+    }
     if (!tab || b <= a || !files_changes_path(t + a, b - a, path, sizeof(path))) {
         SysBeep(1);
         return;
@@ -854,9 +885,6 @@ static unsigned long dbl_time(void)
 
 static void changes_click(FileWin *f, Point p)
 {
-    static unsigned long last_tick;
-    static long last_start = -1;
-    static FileWin *last_win;
     TEHandle te = f->te;
     long off = TEGetOffset(p, te), a, b, len = (*te)->teLength;
     char *t;
@@ -872,14 +900,13 @@ static void changes_click(FileWin *f, Point p)
     while (b < len && t[b] != '\r')
         b++;
     TESetSelect(a, b, te);
-    if (last_win == f && last_start == a && TickCount() - last_tick <= dbl_time()) {
-        last_win = NULL;
+    if (f->click_start == a && TickCount() - f->click_tick <= dbl_time()) {
+        f->click_start = -1;
         open_selected_diff(f);
         return;
     }
-    last_win = f;
-    last_start = a;
-    last_tick = TickCount();
+    f->click_start = a;
+    f->click_tick = TickCount();
 }
 
 void filewin_click(WindowPtr w, EventRecord *ev)
@@ -1101,6 +1128,7 @@ void filewin_revert(WindowPtr w)
     if (!f || !filewin_can_revert(w))
         return;
     if (f->virt) {              /* take a new snapshot, from the top */
+        f->click_start = -1;
         f->top = f->target = 0;
         f->slice_n = 0;
         f->keep_top = 0;

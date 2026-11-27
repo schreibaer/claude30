@@ -504,7 +504,16 @@ static void test_changes_lines(void)
     CHECK(!path_of(" M no counts", o));
     CHECK(!path_of(" M +1 -1", o));
     CHECK(!path_of("   x +1 -1", o));
-    CHECK(!path_of(" M clipped/name\xC9", o));
+    CHECK(!path_of("?? foo +1 -0\xC9", o));
+    CHECK(!path_of(" M foo binary\xC9", o));
+    CHECK(path_of(" M fo\xC9o +1 -0", o));
+    /* A name that merely looks like a rename keeps itself, unless XY says rename. */
+    CHECK(path_of("?? x (from y) +1 -0", o));
+    CHECK(strcmp(o, "x (from y)") == 0);
+    CHECK(path_of(" M dir (from y)/f +1 -1", o));
+    CHECK(strcmp(o, "dir (from y)/f") == 0);
+    CHECK(path_of("R  new name (from x).c (from x.txt) +0 -0", o));
+    CHECK(strcmp(o, "new name (from x).c") == 0);
     CHECK(files_changes_path(" M abcdef +1 -1", 15, o, 4) == 0);
 }
 

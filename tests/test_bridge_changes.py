@@ -188,6 +188,124 @@ class ChangesTests(FilesBase):
         self.assertNotEqual(h1[3], h3[3])           # a read from 0 takes a fresh one
         c.p.stdin.close()
 
+    def test_empty_untracked_file_has_a_diff(self):
+        self.repo()
+        self.write("pkg/__init__.py", "")
+        c = self.connect()
+        out, _ = self.text(c, ":changes")
+        self.assertIn("?? pkg/__init__.py +0 -0", out)
+        out, hdr = self.text(c, ":diff/pkg/__init__.py")
+        self.assertEqual(hdr[-1], "r:diff")
+        self.assertIn("New file: pkg/__init__.py (empty)", out)
+        c.p.stdin.close()
+
+    def test_binary_untracked_file_is_listed_as_binary(self):
+        self.repo()
+        self.write("pic.bin", b"\0\1\2")
+        c = self.connect()
+        out, _ = self.text(c, ":changes")
+        self.assertIn("?? pic.bin binary", out)
+        c.p.stdin.close()
+
+    def test_names_with_spaces_quotes_and_accents_are_listed_sorted_and_diffable(self):
+        self.repo()
+        names = ["my file.txt", 'q"uote.txt', "\u00e9.txt", "B.txt", "a (from b).txt"]
+        for n in names:
+            self.write(n, "x\n")
+        c = self.connect()
+        out, _ = self.text(c, ":changes")
+        listed = [l[3:].rsplit(" +", 1)[0] for l in out.split("\n")[1:] if l]
+        self.assertEqual(listed, sorted(listed))
+        for n in ("my file.txt", 'q"uote.txt', "a (from b).txt", "B.txt"):
+            self.assertIn(n, listed)
+            body, _ = self.text(c, ":diff/" + n)
+            self.assertIn("New file: " + n, body)
+        c.p.stdin.close()
+
+    def test_a_rename_from_a_hidden_name_does_not_print_it(self):
+        self.repo()
+        git(self.proj, "mv", ".env", "notes.txt")
+        c = self.connect()
+        out, _ = self.text(c, ":changes")
+        self.assertIn("notes.txt", out)
+        self.assertNotIn(".env", out)
+        self.assertNotIn("from", out)
+        c.p.stdin.close()
+
+    def test_a_rename_diff_shows_the_rename_not_a_whole_new_file(self):
+        self.repo()
+        git(self.proj, "mv", "moved.txt", "renamed.txt")
+        c = self.connect()
+        body, _ = self.text(c, ":diff/renamed.txt")
+        self.assertIn("rename from moved.txt", body)
+        c.p.stdin.close()
+
+    def test_a_continuation_without_its_snapshot_fails_as_changed(self):
+        self.repo()
+        self.write("src/a.c", "".join(f"v{i}\n" for i in range(300)))
+        c = self.connect()
+        self.assertEqual(self.get(c, ":diff/src/a.c", first=50, count=10), "changed")
+        c.p.stdin.close()
+
+    def test_the_virtual_paths_cannot_be_written(self):
+        self.repo()
+        c = self.connect()
+        for path in (":changes", ":diff/src/a.c"):
+            self.assertTrue(self.save(c, path, "0" * 12, b"x").endswith(" read-only"), path)
+        self.assertFalse(os.path.exists(os.path.join(self.proj, ":changes")))
+        c.p.stdin.close()
+
+    def test_a_gitdir_pointing_outside_is_refused(self):
+        self.repo()
+        outside = os.path.join(self.root, "other")
+        os.makedirs(outside)
+        git(outside, "init", "-q", "-b", "main")
+        with open(os.path.join(outside, "notes.txt"), "w") as f:
+            f.write("FOREIGN_SECRET\n")
+        git(outside, "add", ".")
+        git(outside, "commit", "-q", "-m", "x")
+        shutil.rmtree(os.path.join(self.proj, ".git"))
+        with open(os.path.join(self.proj, ".git"), "w") as f:
+            f.write("gitdir: " + os.path.join(outside, ".git") + "\n")
+        self.write("notes.txt", "mine\n")
+        c = self.connect()
+        self.assertEqual(self.get(c, ":changes"), "not git")
+        self.assertEqual(self.get(c, ":diff/notes.txt"), "not git")
+        c.p.stdin.close()
+
+    def test_a_nested_repository_filter_does_not_run(self):
+        self.repo()
+        marker = os.path.join(self.root, "PWNED")
+        sub = os.path.join(self.proj, "sub")
+        os.makedirs(sub)
+        git(sub, "init", "-q", "-b", "main")
+        with open(os.path.join(sub, ".gitattributes"), "w") as f:
+            f.write("* filter=evil\n")
+        with open(os.path.join(sub, ".git", "config"), "a") as f:
+            f.write(f"[filter \"evil\"]\n\tclean = touch {marker}; cat\n")
+        self.write("sub/f.txt", "1\n")
+        git(sub, "-c", "filter.evil.clean=cat", "add", ".")
+        git(sub, "-c", "filter.evil.clean=cat", "commit", "-q", "-m", "n")
+        git(self.proj, "add", "sub")
+        git(self.proj, "commit", "-q", "-m", "add sub")
+        self.write("sub/f.txt", "changed\n")
+        c = self.connect()
+        self.text(c, ":changes")
+        self.assertFalse(os.path.exists(marker))
+        c.p.stdin.close()
+
+    def test_a_long_list_is_cut_with_a_note(self):
+        self.repo()
+        for i in range(520):
+            self.write(f"many/f{i:04d}.txt", "x\n")
+        c = self.connect()
+        h, _, _ = self.get(c, ":changes", first=0, count=1)
+        total = int(h[2])
+        self.assertEqual(total, 1 + 500 + 1)         # Branch, 500 files, the note
+        _, last, _ = self.get(c, ":changes", first=total - 1, count=1)
+        self.assertEqual(last[0].decode(), "More files changed than are listed here.")
+        c.p.stdin.close()
+
 
 class FilesOffTests(FilesBase):
     files_mode = "off"
