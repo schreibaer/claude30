@@ -170,6 +170,22 @@ class SessionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual((u.type, u.behavior, u.destination), ("addRules", "allow", "localSettings"))
         self.assertEqual((u.rules[0].tool_name, u.rules[0].rule_content), ("Bash", "npm test:*"))
 
+    async def test_the_cli_wildcard_form_is_offered_and_saved(self):
+        # Claude Code 2.1.332 proposes "npm test *" for `npm test` (checked
+        # with the real CLI); the older form was "npm test:*".
+        sess, term, _ = self.make("r Bash(npm test *)")
+        res = await sess._can_use_tool("Bash", {"command": "npm test"},
+                                       Ctx([("Bash", "npm test *")]))
+        self.assertEqual(term.suggestion, "Bash(npm test *)")
+        self.assertEqual(type(res).__name__, "PermissionResultAllow")
+        u = res.updated_permissions[0]
+        self.assertEqual((u.rules[0].tool_name, u.rules[0].rule_content), ("Bash", "npm test *"))
+        # Narrowing it to the exact command is allowed; widening it is not.
+        sess, term, _ = self.make("r Bash(npm *)")
+        res = await sess._can_use_tool("Bash", {"command": "npm test"},
+                                       Ctx([("Bash", "npm test *")]))
+        self.assertEqual(type(res).__name__, "PermissionResultDeny")
+
     async def test_a_refused_rule_denies_with_a_notice(self):
         for rule in ("Bash", "Bash(sh:*)", "Bash(git:*)", "Edit(src/**)"):
             sess, term, _ = self.make("r " + rule)

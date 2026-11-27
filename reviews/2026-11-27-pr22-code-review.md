@@ -27,7 +27,7 @@ Real-CLI spike (SDK 0.2.172): the CLI's suggestion is the exact command (`Bash(t
 | 9 | P2 | "Rule not saved." was shown for a rule that landed late | adversarial | Fixed: the wording says it could not confirm |
 | 10 | P2 | `/allow remove N` deletes by position; a changed file removes a different rule than listed | adversarial | Open: the list is re-read at remove time but not compared |
 | 11 | P3 | A symlinked settings.local.json is replaced by a regular file on remove | adversarial | Open |
-| 12 | P2 | `rule_matches` and `rule_within` only know the older `Tool(prefix:*)` form; a CLI that proposes `Bash(git status *)` would make an unchanged Save Rule fail | correctness | Open: not seen from the CLI here, which suggested the exact command |
+| 12 | P2 | `rule_matches` and `rule_within` only know the older `Tool(prefix:*)` form; a CLI that proposes `Bash(git status *)` would make an unchanged Save Rule fail | correctness | Fixed after testing on the SE/30: Claude Code 2.1.332 proposes `Bash(npm test *)`, which the check refused, so the Rule button never appeared. Both sides now read a final ` *` as the prefix wildcard; fixture rows and a session test added |
 | 13 | P2 | `/allow` restart during a running turn is not guarded by an idle check | adversarial | Open |
 | 14 | P2 | /allow logic duplicated between tty and Channel; rules block adds 300 lines to bridge.py | maintainability | Open |
 | 15 | note | Rule check exists in two copies (Python and C) tied together only by the shared fixtures | testing | Open: by design in the plan |

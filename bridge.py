@@ -1249,6 +1249,15 @@ def parse_rule(rule):
     return tool, content
 
 
+def bash_prefix(content):
+    """(prefix, wildcard) of a Bash rule's content. The CLI writes a prefix
+    wildcard as a final ' *' (`npm test *`); older ones wrote ':*'. Both mean
+    the prefix as whole words, followed by anything."""
+    if content.endswith(":*") or content.endswith(" *"):
+        return content[:-2], True
+    return content, False
+
+
 def format_rule(tool, content):
     return tool if content is None else f"{tool}({content})"
 
@@ -1286,7 +1295,7 @@ def validate_rule(rule):
     if content in ("*", ":*", "**", "/**") or content.startswith("*"):
         return "The rule covers everything."
     if tool == "Bash":
-        prefix = content[:-2] if content.endswith(":*") else content
+        prefix = bash_prefix(content)[0]
         if not prefix.strip():
             return "The rule covers everything."
         if any(c in prefix for c in ";&|><`\n") or "$(" in prefix:
@@ -1325,8 +1334,8 @@ def rule_matches(tool, content, tool_name, inp, cwd=None):
         return True
     if tool == "Bash":
         cmd = str(inp.get("command", "")).strip()
-        if content.endswith(":*"):
-            p = content[:-2]
+        p, wild = bash_prefix(content)
+        if wild:
             return cmd == p or cmd.startswith(p + " ")
         return cmd == content
     if tool in RULE_FILE_TOOLS:
@@ -1356,9 +1365,9 @@ def rule_within(rule, bound):
     if ac is None:
         return False
     if a[0] == "Bash":
-        bp = bc[:-2] if bc.endswith(":*") else None
-        ap = ac[:-2] if ac.endswith(":*") else ac
-        if bp is None:
+        bp, bwild = bash_prefix(bc)
+        ap = bash_prefix(ac)[0]
+        if not bwild:
             return ac == bc
         return ap == bp or ap.startswith(bp + " ")
     if bc.endswith("/**"):

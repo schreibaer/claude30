@@ -166,7 +166,9 @@ const char *rule_check(const char *rule, long n)
     if (toolLen == 4 && memcmp(rule, "Bash", 4) == 0) {
         long fw = 0;
         plen = clen;
-        if (plen >= 2 && content[plen - 2] == ':' && content[plen - 1] == '*')
+        /* A prefix wildcard: the CLI writes "npm test *", older ones "npm test:*". */
+        if (plen >= 2 && (content[plen - 2] == ':' || content[plen - 2] == ' ')
+                && content[plen - 1] == '*')
             plen -= 2;
         prefix = content;
         while (fw < plen && prefix[fw] == ' ')
