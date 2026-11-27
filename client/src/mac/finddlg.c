@@ -72,9 +72,10 @@ Boolean finddlg_run(char *text, short max)
     while (hit != kFindOK && hit != kFindCancel);
     if (hit == kFindOK) {
         GetDialogItemText(h, p);
-        if (p[0] > 0 && p[0] < max) {
-            memcpy(text, p + 1, p[0]);
-            text[p[0]] = 0;
+        if (p[0] > 0) {
+            short k = p[0] < max ? p[0] : (short)(max - 1);   /* a long string is cut */
+            memcpy(text, p + 1, k);
+            text[k] = 0;
             ok = true;
         }
     }

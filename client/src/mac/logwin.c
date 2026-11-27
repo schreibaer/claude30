@@ -140,7 +140,7 @@ static short show(Tab *t, long size, long m, long plen, short ref)
         TECalText(gTE);
     }
     DisposePtr(buf);
-    snprintf(title, sizeof(title), "Log %ld%% - %.*s", size > 0 ? m * 100 / size : 0,
+    snprintf(title, sizeof(title), "Log %ld%% - %.*s", size > 0 ? (m / 1024) * 100 / ((size + 1023) / 1024) : 0,
              (int)t->log.name[0], (char *)t->log.name + 1);
     c2p(title, pt);
     SetWTitle(gWin, pt);

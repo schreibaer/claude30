@@ -296,7 +296,7 @@ static void choose_window_item(short item)
     }
 }
 
-/* True while the File menu's item is enabled (adjust_menus has run). */
+/* True while item of menu m is enabled (adjust_menus has run). */
 static Boolean item_enabled(MenuHandle m, short item)
 {
     return ((*m)->enableFlags & (1UL << item)) != 0;
@@ -565,8 +565,10 @@ static void do_key(EventRecord *ev)
             long chosen;
             adjust_menus();
             chosen = MenuKey(ch);
-            if (chosen == 0 && (ch == 'm' || ch == 'M'))
+            if (chosen == 0 && (ch == 'm' || ch == 'M')) {
+                SysBeep(1);
                 window_set_status(session_model_reason());   /* dimmed: say why */
+            }
             do_menu(chosen);
         }
         return;

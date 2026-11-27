@@ -1860,7 +1860,7 @@ void window_find_reset(void)
     gFindTab = NULL;
 }
 
-Boolean window_find_restarts(void)
+static Boolean window_find_restarts(void)
 {
     TEHandle te;
     if (!gTab || gFindTab != gTab)

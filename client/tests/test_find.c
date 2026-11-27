@@ -19,6 +19,26 @@ static void test_case(void)
     CHECK(find_fold(0xA0) == 0xA0);
 }
 
+/* Every Mac Roman capital folds to its small letter, and folding is stable. */
+static void test_table(void)
+{
+    static const unsigned char pairs[][2] = {
+        { 0xE7, 0x87 }, { 0xCB, 0x88 }, { 0xE5, 0x89 }, { 0x80, 0x8A }, { 0xCC, 0x8B },
+        { 0x81, 0x8C }, { 0x82, 0x8D }, { 0x83, 0x8E }, { 0xE9, 0x8F }, { 0xE6, 0x90 },
+        { 0xE8, 0x91 }, { 0xEA, 0x92 }, { 0xED, 0x93 }, { 0xEB, 0x94 }, { 0xEC, 0x95 },
+        { 0x84, 0x96 }, { 0xEE, 0x97 }, { 0xF1, 0x98 }, { 0xEF, 0x99 }, { 0x85, 0x9A },
+        { 0xCD, 0x9B }, { 0xF2, 0x9C }, { 0xF4, 0x9D }, { 0xF3, 0x9E }, { 0x86, 0x9F },
+        { 0xAE, 0xBE }, { 0xAF, 0xBF }, { 0xCE, 0xCF },
+    };
+    unsigned i;
+    for (i = 0; i < sizeof(pairs) / sizeof(pairs[0]); i++) {
+        CHECK(find_fold(pairs[i][0]) == pairs[i][1]);
+        CHECK(find_fold(pairs[i][1]) == pairs[i][1]);
+    }
+    for (i = 0; i < 256; i++)
+        CHECK(find_fold(find_fold((unsigned char)i)) == find_fold((unsigned char)i));
+}
+
 static void test_edges(void)
 {
     CHECK_EQ_LONG(find_forward("abc", 3, 0, "abc", 3), 0);
@@ -64,8 +84,12 @@ static void test_chunks(void)
         }
     m.fail = 1;
     CHECK_EQ_LONG(find_file_backward(rd, &m, 60, 60, pat, 5, buf, 14), -2);
+    CHECK_EQ_LONG(find_file_forward(rd, &m, 60, 0, pat, 5, buf, 14), -2);
     m.fail = 0;
     CHECK_EQ_LONG(find_file_backward(rd, &m, 60, 60, pat, 5, buf, 8), -1);   /* buffer too small */
+    CHECK_EQ_LONG(find_file_forward(rd, &m, 60, 0, pat, 5, buf, 8), -1);
+    CHECK_EQ_LONG(find_forward("abc", 3, -5, "a", 1), 0);                    /* from < 0 */
+    CHECK_EQ_LONG(find_backward("abc", 3, 99, "c", 1), 2);                   /* before > len */
 }
 
 /* Two matches: backward finds the later first, then the earlier. */
@@ -87,6 +111,7 @@ static void test_order(void)
 int main(void)
 {
     test_case();
+    test_table();
     test_edges();
     test_chunks();
     test_order();

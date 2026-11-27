@@ -99,9 +99,6 @@ Boolean window_fold_available(void);
    (dir < 0) or newer text, from the last match or else from the view. A
    match in a closed fold opens the fold. True when a match is selected. */
 Boolean window_find(const char *pat, short dir);
-/* True when the next search starts from the view (nothing found yet, or the
-   person moved the selection or scrolled since). */
-Boolean window_find_restarts(void);
 /* A new Find string: the next search starts from the view. */
 void window_find_reset(void);
 /* A number that changes when the front tab's view or selection moves. */
