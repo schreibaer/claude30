@@ -72,6 +72,8 @@ From a tab, Claude30 can browse the tab's project, read any text file in it and 
 
 The SE/30 can only see files inside a project folder. It never sees `.git`, `.ssh`, `.env*`, `*.pem`, `*.key`, `id_rsa*` or `id_ed25519*`, or anything your git ignore rules exclude. It can't create, rename or delete files. A save replaces the file in one step and is refused if the file changed since the SE/30 opened it, unless the person on the SE/30 chooses Replace. Claude is told which files the person saved at the start of its next turn.
 
+When the project is a git repository, the SE/30 can also open a read-only list of what changed since the last commit (Session > Show Changes) and the diff of any file in it. This needs git on the host and is off with `--files off`. Git runs with hooks, filters, pagers and external diff programs turned off.
+
 The link is unencrypted, and `--files` applies to anyone who can dial in. Use `ro` or `off` if that matters on your network.
 
 ## On the SE/30 (ZTerm, 57600 8N1)

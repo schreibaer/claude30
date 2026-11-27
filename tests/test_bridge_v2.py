@@ -42,7 +42,7 @@ class HandshakeTest(Projects, unittest.TestCase):
     def test_hello_gets_ok_and_list(self):
         c = self.client()
         c.hello()
-        self.assertIn("#OK se30bridge 2 files=rw resume ping models agents chat stream md usage cmds", c.text())
+        self.assertIn("#OK se30bridge 2 files=rw resume ping models agents chat stream md usage cmds changes", c.text())
         self.assertEqual(c.projects(), ["alpha", "beta", "gamma"])
         c.close()
 

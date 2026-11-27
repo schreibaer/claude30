@@ -182,6 +182,7 @@ static void adjust_menus(void)
     CheckItem(gSession, kStreamItem, session_stream_on());
     enable(gSession, kPlanItem, session_plan_available());
     CheckItem(gSession, kPlanItem, session_plan_on());
+    enable(gSession, kChangesItem, session_changes_available());
     enable(gSession, kLinkTestItem, s == ST_IDLE);
 
     {
@@ -466,6 +467,7 @@ static void do_menu(long choice)
         case kModelItem:      session_model_dialog(); break;
         case kStreamItem:     session_stream_toggle(); break;
         case kPlanItem:       session_plan_toggle(); break;
+        case kChangesItem:    session_show_changes(); break;
         case kLinkTestItem:   linktest_run(); break;
         }
         break;

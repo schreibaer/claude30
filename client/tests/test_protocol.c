@@ -1102,6 +1102,27 @@ static void test_cmds_capability(void)
     CHECK(!proto_set_plan(&P, 1, 1));
 }
 
+static void test_changes_capability(void)
+{
+    reset();
+    proto_connect(&P, "ATDTbridge", now);
+    feed("AT\r\nOK\r\nCONNECT 57600\r\n");
+    clear_rec();
+    feed("#OK se30bridge 2 files=rw usage cmds changes\r\nP[\r\nP alpha\r\nP]\r\n");
+    CHECK_EQ_LONG(P.state, ST_ONLINE);
+    CHECK(proto_changes_cap(&P));
+    /* It adds no line the bridge sends on its own, so nothing is sent for it. */
+    CHECK_EQ_LONG(count_sent("!CHANGES"), 0);
+
+    /* A new link starts without it; a bridge that does not say it leaves it off. */
+    reset();
+    proto_connect(&P, "ATDTbridge", now);
+    feed("AT\r\nOK\r\nCONNECT 57600\r\n");
+    feed("#OK se30bridge 2 files=rw usage cmds\r\nP[\r\nP alpha\r\nP]\r\n");
+    CHECK_EQ_LONG(P.state, ST_ONLINE);
+    CHECK(!proto_changes_cap(&P));
+}
+
 static void test_rules_capability(void)
 {
     reset();
@@ -1150,6 +1171,7 @@ static void test_rules_capability(void)
 int main(void)
 {
     test_rules_capability();
+    test_changes_capability();
     test_cmds_capability();
     test_usage_capability();
     test_stream_capability();

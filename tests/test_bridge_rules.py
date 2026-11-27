@@ -253,7 +253,7 @@ class WireTests(Base):
         return start, i, c.text()[i].split()[1]
 
     def test_the_word_comes_only_with_the_flag(self):
-        self.assertTrue([l for l in self.rules_client().text() if l.startswith("#OK")][0].endswith(" rules"))
+        self.assertTrue([l for l in self.rules_client().text() if l.startswith("#OK")][0].endswith(" rules changes"))
         c = self.rules_client(flag=False)
         self.assertNotIn("rules", [l for l in c.text() if l.startswith("#OK")][0].split())
 

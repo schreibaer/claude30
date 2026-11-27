@@ -46,6 +46,15 @@ void proto_files_step(Proto *p);
 const FileXfer *proto_xfer(const Proto *p);
 int proto_xfer_slot(const Proto *p);
 
+/* The reserved read-only paths of the changes word (PROTOCOL.md, "Changes"). */
+#define CHANGES_PATH  ":changes"
+#define DIFF_PREFIX   ":diff/"
+
+/* Reads one line of the :changes text ("<XY> <path> [(from <old>)] +a -d" or
+   "<XY> <path> binary") and copies the file's path into out. Returns 0 for
+   the Branch line, the no-changes line, a clipped line or anything else. */
+int files_changes_path(const char *line, long n, char *out, long max);
+
 /* Internal, for protocol.c. */
 void files_line(Proto *p, int sid, const char *tag, long tlen, const char *pay, long plen);
 void files_tick(Proto *p);

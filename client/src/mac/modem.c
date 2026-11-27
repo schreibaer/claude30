@@ -695,6 +695,21 @@ Boolean session_plan_available(void)
         && proto_sess_state(&gProto, t->sid) != SS_CLOSING;
 }
 
+Boolean session_changes_available(void)
+{
+    Tab *t = tabs_front();
+    return t && !t->chat && gProto.state == ST_ONLINE && gProto.changes_cap
+        && proto_files_mode(&gProto) != FILES_OFF && session_tab_ready(t);
+}
+
+void session_show_changes(void)
+{
+    Tab *t = tabs_front();
+    if (!t || !session_changes_available())
+        return;
+    filewin_open(t, CHANGES_PATH);
+}
+
 Boolean session_plan_on(void)
 {
     Tab *t = tabs_front();

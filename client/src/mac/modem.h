@@ -66,6 +66,10 @@ void session_stream_toggle(void);
 /* Session > Plan Mode: dimmed without the cmds word, in a chat or offline;
    checked from the mode the bridge confirmed (EV_MODE). */
 Boolean session_plan_available(void);
+/* Session > Show Changes: the front project tab needs the changes word and
+   a bridge that allows files. */
+Boolean session_changes_available(void);
+void session_show_changes(void);
 Boolean session_plan_on(void);
 void session_plan_toggle(void);
 

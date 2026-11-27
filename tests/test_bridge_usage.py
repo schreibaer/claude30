@@ -258,7 +258,7 @@ class WireTests(Base):
 
     def test_ok_has_the_word_and_nothing_is_sent_without_the_request(self):
         c = self.client()
-        self.assertTrue([l for l in c.text() if l.startswith("#OK")][0].endswith(" usage cmds"))
+        self.assertTrue([l for l in c.text() if l.startswith("#OK")][0].endswith(" usage cmds changes"))
         self.open_new(c, 1, "alpha")
         c.turn(1, "one")
         c.close()

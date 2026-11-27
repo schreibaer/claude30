@@ -400,7 +400,7 @@ A listing never shows, and a request is refused as `hidden` for:
 - anything the project's git ignore rules exclude (when the project is a git repository and git is installed). If git fails inside a repository, the paths it was asked about count as ignored;
 - these rules apply both to the path as sent and to the real path after symbolic links are resolved, so a link cannot show a hidden file under another name;
 - a symbolic link whose target is outside the project folder (refused as `outside project`);
-- names holding a control character (refused as `bad name`), or that Mac Roman cannot spell.
+- names holding a control character, names that start with `:` (reserved for the Changes paths below, so a host file can never stand in for one) or that Mac Roman cannot spell (all refused as `bad name`).
 
 Requests are refused as `outside project` for absolute paths, `.` or `..` components, empty components and NUL bytes.
 
@@ -430,6 +430,7 @@ Requests are refused as `outside project` for absolute paths, `.` or `..` compon
 | `control` | Holds control characters other than tab |
 | `endings` | Mixes line endings |
 | `ro` | The bridge runs with `--files ro` |
+| `changes`, `diff` | A generated snapshot, see "Changes" below |
 
 Editable lines are the file's exact text in Mac Roman, tabs included. Read-only lines go through the same stand-ins as Claude's prose, every remaining control character but tab becomes `?`, and lines over 2,000 bytes are cut and end in `…`. A file with a NUL byte in its first 8 KB is refused as `binary`.
 
@@ -444,6 +445,23 @@ Editable lines are the file's exact text in Mac Roman, tabs included. Read-only 
 After a save, the bridge tells Claude at the start of that session's next turn which files the person saved.
 
 Refusal reasons: `not found`, `hidden`, `outside project`, `bad name`, `binary`, `read-only`, `too big`, `changed`, `damaged` (the whole-file CRC did not match), `control` (the saved text holds a control character other than tab), `files off`, `busy`, `failed <detail>`.
+
+### Changes (`changes`)
+
+When `--files` is not `off` and git is installed, `#OK` carries the word `changes`. It adds two reserved read-only paths. They go through the ordinary `G`, `H`, `B` and `Z` lines, so no new line type exists and no `!WORD` is needed: a client asks for them only after it has seen the word, and an older client never does. A bridge without the word answers `bad name` to both.
+
+| Path | Content | `<mode>` |
+|---|---|---|
+| `:changes` | A snapshot of the project's changes since the last commit | `r:changes` |
+| `:diff/<path>` | The diff of one file against the last commit | `r:diff` |
+
+A read that starts at line 0 takes a new snapshot. A later piece comes from that snapshot, or is refused as `changed` when the bridge no longer holds it (it keeps the last 8), and the client then starts again from line 0. A client that asks for line 0 again, for example to retry the first piece, gets a new snapshot, so it compares the version token and drops a piece whose token differs from the one it holds.
+
+`:changes` begins with `Branch: <name>`, then either `No changes since the last commit.` or one line per file, sorted by path: `<XY> <path> [(from <old>)] +<added> -<deleted>`, or `<XY> <path> binary`. `<XY>` is git's two-letter status, and `(from <old>)` appears only when `R` or `C` is in it. Counts of an untracked file cover its first megabyte. At most 500 files are listed, and a last line says when more changed. Submodules and nested repositories are left out. `:diff/<path>` shows git's diff, covering both names for a rename. For an untracked file it shows `New file: <path>` and the lines with `+`. A diff cut at the read limit ends with a line saying so. When the project has no commit the base is the empty tree.
+
+The project must be a repository whose git directory lies inside its own work tree, or the bridge answers `not git` (a `.git` file or `core.worktree` pointing elsewhere, and linked worktrees, are refused). Git runs with optional locks, pagers, prompts, external diff, text conversion, hooks, fsmonitor, submodules and the project's clean and smudge filters turned off, with the environment variables that aim it elsewhere removed, and with a 10-second timeout. The same hidden-name and git-ignore rules apply to `<path>` and to the old name of a rename (a hidden old name is left out of the line).
+
+Reasons: `not git` (not a suitable repository, or git is missing), `changed`, `failed timeout`, `failed git`, and the usual `hidden`, `outside project`, `not found`, `bad name` and `files off`. A save (`F`) to either path is refused as `read-only`. The test suite checks the line format against the client's parser from both sides, but they share no fixture file.
 
 ### One save with a damaged block
 

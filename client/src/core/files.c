@@ -724,3 +724,72 @@ void files_fail(Proto *p, int sid, const char *why)
         if (p->xfer[i].kind != XF_NONE && (sid == 0 || p->xfer[i].sid == sid))
             fail_x(p, i, why, (long)strlen(why));
 }
+
+/* ---- the :changes text ------------------------------------------------------
+   The lines are written by FileService._status_text in bridge.py:
+   "<XY> <path>[ (from <old>)] +<added> -<deleted>" or "<XY> <path> binary".
+   tests/test_bridge_changes.py and client/tests/test_files.c both use the
+   same shapes; change them together. */
+
+static int status_letter(char c)
+{
+    return c == ' ' || c == 'M' || c == 'A' || c == 'D' || c == 'R' || c == 'C'
+        || c == 'U' || c == 'T' || c == '?' || c == '!';
+}
+
+/* Does t[0..n) end with the word s? */
+static int ends_with(const char *t, long n, const char *s)
+{
+    long k = (long)strlen(s);
+    return n >= k && memcmp(t + n - k, s, k) == 0;
+}
+
+int files_changes_path(const char *line, long n, char *out, long max)
+{
+    long end, start;
+    out[0] = 0;
+    /* "XY " and at least one path byte. */
+    if (n < 4 || !status_letter(line[0]) || !status_letter(line[1]) || line[2] != ' ')
+        return 0;
+    if (line[0] == ' ' && line[1] == ' ')
+        return 0;
+    if ((unsigned char)line[n - 1] == 0xC9)
+        return 0;                        /* the viewer clipped this line */
+    end = n;
+    if (ends_with(line, end, " binary")) {
+        end -= 7;
+    } else {
+        /* " +<digits> -<digits>" */
+        long k = end;
+        while (k > 0 && line[k - 1] >= '0' && line[k - 1] <= '9')
+            k--;
+        if (k == end || k < 3 || line[k - 1] != '-' || line[k - 2] != ' ')
+            return 0;
+        k -= 2;
+        {
+            long d = k;
+            while (d > 0 && line[d - 1] >= '0' && line[d - 1] <= '9')
+                d--;
+            if (d == k || d < 3 || line[d - 1] != '+' || line[d - 2] != ' ')
+                return 0;
+            end = d - 2;
+        }
+    }
+    /* " (from <old>)" belongs to a rename or copy (R or C in XY): the path is
+       the new name. Any other line keeps a name that merely looks like it. */
+    if (end > 0 && line[end - 1] == ')'
+            && (line[0] == 'R' || line[0] == 'C' || line[1] == 'R' || line[1] == 'C')) {
+        long j;
+        for (j = end - 7; j >= 3; j--)
+            if (memcmp(line + j, " (from ", 7) == 0) {
+                end = j;
+                break;
+            }
+    }
+    start = 3;
+    if (end <= start || end - start >= max)
+        return 0;
+    memcpy(out, line + start, end - start);
+    out[end - start] = 0;
+    return 1;
+}

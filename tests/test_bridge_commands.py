@@ -85,7 +85,7 @@ class WireTests(Base):
 
     def test_ok_has_the_word_and_no_at_lines_without_the_opt_in(self):
         c = self.client()
-        self.assertTrue([l for l in c.text() if l.startswith("#OK")][0].endswith(" cmds"))
+        self.assertTrue([l for l in c.text() if l.startswith("#OK")][0].endswith(" cmds changes"))
         self.open_new(c, 1, "alpha")
         c.send("1P /plan on")
         c.wait_for(lambda l: l == "1I Plan mode on.")
