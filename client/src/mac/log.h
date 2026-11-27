@@ -23,6 +23,10 @@ void log_new_session(LogFile *lf, const char *project, short digit);
 /* Appends bytes (Mac Roman, CR line breaks). Returns noErr only when every
    byte was written. */
 OSErr log_append(LogFile *lf, const char *text, long len);
+/* Opens the tab's log file for reading only, through a path of its own, so
+   the append position is never disturbed. fnfErr when nothing was written yet.
+   Close it with FSClose. */
+OSErr log_open_read(const LogFile *lf, short *ref);
 /* Closes the file; later appends reopen the same file. */
 void log_close(LogFile *lf);
 

@@ -55,6 +55,12 @@ void filewin_turn_ended(short sid);
 void filewin_online(short sid, Boolean on);
 void filewin_deferred(void);
 
+/* Find in the window's text: dir > 0 searches down from the caret, dir < 0 up
+   from it. True when a match is selected. filewin_find_partial: the window
+   holds only some lines of a read-only file, so a miss says so. */
+Boolean filewin_find(WindowPtr w, const char *pat, short dir);
+Boolean filewin_find_partial(WindowPtr w);
+
 /* For the Window menu. */
 short filewin_count(void);
 WindowPtr filewin_at(short i);
