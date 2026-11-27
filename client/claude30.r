@@ -198,13 +198,33 @@ resource 'DLOG' (kPermDialog) {
 
 resource 'DITL' (kPermDialog) {
 	{
-		{ 278, 410, 298, 490 }, Button { enabled, "Allow" };
-		{ 278, 320, 298, 400 }, Button { enabled, "Deny" };
-		{ 278, 230, 298, 310 }, Button { enabled, "Always" };
+		{ 278, 424, 298, 490 }, Button { enabled, "Allow" };
+		{ 278, 352, 298, 418 }, Button { enabled, "Deny" };
+		{ 278, 280, 298, 346 }, Button { enabled, "Always" };
 		{ 24, 10, 40, 490 }, UserItem { disabled };
 		{ 44, 10, 270, 490 }, UserItem { disabled };
-		{ 280, 10, 298, 224 }, StaticText { disabled, "\0x11Y \0x11N \0x11A   \0x11. stops" };
+		{ 280, 10, 298, 200 }, StaticText { disabled, "\0x11Y \0x11N \0x11A   \0x11. stops" };
 		{ 4, 10, 22, 490 }, UserItem { disabled };
+		{ 278, 208, 298, 274 }, Button { enabled, "Rule..." };
+	}
+};
+
+/* The rule to save with an allowed request. Item 1 is an inert placeholder
+   so that no button is the default one and Return does nothing. */
+resource 'DLOG' (kRuleDialog) {
+	{ 80, 76, 236, 436 },
+	dBoxProc, invisible, noGoAway, 0,
+	kRuleDialog, "", alertPositionMainScreen
+};
+
+resource 'DITL' (kRuleDialog) {
+	{
+		{ 2, 2, 3, 3 }, UserItem { disabled };
+		{ 122, 262, 142, 346 }, Button { enabled, "Save Rule" };
+		{ 122, 172, 142, 252 }, Button { enabled, "Cancel" };
+		{ 36, 12, 54, 348 }, EditText { enabled, "" };
+		{ 62, 12, 110, 348 }, StaticText { disabled, "" };
+		{ 10, 12, 30, 348 }, StaticText { disabled, "Always allow this in this project:" };
 	}
 };
 

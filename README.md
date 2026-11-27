@@ -98,6 +98,7 @@ Press ctrl-C to stop Claude, use `/help` for commands, and type `+++`, wait a se
 | `--cols / --rows` | 80 / 24 | wrap width and pager height |
 | `--charset ascii\|macroman` | ascii | try `macroman` for real curly quotes in ZTerm |
 | `--accept-edits` | off | don't ask before file edits |
+| `--allow-rules` | off | let the app save permanent allow rules (`Rule...` in the permission window, `/allow`) |
 | `--model NAME` | your default | the model a tab runs when it has not picked one |
 | `--models A B C` | opus sonnet haiku | the models a tab can pick, up to 16 (Claude30's Session > Model and Effort...); `/model` and `/effort` work in every mode |
 | `--state-dir DIR` | `~/.se30bridge` | the call lock and resume records; one call at a time per folder |

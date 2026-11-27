@@ -1208,6 +1208,8 @@ def route_prompt(prompt, allowed, known):
         return "commands", ""
     if low == "plan":
         return "plan", " ".join(words[1:]).lower()
+    if low == "allow":
+        return "allow", " ".join(words[1:]).lower()
     if name in allowed:
         return "command", prompt
     if low in CMD_HINTS or name in known:
@@ -1216,8 +1218,258 @@ def route_prompt(prompt, allowed, known):
     return "send", " " + prompt     # text that merely starts with a slash
 
 
+# --------------------------------------------------------------------------
+# Allow rules (PROTOCOL.md, "Rules (rules)"): what a saved rule may say
+# --------------------------------------------------------------------------
+
+RULE_MAX = 200
+RULE_BARE_REFUSED = {"Bash", "Edit", "Write", "MultiEdit", "NotebookEdit", "WebFetch", "Agent", "Read"}
+RULE_SHELLS = {"sh", "bash", "zsh", "fish", "env", "sudo", "su", "xargs", "eval", "exec",
+               "command", "nohup", "time", "python", "python3", "node", "ruby", "perl",
+               "php", "osascript", "awk", "find", "curl", "wget", "npx", "docker"}
+RULE_FILE_TOOLS = {"Edit", "Write", "MultiEdit", "NotebookEdit", "Read"}
+RULE_BAD_PATHS = (".claude/", ".mcp.json", ".github/", ".git", ".ssh/", "package.json",
+                  "makefile", ".gitlab-ci", ".circleci/", "jenkinsfile", ".env", "id_rsa",
+                  "id_ed25519")
+
+
+def parse_rule(rule):
+    """'Tool' or 'Tool(content)' -> (tool, content or None); None if malformed.
+    Splits at the first ( and the final ), so content may hold parentheses."""
+    if not rule or not (isinstance(rule, str)):
+        return None
+    if "(" not in rule:
+        return (rule, None) if rule.replace("_", "").isalnum() else None
+    if not rule.endswith(")"):
+        return None
+    tool, _, rest = rule.partition("(")
+    content = rest[:-1]
+    if not tool.replace("_", "").isalnum() or content == "":
+        return None
+    return tool, content
+
+
+def bash_prefix(content):
+    """(prefix, wildcard) of a Bash rule's content. The CLI writes a prefix
+    wildcard as a final ' *' (`npm test *`); older ones wrote ':*'. Both mean
+    the prefix as whole words, followed by anything."""
+    if content.endswith(":*") or content.endswith(" *"):
+        return content[:-2], True
+    return content, False
+
+
+def format_rule(tool, content):
+    return tool if content is None else f"{tool}({content})"
+
+
+def _hidden_path(path):
+    low = path.lower()
+    parts = low.split("/")
+    for p in parts:
+        if p.startswith(".env") or p.endswith((".pem", ".key")) or p.startswith(("id_rsa", "id_ed25519")):
+            return True
+    return any(low == b.rstrip("/") or low.startswith(b) or ("/" + b) in ("/" + low)
+               for b in RULE_BAD_PATHS)
+
+
+def validate_rule(rule):
+    """Why a rule must not be saved, or None when it may be."""
+    if not isinstance(rule, str) or len(rule.encode("utf-8", "replace")) > RULE_MAX:
+        return "The rule is longer than 200 characters."
+    if not all(32 <= ord(c) < 127 for c in rule):
+        return "The rule may only hold printable ASCII."
+    parsed = parse_rule(rule)
+    if parsed is None:
+        return "The rule must look like Tool or Tool(what it covers)."
+    tool, content = parsed
+    if tool == "ExitPlanMode":
+        return "A rule cannot skip plan review."
+    if tool.startswith("mcp__"):
+        if content is None and tool.count("__") < 2:
+            return "A rule for a whole MCP server is too broad."
+        return None
+    if content is None:
+        if tool in RULE_BARE_REFUSED:
+            return f"{tool} needs a narrower rule than all of {tool}."
+        return None
+    if content in ("*", ":*", "**", "/**") or content.startswith("*"):
+        return "The rule covers everything."
+    if tool == "Bash":
+        prefix = bash_prefix(content)[0]
+        if not prefix.strip():
+            return "The rule covers everything."
+        if any(c in prefix for c in ";&|><`\n") or "$(" in prefix:
+            return "A command prefix cannot hold shell operators."
+        first = prefix.split()[0]
+        if "/" in first:
+            return "The command must start with a plain program name."
+        if "=" in first:
+            return "The command cannot start with a variable setting."
+        if first.lower() in RULE_SHELLS:
+            return f"{first} can run anything."
+        if "*" in prefix or "?" in prefix:
+            return "A command prefix cannot hold wildcards."
+        return None
+    if tool in RULE_FILE_TOOLS:
+        if content.startswith(("/", "~")) or ".." in content.split("/") or ".." in content:
+            return "Paths must stay inside the project."
+        if any(c in content for c in "?[]{}"):
+            return "Only * may be used in a path."
+        body = content[:-3] if content.endswith("/**") else content
+        if "*" in body.rpartition("/")[0]:
+            return "A * may only be in the last part of the path."
+        if _hidden_path(content) and tool != "Read":
+            return "That path can change how the project builds or runs."
+        if _hidden_path(content) and tool == "Read":
+            return "That path holds secrets or settings."
+        return None
+    return None
+
+
+def rule_matches(tool, content, tool_name, inp, cwd=None):
+    """Does the rule cover this request?"""
+    if tool != tool_name:
+        return False
+    if content is None:
+        return True
+    if tool == "Bash":
+        cmd = str(inp.get("command", "")).strip()
+        p, wild = bash_prefix(content)
+        if wild:
+            return cmd == p or cmd.startswith(p + " ")
+        return cmd == content
+    if tool in RULE_FILE_TOOLS:
+        path = str(inp.get("file_path") or inp.get("notebook_path") or inp.get("path") or "")
+        rel = path
+        if cwd and os.path.isabs(path):
+            rel = os.path.relpath(path, cwd)
+        return fnmatch.fnmatchcase(rel, content) or fnmatch.fnmatchcase(
+            rel.lstrip("/"), content) or rel.endswith("/" + content.lstrip("/"))
+    if tool == "WebFetch":
+        from urllib.parse import urlparse
+        host = urlparse(str(inp.get("url", ""))).hostname or ""
+        return content == f"domain:{host}"
+    return False
+
+
+def rule_within(rule, bound):
+    """Is the rule equal to, or narrower than, the bound rule?"""
+    if rule == bound:
+        return True
+    a, b = parse_rule(rule), parse_rule(bound)
+    if not a or not b or a[0] != b[0]:
+        return False
+    (_, ac), (_, bc) = a, b
+    if bc is None:
+        return True            # anything for that tool is narrower than the whole tool
+    if ac is None:
+        return False
+    if a[0] == "Bash":
+        bp, bwild = bash_prefix(bc)
+        ap = bash_prefix(ac)[0]
+        if not bwild:
+            return ac == bc
+        return ap == bp or ap.startswith(bp + " ")
+    if bc.endswith("/**"):
+        return ac.startswith(bc[:-2])
+    return False
+
+
+def judge_rule(ans, tool_name, inp, suggestion, cwd):
+    """An 'r <rule>' answer. Returns (rule, None) when it may be saved,
+    else (rule, why not)."""
+    rule = ans[2:]
+    why = validate_rule(rule)
+    if why is None:
+        tool, content = parse_rule(rule)
+        if tool != tool_name:
+            why = "The rule is for another tool."
+        elif not rule_matches(tool, content, tool_name, inp, cwd):
+            why = "The rule does not cover this request."
+        elif not rule_within(rule, suggestion):
+            why = "The rule is broader than the one offered."
+    return rule, why
+
+
+def save_demo_rule(cwd, rule):
+    """The demo has no CLI: it writes the file the CLI would."""
+    path = settings_local_path(cwd)
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+    except (OSError, ValueError):
+        data = {}
+    data.setdefault("permissions", {}).setdefault("allow", []).append(rule)
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(data, f, indent=2)
+        f.write("\n")
+
+
+def settings_local_path(cwd):
+    return os.path.join(cwd, ".claude", "settings.local.json")
+
+
+def read_allow_rules(cwd):
+    """(list of rule strings, error text or None) from settings.local.json."""
+    path = settings_local_path(cwd)
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+    except FileNotFoundError:
+        return [], None
+    except (OSError, ValueError) as e:
+        return [], f"Could not read .claude/settings.local.json: {e}"
+    perms = data.get("permissions") if isinstance(data, dict) else None
+    allow = perms.get("allow") if isinstance(perms, dict) else None
+    if allow is None:
+        return [], None
+    if not isinstance(allow, list):
+        return [], "permissions.allow in .claude/settings.local.json is not a list."
+    return [str(r) for r in allow], None
+
+
+def remove_allow_rule(cwd, n):
+    """Removes rule number n (1-based). Returns (removed rule or None, notice)."""
+    rules, err = read_allow_rules(cwd)
+    if err:
+        return None, err
+    if not 1 <= n <= len(rules):
+        return None, f"There is no rule {n}."
+    path = settings_local_path(cwd)
+    with open(path, "r", encoding="utf-8") as f:
+        data = json.load(f)
+    removed = data["permissions"]["allow"].pop(n - 1)
+    tmp = path + ".se30tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(data, f, indent=2)
+        f.write("\n")
+    os.replace(tmp, path)
+    return removed, None
+
+
+def allow_lines(cwd):
+    rules, err = read_allow_rules(cwd)
+    if err:
+        return [err]
+    if not rules:
+        return ["No local allow rules."]
+    return [f"{i}. {r}" for i, r in enumerate(rules, 1)] + ["/allow remove N deletes one."]
+
+
+def suggested_rule(context, tool_name, inp):
+    """The CLI's own proposal as 'Tool(content)', else a fallback."""
+    for u in getattr(context, "suggestions", None) or []:
+        if getattr(u, "type", None) == "addRules" and getattr(u, "rules", None):
+            r = u.rules[0]
+            return format_rule(r.tool_name, r.rule_content)
+    if tool_name == "Bash":
+        return format_rule("Bash", str(inp.get("command", "")))
+    return tool_name
+
+
 def commands_lines(session):
-    own = "/new /clear /edits /agents /usage /model /effort /plan /commands /help /quit"
+    own = "/new /clear /edits /agents /usage /model /effort /plan /allow /commands /help /quit"
     lines = ["Bridge: " + own]
     names = sorted(getattr(session, "allowed_commands", ()))
     if not names:
@@ -1384,9 +1636,20 @@ class ClaudeSession:
                 summary = f"({label}) {summary}"
             pid = self.next_pid
             self.next_pid += 1
-            ans = await self.term.ask_permission(pid, tool_name, summary, detail)
+            suggestion = None
+            if getattr(self.term, "rules_enabled", False) and tool_name != "ExitPlanMode":
+                suggestion = suggested_rule(context, tool_name, input_data)
+                if validate_rule(suggestion) is not None:
+                    suggestion = None   # never offer a rule that could not be saved
+            if suggestion is not None:
+                ans = await self.term.ask_permission(pid, tool_name, summary, detail,
+                                                     suggestion=suggestion)
+            else:
+                ans = await self.term.ask_permission(pid, tool_name, summary, detail)
             if ans == "a" and tool_name != "ExitPlanMode":
                 self.always.add(key)
+        if isinstance(ans, str) and ans.startswith("r ") and suggestion is not None:
+            return await self._save_rule(ans, tool_name, input_data, suggestion)
         if ans in ("y", "a") and tool_name == "ExitPlanMode" and self.cfg.plan:
             # Approving the plan leaves plan mode inside this turn, so Claude
             # can carry it out now.
@@ -1401,6 +1664,29 @@ class ClaudeSession:
         if ans in ("y", "a"):
             return PermissionResultAllow(updated_input=input_data)
         return PermissionResultDeny(message="The user denied this action.", interrupt=False)
+
+    async def _save_rule(self, ans, tool_name, input_data, suggestion):
+        """Allows the request and has the CLI save the rule, or refuses."""
+        from claude_agent_sdk.types import (PermissionResultAllow, PermissionResultDeny,
+                                            PermissionRuleValue, PermissionUpdate)
+        rule, why = judge_rule(ans, tool_name, input_data, suggestion, self.cfg.cwd)
+        if why:
+            await self.term.notice(f"Rule not saved: {why}")
+            return PermissionResultDeny(message="The rule was refused.", interrupt=False)
+        tool, content = parse_rule(rule)
+        asyncio.ensure_future(self._check_rule_saved(rule))
+        return PermissionResultAllow(updated_input=input_data, updated_permissions=[
+            PermissionUpdate(type="addRules", behavior="allow", destination="localSettings",
+                             rules=[PermissionRuleValue(tool_name=tool, rule_content=content)])])
+
+    async def _check_rule_saved(self, rule):
+        """The CLI writes the file; says so when it did not."""
+        for _ in range(20):
+            await asyncio.sleep(0.25)
+            if rule in read_allow_rules(self.cfg.cwd)[0]:
+                await self.term.notice(f"Rule saved: {rule}")
+                return
+        await self.term.notice("Could not confirm the rule. /allow shows what is saved.")
 
     async def _pump_messages(self):
         """Reads everything Claude sends, in turns and between them: a
@@ -1930,10 +2216,24 @@ class DemoSession:
         if "Edit" in self.cfg.always:
             ans = "y"
         else:
-            ans = await t.ask_permission(1, "Edit", summary, detail)
+            if getattr(t, "rules_enabled", False):
+                ans = await t.ask_permission(1, "Edit", summary, detail,
+                                             suggestion="Edit(src/**)")
+            else:
+                ans = await t.ask_permission(1, "Edit", summary, detail)
             if ans == "a":
                 self.cfg.always.add("Edit")
-        await t.tool("Edit", summary + (" (allowed)" if ans in "ya" else " (denied)"))
+            elif ans.startswith("r "):
+                rule, why = judge_rule(ans, "Edit", {"file_path": os.path.join(
+                    self.cfg.cwd, "src/parser.py")}, "Edit(src/**)", self.cfg.cwd)
+                if why:
+                    await t.notice(f"Rule not saved: {why}")
+                    ans = "n"
+                else:
+                    save_demo_rule(self.cfg.cwd, rule)   # what the CLI would write
+                    await t.notice(f"Rule saved: {rule}")
+                    ans = "y"
+        await t.tool("Edit", summary + (" (allowed)" if ans in ("y", "a") else " (denied)"))
         await self._result()
 
 
@@ -2878,8 +3178,18 @@ class Channel:
         if wire:
             await self.tag("$", wire)
 
-    async def ask_permission(self, pid, name, summary, detail_lines):
+    @property
+    def rules_enabled(self):
+        return bool(getattr(self.v2.args, "allow_rules", False) and self.v2.rules_optin and not self.chat)
+
+    async def ask_permission(self, pid, name, summary, detail_lines, suggestion=None):
         await self.tag("Q", f"{pid} {name} {summary}")
+        if suggestion and validate_rule(suggestion) is not None:
+            suggestion = None
+        if suggestion and self.rules_enabled and name != "ExitPlanMode":
+            await self.tag("Q+", f"{pid} {suggestion}")
+        else:
+            suggestion = None
         if detail_lines:
             await self.tag("D[")
             for d in detail_lines:
@@ -2892,9 +3202,14 @@ class Channel:
             ans = await self.answers.get()
             if ans is None:
                 raise EOFError
-            parts = ans.split()
+            parts = ans.split(None, 2)
             if len(parts) == 2 and parts[0] == str(pid) and parts[1] in ("y", "n", "a"):
                 return parts[1]
+            if len(parts) == 3 and parts[0] == str(pid) and parts[1] == "r":
+                # A rule answer only counts when this request offered one.
+                return "r " + parts[2] if suggestion else "n"
+            if len(parts) == 2 and parts[0] == str(pid) and parts[1] == "r":
+                return "n"
 
     # ---- the conversation --------------------------------------------------
 
@@ -2992,6 +3307,35 @@ class Channel:
             if not await self._apply_pending():
                 return False
             await self.notice(f"{'Model' if words[0] == '/model' else 'Effort'} set.")
+        return True
+
+    async def _allow_command(self, text):
+        """/allow and /allow remove N. False when the session could not be
+        restarted (it is then closed)."""
+        words = text.split()
+        if self.chat:
+            await self.notice("/allow does not apply in a chat.")
+        elif not words:
+            for line in allow_lines(self.cfg.cwd):
+                await self.notice(line)
+        elif len(words) == 2 and words[0] == "remove" and words[1].isdigit():
+            if not getattr(self.v2.args, "allow_rules", False):
+                await self.notice("Removing a rule needs a bridge started with --allow-rules.")
+                return True
+            removed, err = remove_allow_rule(self.cfg.cwd, int(words[1]))
+            if err:
+                await self.notice(err)
+                return True
+            await self.notice(f"Removed: {removed}")
+            try:
+                await self._resume_restart()   # so the CLI stops applying it
+            except Exception as e:  # noqa: BLE001
+                first = (str(e).strip().splitlines() or ["error"])[0]
+                await self.tool_error(f"Could not restart Claude: {first}")
+                self.v2.close_later(self.sid)
+                return False
+        else:
+            await self.notice("Use /allow, or /allow remove N.")
         return True
 
     # ---- plan mode ---------------------------------------------------------
@@ -3226,6 +3570,10 @@ class Channel:
                     for line in commands_lines(self.session):
                         await self.notice(line)
                     continue
+                if kind == "allow":
+                    if not await self._allow_command(text):
+                        return
+                    continue
                 if kind == "plan":
                     if text in ("on", "off"):
                         await self.set_plan(text == "on")
@@ -3355,6 +3703,7 @@ class V2:
         self.agents_optin = False   # the app sent !AGENTS: it draws subagent lines
         self.md_optin = False       # the app sent !MD: it styles ** and __ itself
         self.usage_optin = False    # the app sent !USAGE: it draws context and cost
+        self.rules_optin = False    # the app sent !RULES: it takes Q+ lines and r answers
         self.cmds_optin = False     # the app sent !CMDS: it takes <n>@ lines
         self.no_md = bool(getattr(args, "no_md", False))   # --no-md: do not offer it
         self.closing = set()        # close() tasks still running
@@ -3458,7 +3807,7 @@ class V2:
 
     async def run(self):
         try:
-            words = "resume ping models agents chat stream" + ("" if self.no_md else " md") + " usage cmds"
+            words = "resume ping models agents chat stream" + ("" if self.no_md else " md") + " usage cmds" + (" rules" if getattr(self.args, "allow_rules", False) else "")
             await self.term.send_line(f"#OK se30bridge 2 files={self.args.files} {words}".encode(),
                                       counted=False)
             await self.send_models()
@@ -3478,6 +3827,9 @@ class V2:
                     continue
                 if line == "!CMDS":
                     self.cmds_optin = True
+                    continue
+                if line == "!RULES":
+                    self.rules_optin = bool(getattr(self.args, "allow_rules", False))
                     continue
                 if line == "!LIST":
                     await self.send_list()
@@ -3600,6 +3952,25 @@ async def main_async(args):
                 for line in commands_lines(session):
                     await term.notice(line)
                 continue
+            if kind == "allow":
+                words = text.split()
+                if not words:
+                    for line in allow_lines(cfg.cwd):
+                        await term.notice(line)
+                elif len(words) == 2 and words[0] == "remove" and words[1].isdigit():
+                    if not getattr(args, "allow_rules", False):
+                        await term.notice("Removing a rule needs a bridge started with --allow-rules.")
+                    else:
+                        removed, err = remove_allow_rule(cfg.cwd, int(words[1]))
+                        await term.notice(err or f"Removed: {removed}")
+                        if not err:
+                            await session.stop()
+                            cfg.resume = bool(cfg.turns and cfg.claude_id)
+                            session = make_session(args, term, cfg)
+                            await session.start()
+                else:
+                    await term.notice("Use /allow, or /allow remove N.")
+                continue
             if kind == "plan":
                 if text in ("on", "off"):
                     on = text == "on"
@@ -3670,6 +4041,8 @@ def main():
     p.add_argument("--projects", action="append", metavar="DIR",
                    help="offer every subfolder of DIR as a project for tabs (repeatable)")
     p.add_argument("--max-sessions", type=int, default=6, help="tabs open at once")
+    p.add_argument("--allow-rules", action="store_true",
+                   help="let the app save permanent allow rules to .claude/settings.local.json")
     p.add_argument("--files", choices=["rw", "ro", "off"], default="rw",
                    help="what the SE/30 may do with project files (tabs only)")
     p.add_argument("--demo", action="store_true", help="fake Claude, to test the link")
