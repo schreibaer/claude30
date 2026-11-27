@@ -2449,7 +2449,9 @@ def hidden_name(name):
 
 
 def bad_name(name):
-    return any(ord(c) < 32 or ord(c) == 127 for c in name)
+    # A name starting with : is reserved for the virtual paths (:changes,
+    # :diff/<path>), so a host file can never stand in for one.
+    return name.startswith(":") or any(ord(c) < 32 or ord(c) == 127 for c in name)
 
 
 def inside(path, root):
@@ -2547,7 +2549,9 @@ async def git_ignored(root, paths):
         return set()
     try:
         proc = await asyncio.create_subprocess_exec(
-            "git", "check-ignore", "--stdin", "-z", cwd=root,
+            "git", "-c", "core.fsmonitor=false", "-c", "core.hooksPath=/dev/null",
+            "check-ignore", "--stdin", "-z", cwd=root,
+            env=dict(os.environ, GIT_OPTIONAL_LOCKS="0"),
             stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.DEVNULL)
         out, _ = await proc.communicate(
@@ -2557,6 +2561,90 @@ async def git_ignored(root, paths):
     if proc.returncode not in (0, 1):
         return None
     return {p.decode("utf-8", "surrogateescape") for p in out.split(b"\0") if p}
+
+
+# --------------------------------------------------------------------------
+# Changes: git status and diffs as read-only virtual files
+# --------------------------------------------------------------------------
+
+EMPTY_TREE = "4b825dc642cb6eb9a060e54bf8d69288fbee4904"
+GIT_TIMEOUT = 10
+STATUS_LINE = re.compile(r"^[ MADRCU?!]{2} ")
+
+
+async def git_run(cwd, args, limit=READ_CAP_BYTES):
+    """Runs git locked down (a project's own git config could otherwise name
+    programs to run) and returns up to limit bytes of stdout, plus whether
+    it was cut. Raises Refused("failed ...") on an error or a timeout."""
+    env = dict(os.environ, GIT_OPTIONAL_LOCKS="0", GIT_LITERAL_PATHSPECS="1",
+               GIT_PAGER="cat", GIT_TERMINAL_PROMPT="0")
+    base = ["git", "--no-pager", "-c", "core.fsmonitor=false", "-c", "core.quotepath=off",
+            "-c", "core.hooksPath=/dev/null", "-c", "core.pager=cat"]
+    names = set()
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            "git", "config", "--get-regexp", r"^filter\.", cwd=cwd, env=env,
+            stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL)
+        out, _ = await asyncio.wait_for(proc.communicate(), GIT_TIMEOUT)
+        for line in out.decode("utf-8", "replace").splitlines():
+            key = line.split(None, 1)[0]
+            if key.count(".") >= 2:
+                names.add(key[len("filter."):].rsplit(".", 1)[0])
+    except (OSError, asyncio.TimeoutError):
+        pass
+    for n in sorted(names):
+        for k in ("clean", "smudge", "process"):
+            base += ["-c", f"filter.{n}.{k}="]
+        base += ["-c", f"filter.{n}.required=false"]
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            *base, *args, cwd=cwd, env=env, stdin=asyncio.subprocess.DEVNULL,
+            stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
+    except OSError as e:
+        raise Refused(f"failed {e.strerror or e}")
+    chunks, size, cut = [], 0, False
+
+    async def read_out():
+        nonlocal size, cut
+        while True:
+            chunk = await proc.stdout.read(65536)
+            if not chunk:
+                return
+            chunks.append(chunk)
+            size += len(chunk)
+            if size > limit:
+                cut = True
+                return
+
+    try:
+        await asyncio.wait_for(read_out(), GIT_TIMEOUT)
+        if cut:
+            proc.kill()
+        err = b""
+        if not cut:
+            err = await asyncio.wait_for(proc.stderr.read(), GIT_TIMEOUT)
+        await asyncio.wait_for(proc.wait(), GIT_TIMEOUT)
+    except asyncio.TimeoutError:
+        with contextlib.suppress(ProcessLookupError):
+            proc.kill()
+        with contextlib.suppress(Exception):
+            await proc.wait()
+        raise Refused("failed timeout")
+    data = b"".join(chunks)
+    if not cut and proc.returncode != 0:
+        text = err.decode("utf-8", "replace").lower()
+        if "not a git repository" in text:
+            raise Refused("not git")
+        raise Refused("failed git")
+    return data[:limit], cut
+
+
+class VirtualText(FileText):
+    """Generated text (a status list or a diff): read-only, with its own mode."""
+
+    def __init__(self, data, kind, cut=False):
+        super().__init__(data, "ro", cut)
+        self.mode = f"r:{kind}"
 
 
 class FileService:
@@ -2573,6 +2661,8 @@ class FileService:
         self.ignored = {}        # real relative path -> bool, refreshed by listings
         self.in_repo = None      # is the project inside a git work tree
         self.cache = {}          # relative path -> ((mtime, size), FileText)
+        self.vcache = {}         # :changes or :diff/<path> -> VirtualText snapshot
+        self.vlist = None        # path -> status code of the last :changes
         self.saves = {}          # transfer number -> Save
         self.done = {}           # transfer number -> final answer of a commit
         self.block = None        # [x, seq, lines] being received
@@ -2615,7 +2705,9 @@ class FileService:
         if self.in_repo is None:
             try:
                 proc = await asyncio.create_subprocess_exec(
-                    "git", "rev-parse", "--is-inside-work-tree", cwd=self.real_root,
+                    "git", "-c", "core.fsmonitor=false", "-c", "core.hooksPath=/dev/null",
+                    "rev-parse", "--is-inside-work-tree", cwd=self.real_root,
+                    env=dict(os.environ, GIT_OPTIONAL_LOCKS="0"),
                     stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL)
                 out, _ = await proc.communicate()
                 self.in_repo = proc.returncode == 0 and out.strip() == b"true"
@@ -2670,6 +2762,178 @@ class FileService:
         if want == "file" and not os.path.isfile(real):
             raise Refused("not found")
         return real
+
+    # ---- changes (git status and diffs) ------------------------------------
+
+    def _lexical(self, rel):
+        """The name checks of resolve() that need no file to exist."""
+        if self.mode == "off":
+            raise Refused("files off")
+        parts = rel.split("/") if rel else []
+        if "\0" in rel or rel.startswith("/") or any(p in ("", ".", "..") for p in parts):
+            raise Refused("outside project")
+        if any(bad_name(p) for p in parts):
+            raise Refused("bad name")
+        if any(hidden_name(p) for p in parts):
+            raise Refused("hidden")
+        return parts
+
+    async def _visible(self, rel):
+        """May this path of a git listing be shown? Hidden names, ignored
+        paths and anything resolving outside the project are left out. A
+        symlink is judged by its own name: its target is never read."""
+        try:
+            self._lexical(rel)
+        except Refused:
+            return False
+        full = os.path.join(self.root, *rel.split("/"))
+        if os.path.islink(full):
+            parts = rel.split("/")
+            if len(parts) > 1 and await self._is_ignored(parts[:-1]):
+                return False
+            hits, ok = await self.ignored_set([rel])   # no trailing /: git refuses a path beyond a link
+            return ok and rel not in hits
+        try:
+            await self.resolve(rel, None)
+        except Refused:
+            return False
+        return True
+
+    async def _changes_list(self):
+        """[(XY, path, old path or None, add, del or None)] for the project."""
+        base = "HEAD"
+        try:
+            await git_run(self.real_root, ["rev-parse", "--verify", "-q", "HEAD"])
+        except Refused as r:
+            if r.reason == "not git":
+                raise
+            base = EMPTY_TREE
+        prefix, _ = await git_run(self.real_root, ["rev-parse", "--show-prefix"])
+        prefix = prefix.decode("utf-8", "replace").strip()
+        status, _ = await git_run(self.real_root, [
+            "status", "--porcelain=v1", "-z", "--untracked-files=all"])
+        numstat, _ = await git_run(self.real_root, [
+            "diff", base, "--numstat", "-z", "--no-ext-diff", "--no-textconv", "--relative"])
+        counts = {}
+        toks = numstat.decode("utf-8", "replace").split("\0")
+        i = 0
+        while i < len(toks):
+            t = toks[i]
+            i += 1
+            if not t:
+                continue
+            a, d, p = (t.split("\t", 2) + ["", ""])[:3]
+            if p == "" and i + 1 < len(toks):      # a rename: old and new follow
+                p = toks[i + 1]
+                i += 2
+            counts[p] = (a, d)
+        out = []
+        toks = status.decode("utf-8", "replace").split("\0")
+        i = 0
+        while i < len(toks):
+            t = toks[i]
+            i += 1
+            if len(t) < 4:
+                continue
+            xy, path, old = t[:2], t[3:], None
+            if xy[0] in "RC" or xy[1] in "RC":
+                old = toks[i] if i < len(toks) else None
+                i += 1
+            if prefix:
+                if not path.startswith(prefix):
+                    continue
+                path = path[len(prefix):]
+                if old and old.startswith(prefix):
+                    old = old[len(prefix):]
+            if not await self._visible(path):
+                continue
+            a, d = counts.get(path, (None, None))
+            out.append((xy, path, old, a, d))
+        out.sort(key=lambda e: e[1])
+        return out
+
+    def _untracked_lines(self, rel):
+        """The added lines of a file git does not know yet."""
+        full = os.path.join(self.root, *rel.split("/"))
+        if os.path.islink(full):
+            return [f"+{rel} is a symbolic link (its target is not shown)"], False
+        with open(full, "rb") as f:
+            data = f.read(READ_CAP_BYTES + 1)
+        cut = len(data) > READ_CAP_BYTES
+        if b"\0" in data[:8192]:
+            return [f"Binary file {rel}"], False
+        text = data[:READ_CAP_BYTES].decode("utf-8", "replace")
+        lines = re.split(r"\r\n|\r|\n", text)
+        if lines and lines[-1] == "":
+            lines.pop()
+        return ["+" + l for l in lines], cut
+
+    async def _status_text(self):
+        entries = await self._changes_list()
+        self.vlist = {p: xy for xy, p, _, _, _ in entries}
+        head = ""
+        try:
+            b, _ = await git_run(self.real_root, ["symbolic-ref", "--short", "-q", "HEAD"])
+            head = b.decode("utf-8", "replace").strip()
+        except Refused:
+            pass
+        lines = [f"Branch: {head or '(no branch)'}"]
+        if not entries:
+            lines.append("No changes since the last commit.")
+        for xy, path, old, a, d in entries:
+            if xy == "??":
+                try:
+                    n = len(self._untracked_lines(path)[0])
+                except OSError:
+                    n = 0
+                a, d = str(n), "0"
+            tail = " binary" if a == "-" else f" +{a or 0} -{d or 0}"
+            frm = f" (from {old})" if old else ""
+            lines.append(f"{xy} {path}{frm}{tail}")
+        return "\n".join(lines).encode("utf-8", "replace") + b"\n"
+
+    async def _diff_text(self, path):
+        if self.vlist is None or path not in self.vlist:
+            await self._status_text()
+        if path not in self.vlist:
+            raise Refused("not found")
+        if self.vlist[path] == "??":
+            try:
+                lines, cut = self._untracked_lines(path)
+            except OSError as e:
+                raise Refused(f"failed {e.strerror or e}")
+            head = [f"New file: {path}"] if not lines[0].startswith("Binary") else []
+            return ("\n".join(head + lines) + "\n").encode("utf-8", "replace"), cut
+        base = "HEAD"
+        try:
+            await git_run(self.real_root, ["rev-parse", "--verify", "-q", "HEAD"])
+        except Refused:
+            base = EMPTY_TREE
+        return await git_run(self.real_root, [
+            "diff", base, "--no-ext-diff", "--no-textconv", "--relative", "--", path])
+
+    async def _virtual(self, rel, first):
+        """:changes or :diff/<path>. Regenerated only for a read from line 0,
+        so the pieces of one read come from one snapshot."""
+        if self.mode == "off":
+            raise Refused("files off")
+        if rel != ":changes":
+            self._lexical(rel[len(":diff/"):])
+        if not shutil.which("git"):
+            raise Refused("not git")
+        hit = self.vcache.get(rel)
+        if hit is not None and first != 0:
+            return hit
+        if rel == ":changes":
+            data, cut, kind = await self._status_text(), False, "changes"
+        else:
+            data, cut = await self._diff_text(rel[len(":diff/"):])
+            kind = "diff"
+        ft = VirtualText(data, kind, cut)
+        while len(self.vcache) >= 8:
+            self.vcache.pop(next(iter(self.vcache)))
+        self.vcache[rel] = ft
+        return ft
 
     def _load(self, rel, real):
         st = os.stat(real)
@@ -2762,8 +3026,11 @@ class FileService:
             return
         x, first, count, budget, rel = parts[0], int(parts[1]), int(parts[2]), int(parts[3]), parts[4]
         try:
-            real = await self.resolve(rel, "file")
-            ft = self._load(rel, real)
+            if rel == ":changes" or rel.startswith(":diff/"):
+                ft = await self._virtual(rel, first)
+            else:
+                real = await self.resolve(rel, "file")
+                ft = self._load(rel, real)
         except Refused as r:
             return await self._refuse(x, r.reason)
         except OSError as e:
@@ -3798,7 +4065,8 @@ class V2:
 
     async def run(self):
         try:
-            words = "resume ping models agents chat stream" + ("" if self.no_md else " md") + " usage cmds" + (" rules" if getattr(self.args, "allow_rules", False) else "")
+            words = "resume ping models agents chat stream" + ("" if self.no_md else " md") + " usage cmds" + (" rules" if getattr(self.args, "allow_rules", False) else "") \
+                + (" changes" if self.args.files != "off" and shutil.which("git") else "")
             await self.term.send_line(f"#OK se30bridge 2 files={self.args.files} {words}".encode(),
                                       counted=False)
             await self.send_models()

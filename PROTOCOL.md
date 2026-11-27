@@ -445,6 +445,21 @@ After a save, the bridge tells Claude at the start of that session's next turn w
 
 Refusal reasons: `not found`, `hidden`, `outside project`, `bad name`, `binary`, `read-only`, `too big`, `changed`, `damaged` (the whole-file CRC did not match), `control` (the saved text holds a control character other than tab), `files off`, `busy`, `failed <detail>`.
 
+### Changes (`changes`)
+
+When `--files` is not `off` and git is installed, `#OK` carries the word `changes`. It adds two reserved read-only paths. They go through the ordinary `G`, `H`, `B` and `Z` lines, so no new line types exist.
+
+| Path | Content | `<mode>` |
+|---|---|---|
+| `:changes` | A snapshot of the project's changes since the last commit | `r:changes` |
+| `:diff/<path>` | The diff of one file against the last commit | `r:diff` |
+
+A snapshot is taken when a read starts at line 0 and is reused for the later pieces of that read, so a window never mixes two states. `:changes` begins with `Branch: <name>`, then either `No changes since the last commit.` or one line per file, sorted by path: `<XY> <path> [(from <old>)] +<added> -<deleted>`, or `<XY> <path> binary`. `<XY>` is git's two-letter status. `:diff/<path>` shows git's diff. For an untracked file it shows `New file: <path>` and the lines with `+`. When the project has no commit the base is the empty tree.
+
+The bridge runs git with optional locks, pagers, prompts, external diff, text conversion, hooks, fsmonitor and clean/smudge filters turned off, one read-only command at a time, with a 10-second timeout. Output is cut at the read limit. The same hidden-name and git-ignore rules apply to `<path>` as for any file.
+
+Reasons: `not git` (not a repository, or git is missing), `failed timeout`, `failed git`, and the usual `hidden`, `outside project`, `not found` and `files off`. Writes to either path are refused as `read-only`. Names that start with `:` are never listed by `L` and are refused as `bad name` everywhere else, so a host file cannot shadow them.
+
 ### One save with a damaged block
 
 ```

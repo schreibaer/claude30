@@ -419,7 +419,7 @@ class WireTests(unittest.TestCase):
 
     def test_ok_advertises_stream(self):
         c = self.client()
-        self.assertIn("#OK se30bridge 2 files=rw resume ping models agents chat stream md usage cmds", c.text())
+        self.assertIn("#OK se30bridge 2 files=rw resume ping models agents chat stream md usage cmds changes", c.text())
 
     def test_streamed_text_is_chunked_and_equals_the_unstreamed_text(self):
         c = self.client()
