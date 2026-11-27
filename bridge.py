@@ -1223,8 +1223,7 @@ def route_prompt(prompt, allowed, known):
 # --------------------------------------------------------------------------
 
 RULE_MAX = 200
-RULE_BARE_REFUSED = {"Bash", "Edit", "Write", "MultiEdit", "NotebookEdit", "WebFetch", "Agent"}
-RULE_BARE_OK = {"Read", "Glob", "Grep", "WebSearch"}
+RULE_BARE_REFUSED = {"Bash", "Edit", "Write", "MultiEdit", "NotebookEdit", "WebFetch", "Agent", "Read"}
 RULE_SHELLS = {"sh", "bash", "zsh", "fish", "env", "sudo", "su", "xargs", "eval", "exec",
                "command", "nohup", "time", "python", "python3", "node", "ruby", "perl",
                "php", "osascript", "awk", "find", "curl", "wget", "npx", "docker"}
@@ -1297,12 +1296,19 @@ def validate_rule(rule):
             return "The command must start with a plain program name."
         if "=" in first:
             return "The command cannot start with a variable setting."
-        if first in RULE_SHELLS:
+        if first.lower() in RULE_SHELLS:
             return f"{first} can run anything."
+        if "*" in prefix or "?" in prefix:
+            return "A command prefix cannot hold wildcards."
         return None
     if tool in RULE_FILE_TOOLS:
         if content.startswith(("/", "~")) or ".." in content.split("/") or ".." in content:
             return "Paths must stay inside the project."
+        if any(c in content for c in "?[]{}"):
+            return "Only * may be used in a path."
+        body = content[:-3] if content.endswith("/**") else content
+        if "*" in body.rpartition("/")[0]:
+            return "A * may only be in the last part of the path."
         if _hidden_path(content) and tool != "Read":
             return "That path can change how the project builds or runs."
         if _hidden_path(content) and tool == "Read":
@@ -1624,6 +1630,8 @@ class ClaudeSession:
             suggestion = None
             if getattr(self.term, "rules_enabled", False) and tool_name != "ExitPlanMode":
                 suggestion = suggested_rule(context, tool_name, input_data)
+                if validate_rule(suggestion) is not None:
+                    suggestion = None   # never offer a rule that could not be saved
             if suggestion is not None:
                 ans = await self.term.ask_permission(pid, tool_name, summary, detail,
                                                      suggestion=suggestion)
@@ -1669,7 +1677,7 @@ class ClaudeSession:
             if rule in read_allow_rules(self.cfg.cwd)[0]:
                 await self.term.notice(f"Rule saved: {rule}")
                 return
-        await self.term.notice("Rule not saved.")
+        await self.term.notice("Could not confirm the rule. /allow shows what is saved.")
 
     async def _pump_messages(self):
         """Reads everything Claude sends, in turns and between them: a
@@ -3167,6 +3175,8 @@ class Channel:
 
     async def ask_permission(self, pid, name, summary, detail_lines, suggestion=None):
         await self.tag("Q", f"{pid} {name} {summary}")
+        if suggestion and validate_rule(suggestion) is not None:
+            suggestion = None
         if suggestion and self.rules_enabled and name != "ExitPlanMode":
             await self.tag("Q+", f"{pid} {suggestion}")
         else:

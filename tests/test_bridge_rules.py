@@ -74,6 +74,12 @@ class BindingTests(unittest.TestCase):
         self.assertIsNotNone(self.judge("Edit(docs/**)", "Edit", inp, "Edit(docs/**)"))
         self.assertIsNotNone(self.judge("Edit(src/**)", "Edit", inp, "Edit(src/parser.py)"))
 
+    def test_a_prefix_must_end_at_a_word_boundary(self):
+        self.assertFalse(bridge.rule_within("Bash(npm testing:*)", "Bash(npm test:*)"))
+        self.assertTrue(bridge.rule_within("Bash(npm test run:*)", "Bash(npm test:*)"))
+        self.assertIsNotNone(self.judge("Bash(npm test:*)", "Bash", {"command": "npm testing"},
+                                        "Bash(npm test:*)"))
+
     def test_the_whole_tool_is_wider_than_anything(self):
         self.assertTrue(bridge.rule_within("Bash(git status:*)", "Bash"))
         self.assertFalse(bridge.rule_within("Bash", "Bash(git status:*)"))
@@ -178,7 +184,30 @@ class SessionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(term.suggestion, "Bash(make all)")
         sess, term, _ = self.make("y")
         await sess._can_use_tool("Edit", {"file_path": "/x"}, Ctx([]))
-        self.assertEqual(term.suggestion, "Edit")
+        self.assertIsNone(term.suggestion)      # a bare Edit rule could not be saved: no offer
+
+    async def test_a_suggestion_that_could_not_be_saved_is_not_offered(self):
+        for cmd in ("echo a\necho b", "echo " + "x" * 300, "echo \u00e9"):
+            sess, term, _ = self.make("y")
+            await sess._can_use_tool("Bash", {"command": cmd}, Ctx([]))
+            self.assertIsNone(term.suggestion, cmd)
+
+    async def test_the_saved_notice_follows_the_file(self):
+        sess, term, cfg = self.make("y")
+        os.makedirs(os.path.join(cfg.cwd, ".claude"))
+        with open(bridge.settings_local_path(cfg.cwd), "w") as f:
+            json.dump({"permissions": {"allow": ["Bash(make:*)"]}}, f)
+        real = bridge.asyncio.sleep
+        async def quick(_):
+            await real(0)
+        bridge.asyncio.sleep = quick
+        try:
+            await sess._check_rule_saved("Bash(make:*)")
+            await sess._check_rule_saved("Bash(other:*)")
+        finally:
+            bridge.asyncio.sleep = real
+        self.assertEqual(term.notices[0], "Rule saved: Bash(make:*)")
+        self.assertTrue(term.notices[1].startswith("Could not confirm"))
 
     async def test_exit_plan_mode_never_offers_a_rule(self):
         sess, term, cfg = self.make("y")
@@ -272,7 +301,6 @@ class WireTests(Base):
         c.wait_for(lambda l: l == "1I 2. Glob", start=start)
         c.send("1P /allow remove 1")
         c.wait_for(lambda l: l == "1I Removed: Read", start=start)
-        c.wait_for(lambda l: l == "1P " or True, start=start)
         c.send("1P /allow")
         c.wait_for(lambda l: l == "1I 1. Glob", start=start)
         c.send("1P /allow remove 9")

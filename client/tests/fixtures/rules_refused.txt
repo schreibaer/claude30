@@ -31,3 +31,30 @@ bad rule
 Bash(x
 Bash()
 Edit(src/é)
+Read
+Edit(.g?thub/**)
+Write(.en?)
+Edit(.[c]laude/**)
+Edit(.{claude,git}/**)
+Edit(.c*/x)
+Edit(a*/b)
+Bash(npm test*:*)
+Bash(npm te?t)
+Bash(SH -c x:*)
+Bash(npm test && x:*)
+Bash(a > f:*)
+Bash(a < f:*)
+Edit(certs/server.pem)
+Edit(id_rsa)
+Edit(.ssh/config)
+Edit(.ssh)
+Edit(.claude)
+Edit(.mcp.json)
+Edit(Makefile)
+Edit(src/.env)
+Read(.env)
+Read(secrets/server.key)
+MultiEdit
+NotebookEdit
+_
+Read

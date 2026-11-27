@@ -7,7 +7,7 @@ static const char *const kShells[] = {
     "php", "osascript", "awk", "find", "curl", "wget", "npx", "docker", NULL
 };
 static const char *const kBareRefused[] = {
-    "Bash", "Edit", "Write", "MultiEdit", "NotebookEdit", "WebFetch", "Agent", NULL
+    "Bash", "Edit", "Write", "MultiEdit", "NotebookEdit", "WebFetch", "Agent", "Read", NULL
 };
 static const char *const kFileTools[] = {
     "Edit", "Write", "MultiEdit", "NotebookEdit", "Read", NULL
@@ -31,15 +31,20 @@ static char lower(char c)
     return (c >= 'A' && c <= 'Z') ? (char)(c + 32) : c;
 }
 
-static int starts_ci(const char *s, long n, const char *pre)
+static int starts_ci_len(const char *s, long n, const char *pre, long k)
 {
-    long k = (long)strlen(pre), i;
+    long i;
     if (n < k)
         return 0;
     for (i = 0; i < k; i++)
         if (lower(s[i]) != pre[i])
             return 0;
     return 1;
+}
+
+static int starts_ci(const char *s, long n, const char *pre)
+{
+    return starts_ci_len(s, n, pre, (long)strlen(pre));
 }
 
 static int ends_ci(const char *s, long n, const char *suf)
@@ -71,7 +76,8 @@ static int hidden_path(const char *s, long n)
     }
     for (b = 0; kBadPaths[b]; b++) {
         long k = (long)strlen(kBadPaths[b]);
-        if (n == k - (kBadPaths[b][k - 1] == '/' ? 1 : 0) && starts_ci(s, n, kBadPaths[b]))
+        long k0 = k - (kBadPaths[b][k - 1] == '/' ? 1 : 0);
+        if (n == k0 && starts_ci_len(s, n, kBadPaths[b], k0))
             return 1;
         for (j = 0; j + k <= n; j++)
             if ((j == 0 || s[j - 1] == '/') && starts_ci(s + j, n - j, kBadPaths[b]))
@@ -92,14 +98,17 @@ static int has_dotdot(const char *s, long n)
 static int word_chars(const char *s, long n)
 {
     long i;
+    int alnum = 0;
     if (n == 0)
         return 0;
     for (i = 0; i < n; i++) {
         char c = s[i];
-        if (!((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '_'))
+        if ((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9'))
+            alnum = 1;
+        else if (c != '_')
             return 0;
     }
-    return 1;
+    return alnum;
 }
 
 const char *rule_check(const char *rule, long n)
@@ -178,14 +187,39 @@ const char *rule_check(const char *rule, long n)
                 return "The command must start with a plain program name.";
             if (memchr(prefix + s0, '=', e0 - s0))
                 return "The command cannot start with a variable setting.";
-            if (in_list(kShells, prefix + s0, e0 - s0))
-                return "That program can run anything.";
+            {
+                char word[32];
+                long w;
+                if (e0 - s0 < (long)sizeof(word)) {
+                    for (w = 0; w < e0 - s0; w++)
+                        word[w] = lower(prefix[s0 + w]);
+                    if (in_list(kShells, word, e0 - s0))
+                        return "That program can run anything.";
+                }
+            }
+            if (memchr(prefix, '*', plen) || memchr(prefix, '?', plen))
+                return "A command prefix cannot hold wildcards.";
         }
         return NULL;
     }
     if (in_list(kFileTools, rule, toolLen)) {
         if (content[0] == '/' || content[0] == '~' || has_dotdot(content, clen))
             return "Paths must stay inside the project.";
+        {
+            long body = clen, lastSlash = -1;
+            if (clen >= 3 && memcmp(content + clen - 3, "/**", 3) == 0)
+                body = clen - 3;
+            for (i = 0; i < clen; i++)
+                if (content[i] == '?' || content[i] == '[' || content[i] == ']'
+                        || content[i] == '{' || content[i] == '}')
+                    return "Only * may be used in a path.";
+            for (i = 0; i < body; i++)
+                if (content[i] == '/')
+                    lastSlash = i;
+            for (i = 0; i < lastSlash; i++)
+                if (content[i] == '*')
+                    return "A * may only be in the last part of the path.";
+        }
         if (hidden_path(content, clen))
             return "That path holds secrets or can change how the project runs.";
     }

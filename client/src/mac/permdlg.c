@@ -365,14 +365,9 @@ static pascal Boolean rule_filter(DialogPtr d, EventRecord *ev, short *item)
             *item = kRuleCancel;
             return true;
         }
-        if (ch == '\r' || ch == 3) {   /* Return and Enter never save */
+        /* Return and Enter never save; Cmd keys stay out of the field (no menus here). */
+        if (ch == '\r' || ch == 3 || (ev->modifiers & cmdKey))
             ev->what = nullEvent;
-            return false;
-        }
-        if (ev->modifiers & cmdKey) {    /* no menus here: keep Cmd keys out of the field */
-            ev->what = nullEvent;
-            return false;
-        }
         return false;
     case mouseDown:
         p = ev->where;
@@ -608,10 +603,10 @@ short permdlg_run(PermReq *q)
             short r = rule_dialog(q);
             if (r == 1)
                 break;
-            if (r < 0)
+            if (r < 0) {
                 hit = -1;
-            if (r < 0)
                 break;
+            }
             gArmedAt = TickCount();    /* clicks right after the other dialog closes are not answers */
             continue;
         }
