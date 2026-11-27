@@ -1102,8 +1102,54 @@ static void test_cmds_capability(void)
     CHECK(!proto_set_plan(&P, 1, 1));
 }
 
+static void test_rules_capability(void)
+{
+    reset();
+    proto_connect(&P, "ATDTbridge", now);
+    feed("AT\r\nOK\r\nCONNECT 57600\r\n");
+    clear_rec();
+    feed("#OK se30bridge 2 files=rw usage cmds rules\r\nP[\r\nP alpha\r\nP]\r\n");
+    CHECK(proto_rules_cap(&P));
+    CHECK_EQ_LONG(count_sent("!RULES\r"), 1);
+
+    open_ready(2, "alpha");
+    /* Q+ is attached to its request and offered while the dialog is open. */
+    feed("2Q 4 Bash npm test\r\n2Q+ 4 Bash(npm test:*)\r\n2D[\r\n2D npm test\r\n2D]\r\n2? 4\r\n");
+    CHECK_EQ_LONG(count_sid(EV_PERM_ASK, 2), 1);
+    CHECK(proto_rule(&P, 2) != NULL);
+    CHECK_MEM(proto_rule(&P, 2), strlen(proto_rule(&P, 2)), "Bash(npm test:*)");
+    clear_rec();
+    CHECK(proto_answer_rule(&P, 2, "Bash(npm test:*)"));
+    CHECK_MEM(R.sent, R.nsent, "2A 4 r Bash(npm test:*)\r");
+    CHECK(!proto_answer_rule(&P, 2, "Bash(npm test:*)"));   /* answered once */
+    feed("2>\r\n");
+
+    /* A Q+ for another id, or with no request open, is ignored; no Q+ means no rule. */
+    feed("2Q 5 Edit src/x\r\n2Q+ 9 Edit(src/**)\r\n2? 5\r\n");
+    CHECK(proto_rule(&P, 2) == NULL);
+    clear_rec();
+    CHECK(proto_answer(&P, 2, 'n'));
+    CHECK_MEM(R.sent, R.nsent, "2A 5 n\r");
+    feed("2>\r\n");
+    feed("2Q+ 6 Edit(src/**)\r\n");
+    CHECK(proto_rule(&P, 2) == NULL);
+
+    /* A bridge without the word is never sent !RULES and offers no rule. */
+    reset();
+    connect_online();
+    CHECK(!proto_rules_cap(&P));
+    CHECK_EQ_LONG(count_sent("!RULES"), 0);
+    open_ready(2, "alpha");
+    feed("2Q 4 Bash x\r\n2Q+ 4 Bash(x)\r\n2? 4\r\n");
+    CHECK(proto_rule(&P, 2) == NULL);
+    clear_rec();
+    CHECK(!proto_answer_rule(&P, 2, "Bash(x)"));
+    CHECK_EQ_LONG(R.nsent, 0);
+}
+
 int main(void)
 {
+    test_rules_capability();
     test_cmds_capability();
     test_usage_capability();
     test_stream_capability();

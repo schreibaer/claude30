@@ -471,10 +471,15 @@ static void tab_event(Tab *t, EventKind k, const char *s, long n)
     case EV_PERM_LINE:
         permdlg_line(&t->perm, s, n);
         break;
-    case EV_PERM_ASK:
+    case EV_PERM_ASK: {
+        const char *rule = t->chat ? NULL : proto_rule(&gProto, t->sid);
+        t->perm.can_rule = rule != NULL;
+        if (rule)
+            strcpy(t->perm.rule, rule);   /* RULE_LEN holds any rule the core keeps */
         t->want_perm = true;
         gTabsChanged = true;
         break;
+    }
     case EV_PERM_CLOSE:
         t->want_perm = false;
         gTabsChanged = true;
@@ -969,6 +974,9 @@ void session_deferred(void)
         if (r == kPermResultStop) {
             answer_note(front, 'n');
             proto_stop(&gProto, front->sid);
+        } else if (r == kPermResultRule) {
+            if (proto_answer_rule(&gProto, front->sid, front->perm.rule))
+                answer_note(front, 'y');
         } else if (r != kPermResultClosed) {
             if (proto_answer(&gProto, front->sid, (char)r))
                 answer_note(front, (char)r);

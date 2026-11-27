@@ -1,0 +1,33 @@
+Bash
+Bash(*)
+Bash(:*)
+Bash(sh:*)
+Bash(/bin/sh:*)
+Bash(FOO=1 sh:*)
+Bash(npm test; rm -rf /:*)
+Bash(a | b:*)
+Bash(a `b`:*)
+Bash(a $(b):*)
+Bash(env X:*)
+Bash(python3:*)
+Edit(/etc/**)
+Edit(../x)
+Edit(.env)
+Edit(.claude/**)
+Edit(package.json)
+Edit(.github/workflows/x.yml)
+Edit(~/x)
+Edit
+Write
+WebFetch
+Agent
+ExitPlanMode
+ExitPlanMode(x)
+mcp__github
+Edit(*)
+Edit(**)
+Edit(/**)
+bad rule
+Bash(x
+Bash()
+Edit(src/é)

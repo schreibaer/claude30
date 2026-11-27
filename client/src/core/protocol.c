@@ -25,7 +25,7 @@ static void sends(Proto *p, const char *s)
 /* Sends "<n><rest>" with a CR. */
 static void send_sess(Proto *p, int sid, const char *rest)
 {
-    char buf[160];
+    char buf[280];             /* an r answer carries a rule of up to 200 bytes */
     long k = (long)strlen(rest);
     if (k > (long)sizeof(buf) - 3)
         k = (long)sizeof(buf) - 3;
@@ -65,6 +65,7 @@ static void reset_turn(Session *s)
     s->in_code = 0;
     s->perm_open = 0;
     s->perm_asked = 0;
+    s->rule[0] = 0;
     s->deny_on_ask = 0;
     s->stopped = 0;
 }
@@ -107,6 +108,7 @@ static void reset_link(Proto *p)
     p->md_cap = 0;
     p->usage_cap = 0;
     p->cmds_cap = 0;
+    p->rules_cap = 0;
     p->nmodels = 0;
     p->def_model[0] = 0;
     p->def_effort[0] = 0;
@@ -328,6 +330,7 @@ static void read_ok(Proto *p, const char *line, long n)
     p->md_cap = 0;
     p->usage_cap = 0;
     p->cmds_cap = 0;
+    p->rules_cap = 0;
     while (i < n) {
         long w;
         while (i < n && line[i] == ' ')
@@ -357,6 +360,8 @@ static void read_ok(Proto *p, const char *line, long n)
             p->usage_cap = 1;
         else if (equals(line + w, i - w, "cmds"))
             p->cmds_cap = 1;
+        else if (equals(line + w, i - w, "rules"))
+            p->rules_cap = 1;
     }
 }
 
@@ -436,6 +441,8 @@ static int link_line(Proto *p, const char *line, long n)
                 sends(p, "!USAGE\r");    /* draw each tab's context and cost */
             if (p->cmds_cap)
                 sends(p, "!CMDS\r");     /* confirm plan mode with @ lines */
+            if (p->rules_cap)
+                sends(p, "!RULES\r");    /* offer a rule with each permission request */
             emit(p, 0, EV_CONNECTED, "", 0);
         } else {
             emit(p, 0, EV_PROJECTS, "", 0);
@@ -646,11 +653,23 @@ static void session_line(Proto *p, int sid, const char *line, long n)
         s->perm_id[k] = 0;
         s->perm_open = 1;
         s->perm_asked = 0;
+        s->rule[0] = 0;
         while (k < plen && pay[k] != ' ')
             k++;
         if (k < plen)
             k++;
         emit(p, sid, EV_PERM_BEGIN, pay + k, plen - k);
+    } else if (TAG("Q+")) {
+        /* "<id> <rule>": the bridge's proposed rule for the request being
+           collected. Another id, or no request open, is ignored. */
+        long k = 0;
+        while (k < plen && pay[k] != ' ')
+            k++;
+        if (s->perm_open && k == (long)strlen(s->perm_id) && memcmp(pay, s->perm_id, k) == 0
+                && k < plen && plen - k - 1 <= RULE_LEN - 1) {
+            memcpy(s->rule, pay + k + 1, plen - k - 1);
+            s->rule[plen - k - 1] = 0;
+        }
     } else if (TAG("D[") || TAG("D]")) {
         /* body delimiters carry nothing to show */
     } else if (TAG("D")) {
@@ -970,6 +989,42 @@ int proto_usage_cap(const Proto *p)
 int proto_cmds_cap(const Proto *p)
 {
     return p->cmds_cap;
+}
+
+int proto_rules_cap(const Proto *p)
+{
+    return p->rules_cap;
+}
+
+const char *proto_rule(const Proto *p, int sid)
+{
+    if (sid < 1 || sid > MAX_SESS || !p->rules_cap || !p->sess[sid].rule[0])
+        return NULL;
+    return p->sess[sid].rule;
+}
+
+int proto_answer_rule(Proto *p, int sid, const char *rule)
+{
+    Session *s;
+    char buf[RULE_LEN + 24];
+    size_t k, r;
+    if (sid < 1 || sid > MAX_SESS || !rule || !p->rules_cap)
+        return 0;
+    s = &p->sess[sid];
+    r = strlen(rule);
+    if (s->state != SS_PERMISSION || !s->perm_asked || r == 0 || r >= RULE_LEN)
+        return 0;
+    k = strlen(s->perm_id);
+    memcpy(buf, "A ", 2);
+    memcpy(buf + 2, s->perm_id, k);
+    memcpy(buf + 2 + k, " r ", 3);
+    memcpy(buf + 5 + k, rule, r + 1);
+    send_sess(p, sid, buf);
+    s->perm_asked = 0;
+    s->perm_open = 0;
+    set_sess(p, sid, SS_BUSY);
+    p->last_input = p->now;
+    return 1;
 }
 
 int proto_set_plan(Proto *p, int sid, int on)

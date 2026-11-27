@@ -91,6 +91,12 @@ Each tab has its own Claude model and effort, so a quick question can run on a c
 - When either is set, the status line ends with it in brackets, for example `[sonnet, high]`. The tab remembers both across a redial and relaunching, and a tab reopened after a drop uses them from its first turn. If the bridge no longer offers a remembered model, the tab falls back to the bridge default and the transcript says so.
 - New tabs start at the bridge default. An older bridge (without `models`) leaves the menu item dimmed.
 
+### Rules (Rule... in the permission window)
+
+When the bridge was started with `--allow-rules`, the permission window has a fourth button, **Rule...** (Cmd-R), for requests in a project tab. It opens a small window with the rule the Claude CLI proposed, for example `Bash(npm test:*)`, in an editable field. A line under the field says why a rule cannot be saved (everything, a shell, a secret or build file, a path outside the project) and **Save Rule** stays dimmed until the rule is acceptable. Save Rule allows this request and has Claude Code write the rule to the project's `.claude/settings.local.json`. A rule may be narrowed but never widened beyond what was proposed. Return does nothing here, as in the permission window, and clicks in the first 0.75 seconds are ignored. Chats and ExitPlanMode never show the button. `/allow` lists the saved rules and `/allow remove N` deletes one.
+
+Toolbox calls: Dialog Manager `GetNewDialog`, `ModalDialog` with a filter, `GetDialogItemText`, `SetDialogItemText`, `SelectDialogItemText`; Control Manager `HiliteControl`, `HideControl`. All are in System 7; no extra memory beyond one more dialog.
+
 ### Plan Mode and commands
 
 **Session > Plan Mode** is a checked item for the front tab (needs a bridge that offers `cmds`). While it is on, Claude plans and does not edit; the status line shows `plan`. When Claude has a plan it asks "Approve plan" in the usual permission window, and Allow ends plan mode. Typing `/compact` or a project or user command (for example `/review`) sends it to Claude Code; other built-in commands are refused with a notice, and `/commands` lists what is available.

@@ -68,6 +68,7 @@
 #define kConflictAlert  141     /* 1 Cancel, 2 Replace */
 #define kRevertAlert    142     /* 1 Revert, 2 Cancel */
 #define kModelDialog    143
+#define kRuleDialog     145     /* 144 is the Find dialog */
 
 #define kRedialButton   1
 
@@ -89,6 +90,13 @@
 #define kPermList       5
 #define kPermHint       6
 #define kPermHeadline   7
+#define kPermRule       8
+
+#define kRuleSave       2           /* item 1 is an inert placeholder: no default button */
+#define kRuleCancel     3
+#define kRuleField      4
+#define kRuleReason     5
+#define kRuleLabel      6
 
 #define kLinkStop       1
 #define kLinkInfo       2

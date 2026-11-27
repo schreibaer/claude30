@@ -1,5 +1,6 @@
 #include "permdlg.h"
 #include "permsum.h"
+#include "rules.h"
 #include "modem.h"
 #include "resources.h"
 #include "window.h"
@@ -63,6 +64,8 @@ void permdlg_begin(PermReq *q, const char *title, long len)
     q->nlines = 0;
     q->close_requested = false;
     q->incomplete = false;
+    q->can_rule = false;
+    q->rule[0] = 0;
     if (len > 255)
         len = 255;
     q->title[0] = (unsigned char)len;
@@ -296,6 +299,162 @@ static void show_incomplete(void)
     }
 }
 
+/* ---- the Rule dialog ---------------------------------------------------- */
+
+static unsigned long gRuleArmedAt;
+
+static void set_text(DialogPtr d, short item, const char *s, long n)
+{
+    short type;
+    Handle h;
+    Rect r;
+    Str255 ps;
+    if (n > 255)
+        n = 255;
+    ps[0] = (unsigned char)n;
+    memcpy(ps + 1, s, n);
+    GetDialogItem(d, item, &type, &h, &r);
+    SetDialogItemText(h, ps);
+}
+
+/* The reason line and the Save Rule button follow what the field holds. */
+static Boolean show_rule_state(DialogPtr d)
+{
+    short type;
+    Handle h;
+    Rect r;
+    Str255 ps;
+    char text[RULE_LEN + 1];
+    const char *why;
+    long n;
+    GetDialogItem(d, kRuleField, &type, &h, &r);
+    GetDialogItemText(h, ps);
+    n = ps[0] > RULE_LEN - 1 ? RULE_LEN - 1 : ps[0];
+    memcpy(text, ps + 1, n);
+    text[n] = 0;
+    if (n == 0)
+        why = "Type the rule to save.";
+    else
+        why = rule_check(text, n);
+    if (why)
+        set_text(d, kRuleReason, why, strlen(why));
+    else
+        set_text(d, kRuleReason, "This request is allowed and the rule is saved.",
+                 strlen("This request is allowed and the rule is saved."));
+    GetDialogItem(d, kRuleSave, &type, &h, &r);
+    HiliteControl((ControlHandle)h, why ? 255 : 0);
+    return why == NULL;
+}
+
+static pascal Boolean rule_filter(DialogPtr d, EventRecord *ev, short *item)
+{
+    char ch;
+    Point p;
+
+    session_pump();
+    SetPort(d);
+    if (gReq->close_requested) {
+        *item = -1;
+        return true;
+    }
+    switch (ev->what) {
+    case keyDown:
+    case autoKey:
+        ch = (char)(ev->message & charCodeMask);
+        if ((ev->modifiers & cmdKey) && ch == '.') {
+            *item = kRuleCancel;
+            return true;
+        }
+        if (ch == '\r' || ch == 3) {   /* Return and Enter never save */
+            ev->what = nullEvent;
+            return false;
+        }
+        if (ev->modifiers & cmdKey) {    /* no menus here: keep Cmd keys out of the field */
+            ev->what = nullEvent;
+            return false;
+        }
+        return false;
+    case mouseDown:
+        p = ev->where;
+        GlobalToLocal(&p);
+        if (TickCount() - gRuleArmedAt < ARM_TICKS) {
+            short type;
+            Handle h;
+            Rect r;
+            short i;
+            for (i = kRuleSave; i <= kRuleCancel; i++) {
+                GetDialogItem(d, i, &type, &h, &r);
+                if (PtInRect(p, &r)) {
+                    ev->what = nullEvent;   /* a click aimed at the window behind */
+                    break;
+                }
+            }
+        }
+        return false;
+    case updateEvt:
+        if ((DialogPtr)ev->message != d && app_update((WindowPtr)ev->message)) {
+            SetPort(d);
+            ev->what = nullEvent;
+        }
+        return false;
+    }
+    return false;
+}
+
+/* 1: Save Rule (the rule is in q->rule), 0: Cancel, -1: the request closed. */
+static short rule_dialog(PermReq *q)
+{
+    DialogPtr d;
+    ModalFilterUPP f;
+    short hit = 0, type, result;
+    Handle h;
+    Rect r;
+    Str255 ps;
+    long n;
+    GrafPtr save;
+
+    GetPort(&save);
+    FlushEvents(keyDownMask | autoKeyMask | mDownMask | mUpMask, 0);
+    d = GetNewDialog(kRuleDialog, NULL, (WindowPtr)-1);
+    if (!d)
+        return 0;
+    SetPort(d);
+    n = strlen(q->rule);
+    set_text(d, kRuleField, q->rule, n);
+    SelectDialogItemText(d, kRuleField, 0, 32767);
+    show_rule_state(d);
+    ShowWindow(d);
+    gRuleArmedAt = TickCount();
+    f = NewModalFilterUPP(rule_filter);
+    for (;;) {
+        ModalDialog(f, &hit);
+        if (hit == kRuleCancel || hit < 0)
+            break;
+        if (hit == kRuleField) {
+            show_rule_state(d);
+        } else if (hit == kRuleSave) {
+            if (TickCount() - gRuleArmedAt < ARM_TICKS)
+                continue;
+            if (show_rule_state(d))
+                break;
+        }
+    }
+    if (hit == kRuleSave) {
+        GetDialogItem(d, kRuleField, &type, &h, &r);
+        GetDialogItemText(h, ps);
+        n = ps[0] > RULE_LEN - 1 ? RULE_LEN - 1 : ps[0];
+        memcpy(q->rule, ps + 1, n);
+        q->rule[n] = 0;
+        result = 1;
+    } else {
+        result = hit < 0 ? -1 : 0;
+    }
+    DisposeDialog(d);
+    DisposeModalFilterUPP(f);
+    SetPort(save);
+    return result;
+}
+
 static pascal Boolean filter(DialogPtr d, EventRecord *ev, short *item)
 {
     char ch;
@@ -312,6 +471,7 @@ static pascal Boolean filter(DialogPtr d, EventRecord *ev, short *item)
     case keyDown:
         ch = (char)(ev->message & charCodeMask);
         if (ev->modifiers & cmdKey) {
+            if ((ch == 'r' || ch == 'R') && gReq->can_rule && !gReq->incomplete) { *item = kPermRule; flash(kPermRule); return true; }
             if ((ch == 'y' || ch == 'Y') && !gReq->incomplete) { *item = kPermAllow; flash(kPermAllow); return true; }
             if (ch == 'n' || ch == 'N') { *item = kPermDeny; flash(kPermDeny); return true; }
             if ((ch == 'a' || ch == 'A') && !gReq->incomplete) { *item = kPermAlways; flash(kPermAlways); return true; }
@@ -432,11 +592,29 @@ short permdlg_run(PermReq *q)
 
     if (q->incomplete)
         show_incomplete();
+    GetDialogItem(gDlg, kPermRule, &type, &h, &barRect);
+    if (q->can_rule && !q->incomplete) {
+        set_text(gDlg, kPermHint, "\021Y \021N \021A \021R \021. stops",
+                 strlen("\021Y \021N \021A \021R \021. stops"));
+    } else {
+        HideControl((ControlHandle)h);   /* three buttons, as before */
+    }
     ShowWindow(gDlg);
     gArmedAt = TickCount();
     filterUPP = NewModalFilterUPP(filter);
     for (;;) {
         ModalDialog(filterUPP, &hit);
+        if (hit == kPermRule) {
+            short r = rule_dialog(q);
+            if (r == 1)
+                break;
+            if (r < 0)
+                hit = -1;
+            if (r < 0)
+                break;
+            gArmedAt = TickCount();    /* clicks right after the other dialog closes are not answers */
+            continue;
+        }
         if (hit == kPermAllow || hit == kPermDeny || hit == kPermAlways || hit < 0)
             break;
     }
@@ -444,6 +622,7 @@ short permdlg_run(PermReq *q)
     case kPermAllow:  result = kPermResultAllow; break;
     case kPermAlways: result = kPermResultAlways; break;
     case kPermDeny:   result = kPermResultDeny; break;
+    case kPermRule:   result = kPermResultRule; break;
     case -2:          result = kPermResultStop; break;
     default:          result = kPermResultClosed; break;
     }

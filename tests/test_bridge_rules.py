@@ -15,16 +15,17 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import bridge  # noqa: E402
 from test_bridge_resume import Base  # noqa: E402
 
-ALLOWED = ["Read", "Bash(git status:*)", "Edit(src/**)", "WebFetch(domain:example.com)",
-           "mcp__github__get_issue", "Glob", "Bash(npm test:*)", "Bash(npm test -- --watch=false)",
-           "Write(docs/*.md)", "Bash(echo (x):*)"]
-REFUSED = ["Bash", "Bash(*)", "Bash(:*)", "Bash(sh:*)", "Bash(/bin/sh:*)", "Bash(FOO=1 sh:*)",
-           "Bash(npm test; rm -rf /:*)", "Bash(a | b:*)", "Bash(a `b`:*)", "Bash(a $(b):*)",
-           "Bash(env X:*)", "Bash(python3:*)", "Edit(/etc/**)", "Edit(../x)", "Edit(.env)",
-           "Edit(.claude/**)", "Edit(package.json)", "Edit(.github/workflows/x.yml)",
-           "Edit(~/x)", "Edit", "Write", "WebFetch", "Agent", "ExitPlanMode",
-           "ExitPlanMode(x)", "mcp__github", "Edit(*)", "Edit(**)", "Edit(/**)",
-           "Bash(" + "a" * 300 + ")", "bad rule", "Bash(x", "Bash()", "Edit(src/é)"]
+FIXTURES = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "client", "tests", "fixtures")
+
+
+def table(name):
+    """The accept and refuse tables the Mac app's host tests read too."""
+    with open(os.path.join(FIXTURES, name)) as f:
+        return [l.rstrip("\n") for l in f if l.strip()]
+
+
+ALLOWED = table("rules_allowed.txt")
+REFUSED = table("rules_refused.txt") + ["Bash(" + "a" * 300 + ")"]
 
 
 class ValidateTests(unittest.TestCase):

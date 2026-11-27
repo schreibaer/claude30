@@ -12,6 +12,7 @@
 #define PROTOCOL_H
 
 #include "linebuf.h"
+#include "rules.h"
 
 #define TICKS_PER_SEC 60L
 #define MAX_SESS      6
@@ -100,6 +101,7 @@ typedef struct {
     int last_kind;               /* 'T', 'C' or 'B': what a + line continues */
     int in_code;
     char perm_id[16];
+    char rule[RULE_LEN];         /* the Q+ rule for the open request, or "" */
     int perm_open;               /* Q seen, waiting for ? */
     int perm_asked;              /* ? seen, no answer sent yet */
     int agents_open;             /* subagent lines started (J+) and not yet ended (J-) */
@@ -166,6 +168,7 @@ struct Proto {
     int stream_cap;              /* the bridge takes <n>V on|off and can stream answers */
     int md_cap;                  /* the bridge leaves ** and __ in prose for an app that sent !MD */
     int usage_cap;               /* the bridge sends $ lines to an app that sent !USAGE */
+    int rules_cap;               /* the bridge sends Q+ to an app that sent !RULES and takes r answers */
     int cmds_cap;                /* the bridge takes <n>@ plan|default and sends @ to an app that sent !CMDS */
 
     /* The models a session may pick, from the handshake's M lines. */
@@ -251,6 +254,12 @@ int proto_stream_cap(const Proto *p);
    and cost). The core asks for it by itself after the handshake. */
 int proto_usage_cap(const Proto *p);
 int proto_cmds_cap(const Proto *p);
+int proto_rules_cap(const Proto *p);
+/* The bridge's proposed rule for the session's open request, or NULL. */
+const char *proto_rule(const Proto *p, int sid);
+/* Answers the open request "allow and save this rule". 0 when there is no
+   open request or the bridge does not offer rules. */
+int proto_answer_rule(Proto *p, int sid, const char *rule);
 /* Asks session sid to switch plan mode on or off (only with the cmds word).
    The bridge confirms with EV_MODE, so the tab shows only what it confirmed.
    Returns 0 when it was not sent. */

@@ -25,6 +25,7 @@ add_application(Claude30
     src/core/fold.c
     src/core/chatlabel.c
     src/core/usage.c
+    src/core/rules.c
     src/mac/main.c
     src/mac/serial.c
     src/mac/modem.c

@@ -1,0 +1,10 @@
+Read
+Bash(git status:*)
+Edit(src/**)
+WebFetch(domain:example.com)
+mcp__github__get_issue
+Glob
+Bash(npm test:*)
+Bash(npm test -- --watch=false)
+Write(docs/*.md)
+Bash(echo (x):*)

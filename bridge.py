@@ -3163,7 +3163,7 @@ class Channel:
 
     @property
     def rules_enabled(self):
-        return bool(self.v2.args.allow_rules and self.v2.rules_optin and not self.chat)
+        return bool(getattr(self.v2.args, "allow_rules", False) and self.v2.rules_optin and not self.chat)
 
     async def ask_permission(self, pid, name, summary, detail_lines, suggestion=None):
         await self.tag("Q", f"{pid} {name} {summary}")
@@ -3300,7 +3300,7 @@ class Channel:
             for line in allow_lines(self.cfg.cwd):
                 await self.notice(line)
         elif len(words) == 2 and words[0] == "remove" and words[1].isdigit():
-            if not self.v2.args.allow_rules:
+            if not getattr(self.v2.args, "allow_rules", False):
                 await self.notice("Removing a rule needs a bridge started with --allow-rules.")
                 return True
             removed, err = remove_allow_rule(self.cfg.cwd, int(words[1]))
@@ -3788,7 +3788,7 @@ class V2:
 
     async def run(self):
         try:
-            words = "resume ping models agents chat stream" + ("" if self.no_md else " md") + " usage cmds" + (" rules" if self.args.allow_rules else "")
+            words = "resume ping models agents chat stream" + ("" if self.no_md else " md") + " usage cmds" + (" rules" if getattr(self.args, "allow_rules", False) else "")
             await self.term.send_line(f"#OK se30bridge 2 files={self.args.files} {words}".encode(),
                                       counted=False)
             await self.send_models()
@@ -3810,7 +3810,7 @@ class V2:
                     self.cmds_optin = True
                     continue
                 if line == "!RULES":
-                    self.rules_optin = bool(self.args.allow_rules)
+                    self.rules_optin = bool(getattr(self.args, "allow_rules", False))
                     continue
                 if line == "!LIST":
                     await self.send_list()
@@ -3939,7 +3939,7 @@ async def main_async(args):
                     for line in allow_lines(cfg.cwd):
                         await term.notice(line)
                 elif len(words) == 2 and words[0] == "remove" and words[1].isdigit():
-                    if not args.allow_rules:
+                    if not getattr(args, "allow_rules", False):
                         await term.notice("Removing a rule needs a bridge started with --allow-rules.")
                     else:
                         removed, err = remove_allow_rule(cfg.cwd, int(words[1]))
