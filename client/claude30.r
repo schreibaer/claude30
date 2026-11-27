@@ -203,7 +203,7 @@ resource 'DITL' (kPermDialog) {
 		{ 278, 280, 298, 346 }, Button { enabled, "Always" };
 		{ 24, 10, 40, 490 }, UserItem { disabled };
 		{ 44, 10, 270, 490 }, UserItem { disabled };
-		{ 280, 10, 298, 274 }, StaticText { disabled, "\0x11Y \0x11N \0x11A   \0x11. stops" };
+		{ 280, 10, 298, 200 }, StaticText { disabled, "\0x11Y \0x11N \0x11A   \0x11. stops" };
 		{ 4, 10, 22, 490 }, UserItem { disabled };
 		{ 278, 208, 298, 274 }, Button { enabled, "Rule..." };
 	}
