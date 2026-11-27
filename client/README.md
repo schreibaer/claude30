@@ -39,7 +39,7 @@ The build makes two release files:
 
 ## Using it
 
-1. Open **Edit > Settings…** and check three things: the port (Modem), the speed (57,600) and the dial string (`ATDTbridge`). The dial string goes to the modem exactly as typed.
+1. Open **Edit > Settings…** and check three things: the port (Modem), the speed (57,600, or 115,200, see below) and the dial string (`ATDTbridge`). The dial string goes to the modem exactly as typed.
 2. Choose **Session > Connect** (Cmd-K). The status line goes from "Dialing…" to "Connected at 57,600".
 3. The first time, a list of the host's projects opens. Pick one and click **Open**. It opens in a tab named after the project.
 4. Type a prompt and press **Return**, or click **Send**.
@@ -181,12 +181,24 @@ The SE/30's serial hardware can drop bytes at 57,600 baud. Prove the link before
 2. On the SE/30, choose **Session > Link Test…**. Enter a duration (60 minutes) and click Start.
 3. The test dials, opens the first project, sends a fixed prompt to the demo again and again, and counts bytes, lines and serial errors. It ends after the duration, or when you press Cmd-period or Stop. Its summary goes into the transcript.
 4. If it reports serial errors at 57,600, repeat at 38,400, then at 19,200. Each time, set the same speed in three places: the Settings dialog, `run.sh --baud`, and the WiFi232's own serial speed.
+5. To try the other way, 115,200, set the same three places (`AT$SB=115200` then `AT&W` on the WiFi232, `./run.sh --demo --baud 115200`, Settings) and run the test again. Turn AppleTalk and virtual memory off first. The summary now ends with bytes per second, so you can compare the speeds.
 
 Record the results here:
 
-| Date | Speed | Minutes | Bytes | Serial errors |
-|---|---|---|---|---|
-| | 57,600 | 60 | | |
+| Date | Speed | Minutes | Bytes | Bytes/s | Serial errors |
+|---|---|---|---|---|---|
+| | 57,600 | 60 | | | |
+| | 115,200 | 60 | | | |
+
+## 115,200 baud
+
+The Settings dialog offers 115,200 as well as 57,600, 38,400 and 19,200. The SE/30's own serial driver can't name a rate above 57,600, so at 115,200 Claude30 does one of two things after the port opens:
+
+- If the driver accepts Apple's 115K call (the SerialDMA driver of the AV Macs and Power Macs), the status line says "connected at 115,200 (driver)".
+- On an SE/30 whose driver doesn't know the call, Claude30 switches the serial chip's clock itself and the status line says "(chip clock)". It takes the clock from the 3.672 MHz RTxC pin in x32 mode, which gives 114,750 baud, 0.4% under 115,200. This is the same switch Apple's SerialDMA driver makes. It writes three Z8530 registers (WR4 = 0x84, WR11 = 0x00, WR14 = 0x00) and nothing else, so DTR, RTS and the interrupt setup stay as the driver left them. It is a setting in the chip only: Disconnect, Quit or a restart returns it to the driver's own. Nothing is patched, installed or saved.
+- On any other Mac, or if the driver gives any other error, Connect stops with "This Mac can't set 115,200 baud" and leaves the port closed. It doesn't open at 57,600 instead, because the WiFi232 would still be at 115,200 and you would see garbage instead of a reason.
+
+Only the SE/30 has been checked for the chip switch, and only a run on the real machine can show that it holds. Use the link test above, and keep AppleTalk and virtual memory off.
 
 ## When Wi-Fi drops
 

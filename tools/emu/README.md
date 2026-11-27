@@ -56,7 +56,7 @@ socat TCP:127.0.0.1:1984 pty,raw,echo=0,link=/tmp/se30-tcpser &
 tcpser -d /tmp/se30-tcpser -s 57600 -n "bridge=127.0.0.1:2324"
 ```
 
-Then run the link test at 57,600, 38,400 and 19,200 and compare the serial error counts.
+Then run the link test at 57,600, 38,400 and 19,200 and compare the serial error counts. For 115,200, start tcpser with `-s 115200` (or `SPEED=115200 tools/emu/basilisk-modem.sh`) and `./run.sh --baud 115200`. Basilisk II isn't an SE/30, so there Claude30 only tries Apple's driver call and otherwise shows the "can't set 115,200 baud" alert; the chip switch runs only on an SE/30 (or Snow).
 
 ## Manual test checklist
 
@@ -198,6 +198,8 @@ Run these in the emulator, and the hardware rows on the SE/30. Tick each one.
 | ☐ | Scrolled up, new output does not move the view; scrolled to the bottom, the view follows new output | Emulator |
 | ☐ | Copy from the transcript and paste into the input work | Emulator |
 | ☐ | Change the speed to 38,400, quit and relaunch: the setting persists and the port opens at 38,400 | Emulator |
+| ☐ | Settings lists 115,200, 57,600, 38,400 and 19,200 with the chosen one selected, and fits the 512 x 342 screen with every control visible. Connect at 115,200 in Basilisk II either connects ("(driver)") or shows "This Mac can't set 115,200 baud" and leaves Connect available | Emulator |
+| ☐ | The link test summary includes bytes per second, and a test stopped at once shows 0 | Emulator |
 | ☐ | The stress bridge's `wide` case shows every character of the 3,000-byte command across marked rows | Emulator |
 | ☐ | The `perm` case's dialog opens with the bold line `Write big.txt: +2000 lines` above the header, and the list still scrolls to the last line | Emulator |
 | ☐ | The `edit` case shows `Edit parser.py: +12 -3 lines in 2 places`, and `wide` shows `Bash: long command (3000 characters), read it below` | Emulator |
@@ -215,6 +217,8 @@ Run these in the emulator, and the hardware rows on the SE/30. Tick each one.
 |---|---|
 | ☐ | The `.bin` arrives through `tools/send-to-mac.sh` and ZTerm, and the app launches from the Finder with its icon |
 | ☐ | A 60-minute link test at 57,600 reports zero serial errors, or the speed that does is recorded in `client/README.md` |
+| ☐ | At 115,200 (WiFi232 `AT$SB=115200`, `run.sh --baud 115200`, AppleTalk and virtual memory off) the status line says "connected at 115,200 (chip clock)", a prompt and a long answer arrive without garbled text, and a 60-minute link test reports zero serial errors and clearly more bytes per second than at 57,600; results go in `client/README.md` |
+| ☐ | After a 115,200 session, Disconnect then Connect at 57,600 (WiFi232 back at 57,600) works without quitting, and ZTerm opened afterwards at its own speed works |
 | ☐ | A one-hour session with at least one diff of several hundred lines completes with no "Line noise" marker |
 | ☐ | Menus and window dragging stay responsive while Claude streams a long answer |
 | ☐ | Curly quotes and dashes from Claude display correctly |
