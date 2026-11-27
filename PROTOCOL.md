@@ -372,6 +372,20 @@ When Claude asks to leave plan mode (the `ExitPlanMode` tool) the request is an 
 
 Tools: the bridge sets `permission_mode="plan"` when it starts the CLI and uses the SDK's `set_permission_mode` otherwise, then allows `ExitPlanMode` with a `setMode` update.
 
+## Rules (`rules`)
+
+The bridge offers `rules` in `#OK` only when it was started with `--allow-rules`. The link is not authenticated and a saved rule outlives the conversation, so the host turns the feature on, never the app. A client that wants it sends `!RULES` once after the project list, as it sends `!CMDS`. Without `!RULES`, no `Q+` line is sent and an `r` answer counts as `n`. This follows `docs/solutions/architecture-patterns/protocol-v2-new-bridge-lines-need-client-opt-in.md`.
+
+| Line | Direction | Meaning |
+|------|-----------|---------|
+| `!RULES` | client to bridge | opt in to `Q+` lines |
+| `<n>Q+ <id> <rule>` | bridge to client | the rule the CLI proposes for request `<id>`, as `Tool(content)` or `Tool`; sent just after that request's `<n>Q` line and before its `<n>?`. Never sent for ExitPlanMode, in a chat, or when the CLI offers no suggestion and no exact-input fallback |
+| `<n>A <id> r <rule>` | client to bridge | allow request `<id>` and save `<rule>` to the project's `.claude/settings.local.json` under `permissions.allow` |
+
+The bridge checks the rule before it allows anything. It refuses a rule that the refused-pattern list rules out (bare `Bash`, wildcard-only specifiers, Bash prefixes with shell operators, shell or interpreter first words, absolute or `..` paths, secret and build-config paths, ExitPlanMode, a whole MCP server, more than 200 bytes). It also refuses a rule for another tool, a rule that does not cover this request, and a rule broader than the one offered. A refused rule gives `<n>I Rule not saved: <why>` and the request is denied. An allowed rule is saved by the Claude CLI itself through a `localSettings` permission update. After the allow the bridge looks for the rule in the file and sends `<n>I Rule saved: <rule>` or `<n>I Rule not saved.`
+
+`/allow` lists the rules, numbered. `/allow remove N` deletes entry N from `.claude/settings.local.json` (an atomic rewrite) and restarts the CLI on the same conversation so it stops applying; it needs `--allow-rules`. Malformed JSON is reported and never rewritten. Both are typed commands, so tty mode, v1 and ZTerm have them too, and a chat answers that they do not apply.
+
 ## Files
 
 File lines are session lines. Each request names a path relative to the session's project folder, so the bridge resolves it against that folder and nothing else. `<x>` is a transfer number the client chooses; every retry uses a fresh one, so late lines from an earlier try are dropped as unknown. Paths come last on a line because they may contain spaces. They use `/` between folders, and the empty path is the project folder itself.
