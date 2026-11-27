@@ -46,7 +46,8 @@
 #define kCloseTabItem   11
 #define kModelItem      13
 #define kStreamItem     14
-#define kLinkTestItem   16
+#define kPlanItem       15
+#define kLinkTestItem   17
 
 /* Window */
 #define kMainWindow     128

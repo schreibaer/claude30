@@ -91,6 +91,10 @@ Each tab has its own Claude model and effort, so a quick question can run on a c
 - When either is set, the status line ends with it in brackets, for example `[sonnet, high]`. The tab remembers both across a redial and relaunching, and a tab reopened after a drop uses them from its first turn. If the bridge no longer offers a remembered model, the tab falls back to the bridge default and the transcript says so.
 - New tabs start at the bridge default. An older bridge (without `models`) leaves the menu item dimmed.
 
+### Plan Mode and commands
+
+**Session > Plan Mode** is a checked item for the front tab (needs a bridge that offers `cmds`). While it is on, Claude plans and does not edit; the status line shows `plan`. When Claude has a plan it asks "Approve plan" in the usual permission window, and Allow ends plan mode. Typing `/compact` or a project or user command (for example `/review`) sends it to Claude Code; other built-in commands are refused with a notice, and `/commands` lists what is available.
+
 ### Stream Answers
 
 **Session > Stream Answers** is a checked item for the front tab. When it is on, Claude's prose appears as it is written, in pieces of a few words, instead of all at once after a long answer; code blocks still arrive one finished line at a time, and a subagent's own text stays hidden.

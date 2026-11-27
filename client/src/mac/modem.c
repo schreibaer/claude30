@@ -139,6 +139,7 @@ static void open_tab(Tab *t)
 {
     char s[128];
     t->unavailable = false;
+    t->plan = false;                 /* the bridge says after <n>Y */
     if (t->chat ? !gProto.chat_cap : !in_project_list(t->project)) {
         t->unavailable = true;
         snprintf(s, sizeof(s), t->chat ? "The host does not offer chats." : "%s is not available on the host.", t->project);
@@ -398,6 +399,10 @@ static void tab_event(Tab *t, EventKind k, const char *s, long n)
         }
         break;
     }
+    case EV_MODE:
+        t->plan = n == 4;                /* "plan"; "default" is anything else */
+        gTabsChanged = true;
+        break;
     case EV_MODEL: {
         /* "<model|-> <effort|->": what the tab runs with, or will from its
            next turn. A value the bridge corrected (a model it no longer
@@ -594,10 +599,12 @@ static void update_status(void)
                      wait->project, waiting - 1);
         else if (front) {
             front_status(front, s, sizeof(s));
-            if (front->model[0] || front->effort[0]) {
+            if (front->model[0] || front->effort[0] || front->plan) {
                 size_t k = strlen(s);
-                snprintf(s + k, sizeof(s) - k, " [%s%s%s]", front->model,
-                         front->model[0] && front->effort[0] ? ", " : "", front->effort);
+                snprintf(s + k, sizeof(s) - k, " [%s%s%s%s%s]", front->model,
+                         front->model[0] && front->effort[0] ? ", " : "", front->effort,
+                         (front->model[0] || front->effort[0]) && front->plan ? ", " : "",
+                         front->plan ? "plan" : "");
             }
         } else
             strcpy(s, "No project open. Press Cmd-T.");
@@ -655,6 +662,35 @@ Boolean session_stream_on(void)
 {
     Tab *t = tabs_front();
     return t && t->stream && (gProto.state != ST_ONLINE || gProto.stream_cap);
+}
+
+/* Plan mode is for the front tab. It needs the cmds word, a project tab
+   (a chat has no plan mode) and an open session; the checkmark is the mode
+   the bridge confirmed. */
+Boolean session_plan_available(void)
+{
+    Tab *t = tabs_front();
+    return t && !t->chat && gProto.state == ST_ONLINE && gProto.cmds_cap
+        && proto_sess_state(&gProto, t->sid) != SS_NONE
+        && proto_sess_state(&gProto, t->sid) != SS_CLOSING;
+}
+
+Boolean session_plan_on(void)
+{
+    Tab *t = tabs_front();
+    return t && t->plan;
+}
+
+void session_plan_toggle(void)
+{
+    Tab *t = tabs_front();
+    if (!t || !session_plan_available())
+        return;
+    if (proto_sess_state(&gProto, t->sid) == SS_READY)
+        window_set_status(t->plan ? "Leaving plan mode..." : "Entering plan mode...");
+    else
+        window_set_status("Plan mode changes after this turn.");
+    proto_set_plan(&gProto, t->sid, !t->plan);   /* the bridge confirms with EV_MODE */
 }
 
 void session_stream_toggle(void)

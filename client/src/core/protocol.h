@@ -75,6 +75,8 @@ typedef enum {
                         its next turn): text is "<model|-> <effort|->" */
     EV_USAGE,        /* the conversation's context and cost: the $ payload
                         "<used> <window> <cost>" (usage.h parses it) */
+    EV_MODE,         /* a session's plan mode, confirmed by the bridge: text is
+                        "plan" or "default" */
     /* Files (files.h). During these, proto_xfer() names the transfer. */
     EV_LIST_BEGIN,   /* text is the folder's path */
     EV_LIST_ENTRY,   /* text is "d|f <size> <name>": see files_parse_entry */
@@ -164,6 +166,7 @@ struct Proto {
     int stream_cap;              /* the bridge takes <n>V on|off and can stream answers */
     int md_cap;                  /* the bridge leaves ** and __ in prose for an app that sent !MD */
     int usage_cap;               /* the bridge sends $ lines to an app that sent !USAGE */
+    int cmds_cap;                /* the bridge takes <n>@ plan|default and sends @ to an app that sent !CMDS */
 
     /* The models a session may pick, from the handshake's M lines. */
     char models[MAX_MODELS][MODEL_LEN];
@@ -247,6 +250,11 @@ int proto_stream_cap(const Proto *p);
 /* The bridge reports each session's context and cost (PROTOCOL.md, Context
    and cost). The core asks for it by itself after the handshake. */
 int proto_usage_cap(const Proto *p);
+int proto_cmds_cap(const Proto *p);
+/* Asks session sid to switch plan mode on or off (only with the cmds word).
+   The bridge confirms with EV_MODE, so the tab shows only what it confirmed.
+   Returns 0 when it was not sent. */
+int proto_set_plan(Proto *p, int sid, int on);
 /* Turns streaming on or off for session sid, open or not; the bridge keeps
    it for the next open of that number. Streamed prose arrives as the usual
    EV_TEXT and EV_TEXT_CONT, in more and smaller pieces. Returns 0 when it

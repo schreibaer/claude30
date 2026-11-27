@@ -40,6 +40,7 @@ typedef struct Tab {
     char model[32];              /* its Claude model ("" = the bridge default) */
     char effort[8];              /* low, medium, high, xhigh or max ("" = default) */
     Boolean stream;              /* Stream Answers is on for it */
+    Boolean plan;                /* plan mode, as the bridge confirmed it */
     Usage usage;                 /* its context and cost, from the bridge's $ line */
     Boolean token_sent;          /* opened asking to resume: its <n>Y says how it went */
     Boolean opened_once;         /* a conversation ran in it this launch */
