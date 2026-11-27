@@ -87,6 +87,7 @@
 #define kSetDial        8
 #define kSetHideBar     13
 #define kSetHideCost    14
+#define kSet115200      15      /* listed last, drawn first: item numbers never move */
 
 #define kPermAllow      1
 #define kPermDeny       2

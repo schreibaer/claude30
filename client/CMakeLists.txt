@@ -27,6 +27,7 @@ add_application(Claude30
     src/core/find.c
     src/core/usage.c
     src/core/rules.c
+    src/core/speedroute.c
     src/mac/main.c
     src/mac/serial.c
     src/mac/modem.c
