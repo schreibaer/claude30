@@ -41,6 +41,9 @@ typedef struct {
     char project[TAB_NAME_MAX + 1];
     char path[256];
     const char *name;            /* last component of path */
+    char label[96];              /* title text: the name, or "Changes" / "<name> diff" */
+    Boolean virt;                /* :changes or :diff/..., a snapshot the bridge makes */
+    Boolean changes;             /* the :changes list: lines open diffs */
     TEHandle te;
     ControlHandle bar;
     Rect view, status_rect;
@@ -154,6 +157,8 @@ static const char *ro_reason(const char *mode)
         return "its line endings are mixed";
     if (strcmp(mode, "r:ro") == 0)
         return "the bridge allows reading only";
+    if (strcmp(mode, "r:changes") == 0 || strcmp(mode, "r:diff") == 0)
+        return "a snapshot";
     return "it cannot be edited here";
 }
 
@@ -163,7 +168,7 @@ static void set_title(FileWin *f)
 {
     char s[300];
     Str255 p;
-    snprintf(s, sizeof(s), "%s%s \xD1 %s", f->dirty ? "\xA5 " : "", f->name, f->project);
+    snprintf(s, sizeof(s), "%s%s \xD1 %s", f->dirty ? "\xA5 " : "", f->label, f->project);
     c2p(s, p);
     SetWTitle(f->w, p);
 }
@@ -183,6 +188,9 @@ static void draw_status(FileWin *f)
         strcpy(s, "Offline: Save works again once the tab reconnects.");
     else if (f->host_changed)
         strcpy(s, "Changed on the host.");
+    else if (f->virt && f->phase == FW_READY)
+        strcpy(s, f->changes ? "Snapshot. Double-click a file for its diff. Revert to Saved refreshes."
+                             : "Snapshot. Revert to Saved refreshes.");
     else if (!f->editable && f->mode[0])
         snprintf(s, sizeof(s), "Read-only: %s. Lines %ld-%ld of %ld%s.", ro_reason(f->mode),
                  f->slice_n ? f->top + 1 : 0, f->top + 1 + ((f->view.bottom - f->view.top) / f->line_h),
@@ -485,8 +493,8 @@ static void start_load(FileWin *f)
 
 static void check_token(FileWin *f)
 {
-    if (f->check >= 0 || f->phase != FW_READY || f->offline || !f->w)
-        return;
+    if (f->check >= 0 || f->phase != FW_READY || f->offline || !f->w || f->virt)
+        return;     /* a snapshot never refreshes itself: a check would remake it */
     f->check = proto_read(session_proto(), f->sid, index_of(f), f->path, 0, 0, PIECE_BYTES);
 }
 
@@ -734,13 +742,21 @@ void filewin_open(Tab *t, const char *path)
     snprintf(f->path, sizeof(f->path), "%s", path);
     slash = strrchr(f->path, '/');
     f->name = slash ? slash + 1 : f->path;
+    f->virt = f->path[0] == ':';
+    f->changes = strcmp(f->path, CHANGES_PATH) == 0;
+    if (f->changes)
+        strcpy(f->label, "Changes");
+    else if (f->virt)
+        snprintf(f->label, sizeof(f->label), "%.80s diff", f->name);
+    else
+        snprintf(f->label, sizeof(f->label), "%.90s", f->name);
 
     SetRect(&r, 16 + open * 16, 44 + open * 16, 16 + open * 16 + WIN_W, 44 + open * 16 + WIN_H);
     if (r.bottom > qd.screenBits.bounds.bottom - 4)
         OffsetRect(&r, 0, (short)(qd.screenBits.bounds.bottom - 4 - r.bottom));
     if (r.right > qd.screenBits.bounds.right - 4)
         OffsetRect(&r, (short)(qd.screenBits.bounds.right - 4 - r.right), 0);
-    c2p(f->name, title);
+    c2p(f->label, title);
     f->w = NewWindow(NULL, &r, title, false, zoomDocProc, (WindowPtr)-1, true, 0);
     if (!f->w) {
         alert_text("There is not enough memory for another window.");
@@ -810,6 +826,62 @@ void filewin_activate(WindowPtr w, Boolean on)
     DrawGrowIcon(w);
 }
 
+/* The :changes list: a click selects the whole line, a second click on it
+   (or Return) opens that file's diff. Lines that name no file only select. */
+static void open_selected_diff(FileWin *f)
+{
+    char *t = (char *)*(*f->te)->hText;
+    long a = (*f->te)->selStart, b = (*f->te)->selEnd;
+    char path[200], full[256];
+    Tab *tab = tabs_by_sid(f->sid);
+    if (!tab || b <= a || !files_changes_path(t + a, b - a, path, sizeof(path))) {
+        SysBeep(1);
+        return;
+    }
+    snprintf(full, sizeof(full), "%s%s", DIFF_PREFIX, path);
+    filewin_open(tab, full);
+}
+
+/* 0x02F0 is the DoubleTime low-memory global; GetDblTime is not in the
+   Retro68 library. */
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Warray-bounds"
+static unsigned long dbl_time(void)
+{
+    return (unsigned long)*(volatile long *)0x02F0;
+}
+#pragma GCC diagnostic pop
+
+static void changes_click(FileWin *f, Point p)
+{
+    static unsigned long last_tick;
+    static long last_start = -1;
+    static FileWin *last_win;
+    TEHandle te = f->te;
+    long off = TEGetOffset(p, te), a, b, len = (*te)->teLength;
+    char *t;
+    if (len == 0)
+        return;
+    t = (char *)*(*te)->hText;
+    if (off > len)
+        off = len;
+    a = off;
+    while (a > 0 && t[a - 1] != '\r')
+        a--;
+    b = off;
+    while (b < len && t[b] != '\r')
+        b++;
+    TESetSelect(a, b, te);
+    if (last_win == f && last_start == a && TickCount() - last_tick <= dbl_time()) {
+        last_win = NULL;
+        open_selected_diff(f);
+        return;
+    }
+    last_win = f;
+    last_start = a;
+    last_tick = TickCount();
+}
+
 void filewin_click(WindowPtr w, EventRecord *ev)
 {
     FileWin *f = find(w);
@@ -835,6 +907,10 @@ void filewin_click(WindowPtr w, EventRecord *ev)
         gTracking = NULL;
         return;
     }
+    if (PtInRect(p, &f->view) && f->changes && f->phase == FW_READY) {
+        changes_click(f, p);
+        return;
+    }
     if (PtInRect(p, &f->view)) {
         TEClick(p, (ev->modifiers & shiftKey) != 0, f->te);
         if (f->editable)
@@ -850,6 +926,10 @@ void filewin_key(WindowPtr w, EventRecord *ev)
     if (!f)
         return;
     SetPort(w);
+    if (f->changes && f->phase == FW_READY && (ch == '\r' || ch == 3)) {
+        open_selected_diff(f);
+        return;
+    }
     if (!f->editable || f->phase != FW_READY) {
         if (!f->editable && f->phase == FW_READY && (ch == 0x1E || ch == 0x1F))
             ro_set_top(f, f->top + (ch == 0x1E ? -1 : 1));
@@ -1020,6 +1100,13 @@ void filewin_revert(WindowPtr w)
     Str255 p;
     if (!f || !filewin_can_revert(w))
         return;
+    if (f->virt) {              /* take a new snapshot, from the top */
+        f->top = f->target = 0;
+        f->slice_n = 0;
+        f->keep_top = 0;
+        start_load(f);
+        return;
+    }
     c2p(f->name, p);
     ParamText(p, "\p", "\p", "\p");
     if (CautionAlert(kRevertAlert, NULL) != 1)
@@ -1038,7 +1125,7 @@ Boolean filewin_can_save(WindowPtr w)
 Boolean filewin_can_revert(WindowPtr w)
 {
     FileWin *f = find(w);
-    return f && f->editable && f->dirty && f->phase == FW_READY && !f->offline;
+    return f && f->phase == FW_READY && !f->offline && ((f->editable && f->dirty) || f->virt);
 }
 
 Boolean filewin_editable(WindowPtr w)

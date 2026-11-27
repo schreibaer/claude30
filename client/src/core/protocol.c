@@ -109,6 +109,7 @@ static void reset_link(Proto *p)
     p->usage_cap = 0;
     p->cmds_cap = 0;
     p->rules_cap = 0;
+    p->changes_cap = 0;
     p->nmodels = 0;
     p->def_model[0] = 0;
     p->def_effort[0] = 0;
@@ -331,6 +332,7 @@ static void read_ok(Proto *p, const char *line, long n)
     p->usage_cap = 0;
     p->cmds_cap = 0;
     p->rules_cap = 0;
+    p->changes_cap = 0;
     while (i < n) {
         long w;
         while (i < n && line[i] == ' ')
@@ -362,6 +364,8 @@ static void read_ok(Proto *p, const char *line, long n)
             p->cmds_cap = 1;
         else if (equals(line + w, i - w, "rules"))
             p->rules_cap = 1;
+        else if (equals(line + w, i - w, "changes"))
+            p->changes_cap = 1;
     }
 }
 
@@ -994,6 +998,11 @@ int proto_cmds_cap(const Proto *p)
 int proto_rules_cap(const Proto *p)
 {
     return p->rules_cap;
+}
+
+int proto_changes_cap(const Proto *p)
+{
+    return p->changes_cap;
 }
 
 const char *proto_rule(const Proto *p, int sid)

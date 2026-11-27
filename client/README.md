@@ -118,6 +118,10 @@ Each tab label ends in a small upright bar that fills as the conversation's cont
 - Type `/usage` in a tab for the context used out of the window, the biggest categories and the cost with its number of turns.
 - This needs a bridge with the `usage` capability word; against an older one there are no bars and the status line looks as before.
 
+### Changes (Session > Show Changes)
+
+For a project tab on a bridge that sends the `changes` word (git on the host, `--files` not `off`), Show Changes opens a read-only list of what changed since the last commit, with the branch on the first line and a `+added -deleted` count per file. Click selects a line; double-click or Return opens that file's diff in its own read-only window. Both are snapshots: they never refresh on their own, and File > Revert to Saved takes a new one. They count toward the six file windows. Toolbox: the same Window Manager, TextEdit and Control Manager calls as the other file windows, plus TEGetOffset and TickCount for the double-click (the double-click time is read from the low-memory global at 0x02F0). Needs no more memory than a read-only file window. Untested on a real SE/30 or an emulator.
+
 ### Project files
 
 **File > Open Project File…** (Cmd-O) browses the front tab's project, folders first. Double-click a folder to go into it, and **Up** (or Cmd-up arrow) to go back. Typing selects by name. The list hides `.git`, secrets such as `.env` and keys, and anything the project's git ignore rules exclude.

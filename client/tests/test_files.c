@@ -476,6 +476,38 @@ static void test_close_and_loss(void)
     CHECK(proto_read(&P, 1, 99, "a", 0, 1, 0) == 3);
 }
 
+static int path_of(const char *line, char *out)
+{
+    return files_changes_path(line, (long)strlen(line), out, 256);
+}
+
+static void test_changes_lines(void)
+{
+    char o[256];
+    CHECK(path_of(" M src/main.c +3 -1", o));
+    CHECK(strcmp(o, "src/main.c") == 0);
+    CHECK(path_of("?? notes today.txt +12 -0", o));
+    CHECK(strcmp(o, "notes today.txt") == 0);
+    CHECK(path_of("A  logo.png binary", o));
+    CHECK(strcmp(o, "logo.png") == 0);
+    CHECK(path_of("R  new name.c (from old name.c) +0 -0", o));
+    CHECK(strcmp(o, "new name.c") == 0);
+    CHECK(path_of(" D gone.c +0 -9", o));
+    CHECK(strcmp(o, "gone.c") == 0);
+    /* A name that looks like the tail still resolves from the right end. */
+    CHECK(path_of(" M a +1 -1 b +2 -3", o));
+    CHECK(strcmp(o, "a +1 -1 b") == 0);
+    /* Lines that name no file. */
+    CHECK(!path_of("Branch: main", o));
+    CHECK(!path_of("No changes since the last commit.", o));
+    CHECK(!path_of("", o));
+    CHECK(!path_of(" M no counts", o));
+    CHECK(!path_of(" M +1 -1", o));
+    CHECK(!path_of("   x +1 -1", o));
+    CHECK(!path_of(" M clipped/name\xC9", o));
+    CHECK(files_changes_path(" M abcdef +1 -1", 15, o, 4) == 0);
+}
+
 int main(void)
 {
     test_crc32();
@@ -486,6 +518,7 @@ int main(void)
     test_save();
     test_save_resend_and_conflict();
     test_close_and_loss();
+    test_changes_lines();
     proto_free(&P);
     CHECK_DONE();
 }

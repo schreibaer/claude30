@@ -43,6 +43,7 @@ ITEMS = {
     "kModelItem": ("kSessionMenu", "Model and Effort"),
     "kStreamItem": ("kSessionMenu", "Stream Answers"),
     "kPlanItem": ("kSessionMenu", "Plan Mode"),
+    "kChangesItem": ("kSessionMenu", "Show Changes"),
     "kLinkTestItem": ("kSessionMenu", "Link Test"),
 }
 

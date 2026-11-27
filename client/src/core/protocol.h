@@ -169,6 +169,7 @@ struct Proto {
     int md_cap;                  /* the bridge leaves ** and __ in prose for an app that sent !MD */
     int usage_cap;               /* the bridge sends $ lines to an app that sent !USAGE */
     int rules_cap;               /* the bridge sends Q+ to an app that sent !RULES and takes r answers */
+    int changes_cap;             /* the bridge serves :changes and :diff/<path> as read-only files */
     int cmds_cap;                /* the bridge takes <n>@ plan|default and sends @ to an app that sent !CMDS */
 
     /* The models a session may pick, from the handshake's M lines. */
@@ -255,6 +256,7 @@ int proto_stream_cap(const Proto *p);
 int proto_usage_cap(const Proto *p);
 int proto_cmds_cap(const Proto *p);
 int proto_rules_cap(const Proto *p);
+int proto_changes_cap(const Proto *p);
 /* The bridge's proposed rule for the session's open request, or NULL. */
 const char *proto_rule(const Proto *p, int sid);
 /* Answers the open request "allow and save this rule". 0 when there is no
