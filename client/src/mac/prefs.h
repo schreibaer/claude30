@@ -19,7 +19,7 @@
 typedef struct {
     short version;
     short port;        /* kPortModem or kPortPrinter */
-    short speed;       /* kSpeed57600, kSpeed38400 or kSpeed19200 */
+    short speed;       /* kSpeed57600, kSpeed38400, kSpeed19200 or kSpeed115200 */
     Str63 dial;        /* Pascal string, sent verbatim */
     short ntabs;       /* remembered tabs */
     Str63 tabs[PREFS_TABS];  /* their project names, in strip order */

@@ -87,6 +87,7 @@
 #define kSetDial        8
 #define kSetHideBar     13
 #define kSetHideCost    14
+#define kSet115200      15      /* the last item in the list, placed first on screen */
 
 #define kPermAllow      1
 #define kPermDeny       2

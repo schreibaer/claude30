@@ -87,6 +87,10 @@ ATDTbridge
 
 Press ctrl-C to stop Claude, use `/help` for commands, and type `+++`, wait a second, then `ATH` to hang up.
 
+### Faster: 115,200 baud
+
+ZTerm can run at 115200 8N1 too. Set all three places to the same speed: `AT$SB=115200` and `AT&W` on the WiFi232, `./run.sh --baud 115200` on the host, and the speed in ZTerm or in Claude30's Settings. Turn AppleTalk and virtual memory off first: the SE/30's serial chip can lose bytes at high speeds when something holds interrupts off. Claude30's link test (`client/README.md`) tells you whether the link keeps up.
+
 ## Options
 
 | Flag | Default | |
@@ -96,7 +100,7 @@ Press ctrl-C to stop Claude, use `/help` for commands, and type `+++`, wait a se
 | `--max-sessions N` | 6 | tabs open at once |
 | `--files rw\|ro\|off` | rw | what Claude30 may do with project files |
 | `--demo` | off | no Claude, canned output |
-| `--baud N` | 57600 | pace output to the serial speed (0 = off) |
+| `--baud N` | 57600 | pace output to the serial speed, for example 115200 (0 = off) |
 | `--cols / --rows` | 80 / 24 | wrap width and pager height |
 | `--charset ascii\|macroman` | ascii | try `macroman` for real curly quotes in ZTerm |
 | `--accept-edits` | off | don't ask before file edits |

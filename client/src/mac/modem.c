@@ -533,8 +533,8 @@ static void front_status(Tab *t, char *s, short max)
         snprintf(s, max, "Opening %s\xC9", t->project);
         break;
     case SS_READY:
-        snprintf(s, max, "%s: connected at %s. Type a prompt and press Return.",
-                 t->project, serial_speed_name(gPrefs.speed));
+        snprintf(s, max, "%s: connected at %s%s. Type a prompt and press Return.",
+                 t->project, serial_speed_name(serial_open_speed(gPrefs.speed)), serial_route_name());
         break;
     case SS_BUSY:
         quiet = proto_silence_secs(&gProto);
@@ -811,7 +811,14 @@ static Boolean open_port(void)
     OSErr err = serial_open(gPrefs.port, gPrefs.speed);
     if (err) {
         gAlert = kAlertFailed;
-        if (err == kPortInUseErr)
+        if (err == kSpeedUnavailableErr) {
+            long why, machine;
+            serial_refusal(&why, &machine);
+            snprintf(gAlertMsg, sizeof(gAlertMsg),
+                     "This Mac can't set %s baud (driver error %ld, machine %ld). Choose another speed in Settings.",
+                     serial_speed_name(gPrefs.speed), why, machine);
+        }
+        else if (err == kPortInUseErr)
             snprintf(gAlertMsg, sizeof(gAlertMsg), "The %s port is in use by another program.",
                      gPrefs.port == kPortPrinter ? "printer" : "modem");
         else

@@ -57,13 +57,13 @@ static void format_stats(char *out, short max, Boolean done)
         state = session_link_state() == ST_DIALING || session_link_state() == ST_HANDSHAKE
               ? "Connecting\xC9" : "Running. Cmd-period or Stop ends the test.";
     snprintf(out, max,
-             "Speed: %s on the %s port\r"
+             "Speed: %s%s on the %s port\r"
              "Elapsed: %lu:%02lu\r"
              "Bytes received: %ld\r"
              "Lines received: %ld\r"
              "Turns: %ld\r"
              "Serial errors: %ld\r\r%s",
-             serial_speed_name(gPrefs.speed), gPrefs.port == kPortPrinter ? "printer" : "modem",
+             serial_speed_name(serial_open_speed(gPrefs.speed)), serial_route_name(), gPrefs.port == kPortPrinter ? "printer" : "modem",
              secs / 60, secs % 60, st->bytes, st->lines, st->turns, st->errors, state);
 }
 
@@ -152,8 +152,9 @@ void linktest_run(void)
         LinkStats *st = session_linkstats();
         unsigned long secs = (TickCount() - st->started) / 60;
         snprintf(summary, sizeof(summary),
-                 "Link test at %s: %lu min, %ld bytes, %ld lines, %ld turns, %ld serial errors%s",
-                 serial_speed_name(gPrefs.speed), secs / 60, st->bytes, st->lines, st->turns,
+                 "Link test at %s%s: %lu min, %ld bytes (%ld bytes/s), %ld lines, %ld turns, %ld serial errors%s",
+                 serial_speed_name(serial_open_speed(gPrefs.speed)), serial_route_name(), secs / 60, st->bytes,
+                 secs ? st->bytes / (long)secs : 0L, st->lines, st->turns,
                  st->errors, st->failed ? " (ended early)" : "");
     }
     DisposeDialog(d);

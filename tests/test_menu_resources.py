@@ -94,6 +94,17 @@ def button_overlaps(items):
             for b in buttons if overlaps(r, b)]
 
 
+def settings_items(src=None):
+    """[(kind, rect, text)] for the Settings DITL, in item order (item 1 first)."""
+    if src is None:
+        src = open(RSRC, encoding="mac_roman").read()
+    m = re.search(r"resource 'DITL' \(kSettingsDialog\)\s*\{\s*\{(.*?)\n\t\}\s*\};", src, re.S)
+    return [(kind, tuple(int(n) for n in rect), text)
+            for *rect, kind, text in re.findall(
+                r"\{\s*(-?\d+),\s*(-?\d+),\s*(-?\d+),\s*(-?\d+)\s*\},\s*(\w+)\s*\{\s*\w+,\s*\"([^\"]*)\"",
+                m.group(1))]
+
+
 class MenuResourceTests(unittest.TestCase):
     def test_masks_have_separators_off_and_items_on(self):
         found = menus()
@@ -134,6 +145,26 @@ class MenuResourceTests(unittest.TestCase):
             self.assertEqual(
                 button_overlaps(items), [],
                 f"{name}: an item overlaps a button and will erase it when redrawn")
+
+    def test_settings_dialog_offers_four_speeds_and_fits_the_screen(self):
+        items = settings_items()
+        defs = dict(re.findall(r"#define\s+(kSet\w+)\s+(\d+)", open(HDR).read()))
+        speeds = {"kSet115200": "115,200 baud", "kSet57600": "57,600 baud",
+                  "kSet38400": "38,400 baud", "kSet19200": "19,200 baud"}
+        for const, text in speeds.items():
+            self.assertIn(const, defs, f"{const} missing from resources.h")
+            kind, _, label = items[int(defs[const]) - 1]
+            self.assertEqual((kind, label), ("RadioButton", text), const)
+        # Radios in one column, fastest on top, and nothing falls off the dialog.
+        left = [items[int(defs[c]) - 1][1] for c in speeds]
+        self.assertEqual(sorted(left), left)
+        src = open(RSRC, encoding="mac_roman").read()
+        top, lft, bottom, right = map(int, re.search(
+            r"resource 'DLOG' \(kSettingsDialog\) \{\s*\{\s*(\d+),\s*(\d+),\s*(\d+),\s*(\d+)", src).groups())
+        self.assertLessEqual(bottom, 342 - 8, "the dialog must fit a 512 x 342 screen")
+        for kind, r, text in items:
+            self.assertLessEqual(r[2], bottom - top, f"{text or kind!r} falls below the dialog")
+            self.assertLessEqual(r[3], right - lft, f"{text or kind!r} falls off the right edge")
 
     def test_overlap_check_catches_the_old_permission_hint(self):
         src = open(RSRC, encoding="mac_roman").read()

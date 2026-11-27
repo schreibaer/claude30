@@ -164,28 +164,29 @@ resource 'DITL' (kRedialAlert) {
 /* ---- Settings ------------------------------------------------------------ */
 
 resource 'DLOG' (kSettingsDialog) {
-	{ 50, 80, 302, 432 },
+	{ 50, 80, 322, 432 },
 	dBoxProc, invisible, noGoAway, 0,
 	kSettingsDialog, "", alertPositionMainScreen
 };
 
 resource 'DITL' (kSettingsDialog) {
 	{
-		{ 222, 262, 242, 332 }, Button { enabled, "OK" };
-		{ 222, 172, 242, 242 }, Button { enabled, "Cancel" };
+		{ 242, 262, 262, 332 }, Button { enabled, "OK" };
+		{ 242, 172, 262, 242 }, Button { enabled, "Cancel" };
 		{ 30, 20, 46, 170 }, RadioButton { enabled, "Modem port" };
 		{ 50, 20, 66, 170 }, RadioButton { enabled, "Printer port" };
-		{ 30, 190, 46, 330 }, RadioButton { enabled, "57,600 baud" };
-		{ 50, 190, 66, 330 }, RadioButton { enabled, "38,400 baud" };
-		{ 70, 190, 86, 330 }, RadioButton { enabled, "19,200 baud" };
-		{ 116, 22, 132, 330 }, EditText { enabled, "" };
+		{ 50, 190, 66, 330 }, RadioButton { enabled, "57,600 baud" };
+		{ 70, 190, 86, 330 }, RadioButton { enabled, "38,400 baud" };
+		{ 90, 190, 106, 330 }, RadioButton { enabled, "19,200 baud" };
+		{ 136, 22, 152, 330 }, EditText { enabled, "" };
 		{ 10, 20, 26, 170 }, StaticText { disabled, "Port" };
 		{ 10, 190, 26, 330 }, StaticText { disabled, "Speed" };
-		{ 94, 20, 110, 330 }, StaticText { disabled, "Dial string, sent to the modem as typed" };
-		{ 166, 20, 214, 340 }, StaticText { disabled,
+		{ 114, 20, 130, 330 }, StaticText { disabled, "Dial string, sent to the modem as typed" };
+		{ 186, 20, 234, 340 }, StaticText { disabled,
 			"The speed must match the WiFi232 and run.sh --baud. Port, speed and dial string apply at the next Connect." };
-		{ 142, 20, 158, 170 }, CheckBox { enabled, "Hide scroll bar" };
-		{ 142, 190, 158, 330 }, CheckBox { enabled, "Hide cost" };
+		{ 162, 20, 178, 170 }, CheckBox { enabled, "Hide scroll bar" };
+		{ 162, 190, 178, 330 }, CheckBox { enabled, "Hide cost" };
+		{ 30, 190, 46, 330 }, RadioButton { enabled, "115,200 baud" };
 	}
 };
 

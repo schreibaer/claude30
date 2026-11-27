@@ -93,7 +93,7 @@ void prefs_load(void)
             gPrefs.efforts[i][7] = 0;
             gPrefs.streams[i] = gPrefs.streams[i] != 0;
         }
-        if (gPrefs.speed < kSpeed57600 || gPrefs.speed > kSpeed19200)
+        if (gPrefs.speed < kSpeed57600 || gPrefs.speed > kSpeed115200)
             gPrefs.speed = kSpeed57600;
         if (gPrefs.port != kPortPrinter)
             gPrefs.port = kPortModem;
@@ -215,6 +215,20 @@ static void set_radio(DialogPtr d, short first, short last, short on)
     }
 }
 
+/* Settings radio items for the saved speeds, indexed by speed (kSpeed...). */
+static const short kSpeedItems[] = { kSet57600, kSet38400, kSet19200, kSet115200 };
+
+static void show_speed(DialogPtr d, short speed)
+{
+    short i, type;
+    Handle h;
+    Rect r;
+    for (i = 0; i < 4; i++) {
+        GetDialogItem(d, kSpeedItems[i], &type, &h, &r);
+        SetControlValue((ControlHandle)h, i == speed);
+    }
+}
+
 static void set_check(DialogPtr d, short item, Boolean on)
 {
     short type;
@@ -236,7 +250,7 @@ Boolean prefs_dialog(void)
     if (!d)
         return false;
     set_radio(d, kSetModem, kSetPrinter, kSetModem + port);
-    set_radio(d, kSet57600, kSet19200, kSet57600 + speed);
+    show_speed(d, speed);
     set_check(d, kSetHideBar, hide != 0);
     set_check(d, kSetHideCost, hideCost != 0);
     GetDialogItem(d, kSetDial, &type, &h, &r);
@@ -253,9 +267,10 @@ Boolean prefs_dialog(void)
         if (hit >= kSetModem && hit <= kSetPrinter) {
             port = hit - kSetModem;
             set_radio(d, kSetModem, kSetPrinter, hit);
-        } else if (hit >= kSet57600 && hit <= kSet19200) {
-            speed = hit - kSet57600;
-            set_radio(d, kSet57600, kSet19200, hit);
+        } else if ((hit >= kSet57600 && hit <= kSet19200) || hit == kSet115200) {
+            for (speed = 0; kSpeedItems[speed] != hit; speed++)
+                ;
+            show_speed(d, speed);
         } else if (hit == kSetHideBar) {
             hide = !hide;
             set_check(d, kSetHideBar, hide != 0);
